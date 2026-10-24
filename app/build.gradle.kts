@@ -27,12 +27,6 @@ android {
         // 固定 NDK 版本,与 ci.yml 替换 Vulkan headers 的版本一致
         ndkVersion = "26.1.10909125"
 
-        // jniLibs: 回退到旧版配置(useLegacyPackaging=false)
-        // 旧版 AGP 8.5.2 + useLegacyPackaging=false + .so STORED 能正常安装
-        jniLibs {
-            useLegacyPackaging = false
-        }
-
         externalNativeBuild {
             cmake {
                 // 让 CMake 决定大部分 flag，这里只传必要的
@@ -118,7 +112,11 @@ android {
                 "DebugProbesKt.bin"
             )
         }
-        // jniLibs 已在 defaultConfig 里设置,这里不重复
+        // jniLibs: 回退到旧版配置(useLegacyPackaging=false)
+        // 旧版 AGP 8.5.2 + useLegacyPackaging=false + .so STORED 能正常安装
+        jniLibs {
+            useLegacyPackaging = false
+        }
     }
 }
 
