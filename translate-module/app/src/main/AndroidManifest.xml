@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  翻译模块 AndroidManifest。
+
+  设计原则:
+  - 模块 APK 不打包 ASR / TTS / MT 实现,也不打包任何模型;本模块只负责
+    协调 ASR(听) → MT(译) → TTS(说) 三步工作流,所有具体实现复用宿主
+    AIBox 的能力:
+      · ASR  → 宿主 AudioProviderRegistry.getDefaultAsrProvider() = "system"
+      · TTS  → 宿主 AudioProviderRegistry.getDefaultTtsProvider() = "system"
+      · MT   → 宿主 BackendManagerV2 路由 LLM 推理(用户选择模型)
+  - 模块不申请任何 <uses-permission>:RECORD_AUDIO 由宿主持有
+    (因为实际录音由宿主 SystemAsrProvider 调 SpeechRecognizer 完成);
+    module.json 中保留 "permissions": ["RECORD_AUDIO"] 仅作为元数据提示。
+  - 宿主通过 PackageManager 扫描 action "com.aibox.action.TRANSLATE_MODULE"
+    的 exported Service 发现本模块,无需绑定即可先读 meta-data
+    (module name / version / type / displayName),再决定是否绑定
+    ITranslateModuleInterface 拉取详细 module.json 与支持语言列表。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="翻译模块"
+        android:icon="@android:drawable/ic_dialog_info"
+        android:supportsRtl="true"
+        android:allowBackup="false"
+        android:hasCode="true">
+
+        <!--
+          模块描述 Service:宿主通过 Intent Action 发现。
+          exported=true 让宿主(另一个 APK,不同 package)能查询与绑定;
+          注意宿主侧需 query 权限(Android 11+ package visibility)或
+          配置 <queries> 才能在 PackageManager 中看到本 Service。
+        -->
+        <service
+            android:name=".TranslateModuleService"
+            android:exported="true"
+            android:enabled="true">
+
+            <intent-filter>
+                <action android:name="com.aibox.action.TRANSLATE_MODULE" />
+            </intent-filter>
+
+            <!-- 模块身份元数据:宿主扫描时无需绑定即可读取 -->
+            <meta-data
+                android:name="aibox.module.class"
+                android:value="com.aibox.translate.TranslateModuleDescriptor" />
+            <meta-data
+                android:name="aibox.module.name"
+                android:value="translate" />
+            <meta-data
+                android:name="aibox.module.displayName"
+                android:value="翻译" />
+            <meta-data
+                android:name="aibox.module.version"
+                android:value="1.0.0" />
+            <meta-data
+                android:name="aibox.module.type"
+                android:value="translate" />
+        </service>
+    </application>
+
+</manifest>

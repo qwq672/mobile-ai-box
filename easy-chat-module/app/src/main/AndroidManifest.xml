@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Easy Chat 模块 AndroidManifest。
+
+  设计原则:
+  - 模块 APK 不申请任何权限。模型文件打包到 assets,推理由宿主的
+    InferenceBackend (llama.cpp) 完成,本模块只是"模型容器"。
+  - 宿主通过 PackageManager 扫描 action "com.aibox.action.CHAT_MODULE"
+    的 exported Service 发现本模块,无需绑定即可先读 meta-data
+    (module name / version / model fileName / sizeMb / architecture / 后端建议),
+    再决定是否绑定 IChatModuleInterface 拉取详细 module.json 与模型文件。
+  - meta-data 的 key 与 assets/module.json 字段名一致,
+    宿主可双路校验(先读 meta-data 快速过滤,再读 module.json 拿权威配置)。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="Easy Chat Module"
+        android:icon="@android:drawable/ic_dialog_info"
+        android:supportsRtl="true"
+        android:allowBackup="false"
+        android:hasCode="true">
+
+        <!--
+          模块描述 Service:宿主通过 Intent Action 发现。
+          exported=true 让宿主(另一个 APK,不同 package)能查询与绑定;
+          注意宿主侧需 query 权限(Android 11+ package visibility)或
+          配置 <queries> 才能在 PackageManager 中看到本 Service。
+        -->
+        <service
+            android:name=".EasyChatModuleService"
+            android:exported="true"
+            android:enabled="true">
+
+            <intent-filter>
+                <action android:name="com.aibox.action.CHAT_MODULE" />
+            </intent-filter>
+
+            <!-- 模块身份元数据:宿主扫描时无需绑定即可读取 -->
+            <meta-data
+                android:name="aibox.module.class"
+                android:value="com.easychat.EasyChatModuleDescriptor" />
+            <meta-data
+                android:name="aibox.module.name"
+                android:value="easy-chat" />
+            <meta-data
+                android:name="aibox.module.displayName"
+                android:value="Easy Chat" />
+            <meta-data
+                android:name="aibox.module.version"
+                android:value="1.0.0" />
+
+            <!-- 模型核心元数据:宿主可据此预判 RAM / 后端兼容性 -->
+            <meta-data
+                android:name="aibox.module.model.fileName"
+                android:value="qwen2.5-0.5b-instruct-q4_k_m.gguf" />
+            <meta-data
+                android:name="aibox.module.model.sizeMb"
+                android:value="485" />
+            <meta-data
+                android:name="aibox.module.model.architecture"
+                android:value="qwen2" />
+            <meta-data
+                android:name="aibox.module.model.recommendedBackend"
+                android:value="vulkan,cpu" />
+            <meta-data
+                android:name="aibox.module.model.avoidBackend"
+                android:value="npu" />
+        </service>
+    </application>
+
+</manifest>

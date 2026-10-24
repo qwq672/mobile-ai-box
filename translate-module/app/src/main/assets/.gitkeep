@@ -1,0 +1,4 @@
+# 此目录用于让 git 跟踪 assets/。
+# 翻译模块不打包任何模型(ASR/TTS 用系统,MT 用宿主 LLM 后端),
+# assets/ 中只有 module.json 一个元数据文件;
+# .gitkeep 占位使 git 能跟踪空目录(若未来追加资源文件)。

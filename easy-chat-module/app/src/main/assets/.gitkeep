@@ -1,0 +1,6 @@
+# 此目录用于让 git 跟踪 assets/。
+# 真实模型文件 qwen2.5-0.5b-instruct-q4_k_m.gguf (~485MB) 由 CI/CD 在打包 APK 前
+# 从 GitHub Releases 下载并放入此目录,见项目根 README.md "构建与模型注入"章节。
+#
+# 本仓库不提交模型二进制(体积过大 + 受许可约束);
+# .gitkeep 是一个约定俗成的占位文件,使 git 能跟踪空目录。

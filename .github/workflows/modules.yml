@@ -1,0 +1,337 @@
+name: Build Modules
+
+# 编译独立模块 APK：
+#   - easy-chat-module（聊天模块）
+#   - translate-module（翻译模块）
+#   - litert-plugin（LiteRT-LM 推理框架插件）
+#
+# 触发方式：
+#   1. push 到 main：模块目录改动时
+#   2. PR：模块代码改动时
+#   3. 手动：可选编译哪些模块
+#   4. Nightly：每天凌晨跑全量（北京时间 02:00）
+#
+# 产物保留 30 天，方便下载本地测试。
+
+on:
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: '要编译的模块（逗号分隔，留空=全部）'
+        required: false
+        default: 'easy-chat,translate,litert'
+      run_tests:
+        description: '运行单元测试'
+        required: false
+        type: boolean
+        default: true
+      run_lint:
+        description: '运行 lint 检查'
+        required: false
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - 'easy-chat-module/**'
+      - 'translate-module/**'
+      - 'litert-plugin/**'
+      - '.github/workflows/modules-build.yml'
+  pull_request:
+    paths:
+      - 'easy-chat-module/**'
+      - 'translate-module/**'
+      - 'litert-plugin/**'
+      - '.github/workflows/modules-build.yml'
+  schedule:
+    - cron: '0 18 * * *'  # UTC 18:00 = 北京时间 02:00
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modules-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 决定哪些模块要编译
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          # 手动触发时用 input，否则用全部模块
+          if [ -n "${{ inputs.modules }}" ]; then
+            INPUT='${{ inputs.modules }}'
+            # 把逗号分隔的字符串转为 JSON array
+            JSON=$(echo "$INPUT" | tr -d ' ' | awk -F, '{for(i=1;i<=NF;i++) printf "\"%s\"%s", $i, (i<NF?",":"")}')
+            MODULES="[$JSON]"
+          else
+            MODULES='["easy-chat","translate","litert"]'
+          fi
+          echo "matrix=$MODULES" >> $GITHUB_OUTPUT
+          echo "Modules to build: $MODULES"
+
+  build:
+    name: Build ${{ matrix.module }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false  # 一个模块失败不影响其他模块继续编译
+      matrix:
+        module: ${{ fromJson(needs.prepare.outputs.matrix) }}
+        include:
+          - module: easy-chat
+            dir: easy-chat-module
+            artifact_name: easy-chat-module
+            needs_aidl: false  # Easy Chat 用独立的 IChatModuleInterface
+          - module: translate
+            dir: translate-module
+            artifact_name: translate-module
+            needs_aidl: false  # Translate 用独立的 ITranslateModuleInterface
+          - module: litert
+            dir: litert-plugin
+            artifact_name: litert-backend-plugin
+            needs_aidl: true  # LiteRT 复制了宿主的 11 个 AIDL
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        run: |
+          ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_HOME ANDROID_SDK_ROOT=$ANDROID_HOME
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKM=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -z "$SDKM" ]; then echo "::error::sdkmanager not found"; exit 1; fi
+          export PATH="$(dirname "$SDKM"):$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          # NDK + CMake 只在 litert 模块需要(它有 externalNativeBuild)
+          if [ "${{ matrix.module }}" = "litert" ]; then
+            sdkmanager "ndk;27.0.12077973" "cmake;3.22.1" >/dev/null
+          fi
+          # 给每个模块工程写 local.properties（独立 Gradle 工程需要各自的 sdk.dir）
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "sdk.dir=$ANDROID_HOME" > ${{ matrix.dir }}/local.properties
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ${{ matrix.dir }}/.gradle
+            ${{ matrix.dir }}/app/build
+            ${{ matrix.dir }}/build
+          key: ${{ matrix.module }}-gradle-${{ hashFiles(format('{0}/**/*.gradle*', matrix.dir), format('{0}/**/gradle-wrapper.properties', matrix.dir)) }}
+          restore-keys: |
+            ${{ matrix.module }}-gradle-
+
+      - name: Validate module.json / plugin.json
+        run: |
+          echo "## Module JSON Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          ASSETS_DIR="${{ matrix.dir }}/app/src/main/assets"
+          if [ -d "$ASSETS_DIR" ]; then
+            for json_file in $ASSETS_DIR/*.json; do
+              if [ -f "$json_file" ]; then
+                if python3 -c "import json,sys; json.load(open('$json_file'))" 2>&1; then
+                  SIZE=$(stat -c%s "$json_file")
+                  echo "✅ $json_file ($SIZE bytes)" >> $GITHUB_STEP_SUMMARY
+                else
+                  echo "❌ $json_file invalid JSON" >> $GITHUB_STEP_SUMMARY
+                  exit 1
+                fi
+              fi
+            done
+          else
+            echo "⚠️ No assets directory at $ASSETS_DIR" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check AIDL sync with host (LiteRT only)
+        if: matrix.needs_aidl == true
+        run: |
+          HOST_AIDL="app/src/main/aidl/com/aibox/plugin"
+          MODULE_AIDL="${{ matrix.dir }}/app/src/main/aidl/com/aibox/plugin"
+          
+          echo "## AIDL Sync Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ ! -d "$HOST_AIDL" ]; then
+            echo "⚠️ Host AIDL directory not found: $HOST_AIDL" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          if [ ! -d "$MODULE_AIDL" ]; then
+            echo "⚠️ Module AIDL directory not found: $MODULE_AIDL" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          DRIFT=false
+          for f in $(find "$HOST_AIDL" -name "*.aidl" -type f); do
+            rel="${f#$HOST_AIDL/}"
+            mod_file="$MODULE_AIDL/$rel"
+            if [ -f "$mod_file" ]; then
+              if ! diff -q "$f" "$mod_file" > /dev/null 2>&1; then
+                echo "⚠️ AIDL drift: $rel" >> $GITHUB_STEP_SUMMARY
+                echo '```diff' >> $GITHUB_STEP_SUMMARY
+                diff "$f" "$mod_file" >> $GITHUB_STEP_SUMMARY || true
+                echo '```' >> $GITHUB_STEP_SUMMARY
+                DRIFT=true
+              else
+                echo "✅ $rel (synced)" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "ℹ️ $rel (only in host)" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          if [ "$DRIFT" = "true" ]; then
+            echo "::warning::AIDL drift detected, please re-sync from host"
+          fi
+
+      - name: Build Debug APK
+        working-directory: ${{ matrix.dir }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace --warning-mode all
+
+      - name: Build Release APK
+        working-directory: ${{ matrix.dir }}
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace --warning-mode all
+
+      - name: Run unit tests
+        if: github.event.inputs.run_tests != 'false'
+        working-directory: ${{ matrix.dir }}
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        continue-on-error: true  # 测试失败不阻塞,但要看到结果
+
+      - name: Run lint
+        if: github.event.inputs.run_lint != 'false'
+        working-directory: ${{ matrix.dir }}
+        run: ./gradlew :app:lintDebug --no-daemon --stacktrace
+        continue-on-error: true
+
+      - name: Collect APK info
+        if: always()
+        id: apk-info
+        run: |
+          DEBUG_APK="${{ matrix.dir }}/app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="${{ matrix.dir }}/app/build/outputs/apk/release/app-release-unsigned.apk"
+          # 也兼容可能命名为 app-release.apk（如果未签名）
+          RELEASE_ALT="${{ matrix.dir }}/app/build/outputs/apk/release/app-release.apk"
+          
+          DEBUG_SIZE=""
+          RELEASE_SIZE=""
+          if [ -f "$DEBUG_APK" ]; then
+            DEBUG_SIZE=$(du -h "$DEBUG_APK" | cut -f1)
+          fi
+          if [ -f "$RELEASE_APK" ]; then
+            RELEASE_SIZE=$(du -h "$RELEASE_APK" | cut -f1)
+          elif [ -f "$RELEASE_ALT" ]; then
+            RELEASE_APK="$RELEASE_ALT"
+            RELEASE_SIZE=$(du -h "$RELEASE_ALT" | cut -f1)
+          fi
+          
+          echo "debug_path=$DEBUG_APK" >> $GITHUB_OUTPUT
+          echo "debug_size=$DEBUG_SIZE" >> $GITHUB_OUTPUT
+          echo "release_path=$RELEASE_APK" >> $GITHUB_OUTPUT
+          echo "release_size=$RELEASE_SIZE" >> $GITHUB_OUTPUT
+
+      - name: Upload Debug APK
+        if: always() && steps.apk-info.outputs.debug_size != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-debug-${{ github.sha }}
+          path: ${{ matrix.dir }}/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload Release APK
+        if: always() && steps.apk-info.outputs.release_size != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-release-${{ github.sha }}
+          path: ${{ matrix.dir }}/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload test + lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-reports-${{ github.sha }}
+          path: |
+            ${{ matrix.dir }}/app/build/reports/
+            ${{ matrix.dir }}/app/build/test-results/
+            ${{ matrix.dir }}/app/build/outputs/lint-results*.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: APK size threshold check
+        if: steps.apk-info.outputs.release_size != ''
+        run: |
+          APK="${{ steps.apk-info.outputs.release_path }}"
+          SIZE_BYTES=$(stat -c%s "$APK")
+          THRESHOLD=$((15 * 1024 * 1024))  # 15MB
+          echo "## APK Size Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "APK: $APK" >> $GITHUB_STEP_SUMMARY
+          echo "Size: ${SIZE_BYTES} bytes (${{ steps.apk-info.outputs.release_size }})" >> $GITHUB_STEP_SUMMARY
+          if [ $SIZE_BYTES -gt $THRESHOLD ]; then
+            echo "⚠️  Size exceeds 15MB threshold" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::APK size ${SIZE_BYTES} bytes exceeds 15MB threshold"
+          else
+            echo "✅ Size within 15MB threshold" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## ${{ matrix.module }} Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.apk-info.outputs.debug_size }}" ]; then
+            echo "| Debug APK | ✅ ${{ steps.apk-info.outputs.debug_size }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Debug APK | ❌ failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -n "${{ steps.apk-info.outputs.release_size }}" ]; then
+            echo "| Release APK | ✅ ${{ steps.apk-info.outputs.release_size }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Release APK | ❌ failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # 总览 job：把所有模块的结果汇总
+  summary:
+    name: All Modules Summary
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## Modules Build Overview" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Trigger: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See individual job summaries for details." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts will be available for 30 days in the workflow run page." >> $GITHUB_STEP_SUMMARY
+

@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- D1 系统语音识别（SpeechRecognizer）需要录音权限 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!--
+      C-advanced-tools：高级工具相关权限声明。
+      注：以下权限 AIBox 自身并不直接使用——AIBox 仅启动 Intent 让系统 App 完成实际操作。
+      声明的目的是让用户在系统"权限"页明确知道"此 App 可能发起电话 / 短信"。
+      - CALL_PHONE：PhoneControlTool 的 dial action（系统拨号界面），AIBox 不直接拨号
+      - SEND_SMS：PhoneControlTool 的 send_sms action（系统短信界面），AIBox 不直接发短信
+      实际执行流程：AIBox Intent → 系统拨号 / 短信 App → 用户在系统 App 内手动点拨号 / 发送按钮。
+    -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+
+    <!--
+      C-advanced-tools：文件读写相关权限声明。
+      - Android 13 (API 33+) 走 Scoped Storage，READ_MEDIA_* 是细粒度媒体权限。
+      - READ_EXTERNAL_STORAGE / WRITE_EXTERNAL_STORAGE：API 32 及以下需要，AIBox minSdk 26。
+      - 注：AIBox 主要访问应用私有目录（filesDir / externalFilesDir），不需要这些权限；
+        但声明它们让用户在系统权限页了解 AIBox 可能访问文件。maxSdkVersion 32 限制只对
+        API 32 及以下生效，API 33+ Scoped Storage 不再使用此权限。
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <!--
+      <queries> 让 AIBox 宿主能"看见"已安装的插件 APK（Android 11+ 包可见性要求）。
+      没有这个声明，PackageManager.queryIntentServices 查不到带 com.aibox.action.BACKEND_PLUGIN
+      的外部插件 Service。同时配套 <intent> 声明让 Intent.ACTION_PACKAGE_ADDED/REMOVED
+      广播能拿到插件包名（系统用 data scheme=package 隐式过滤）。
+
+      C-advanced-tools 额外声明：
+      - 让 PhoneControlTool 的 open_app 能通过 getLaunchIntentForPackage 打开任意第三方 App
+      - 让 DeviceInfoAdvancedTool 的 readUserApps 能列出第三方用户应用
+      - 让 EmailTool 能查询到系统邮件 App
+      -->
+    <queries>
+        <!-- 发现 AIBox 推理插件 -->
+        <intent>
+            <action android:name="com.aibox.action.BACKEND_PLUGIN" />
+        </intent>
+        <!-- 监听任意 APK 安装 / 卸载（PluginInstallReceiver 用） -->
+        <intent>
+            <action android:name="android.intent.action.PACKAGE_ADDED" />
+            <action android:name="android.intent.action.PACKAGE_REMOVED" />
+            <action android:name="android.intent.action.PACKAGE_REPLACED" />
+            <action android:name="android.intent.action.PACKAGE_FULLY_REMOVED" />
+            <data android:scheme="package" />
+        </intent>
+        <!-- C2 EmailTool：查询邮件 App -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+        <!-- C4 PhoneControlTool：查询拨号 App -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+        <!-- C4 PhoneControlTool：查询短信 App -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <!-- C4 PhoneControlTool：查询浏览器 App -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <!-- 发现 AIBox 聊天模块（Easy Chat 等） -->
+        <intent>
+            <action android:name="com.aibox.action.CHAT_MODULE" />
+        </intent>
+        <!-- 发现 AIBox 翻译模块 -->
+        <intent>
+            <action android:name="com.aibox.action.TRANSLATE_MODULE" />
+        </intent>
+        <!-- 发现 AIBox 图像生成模块（未来） -->
+        <intent>
+            <action android:name="com.aibox.action.IMAGE_GEN_MODULE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".AIBoxApp"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="true"
+        android:supportsRtl="true"
+        android:largeHeap="true"
+        android:theme="@style/Theme.AIBox">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
+
+        <!--
+          PluginInstallReceiver：监听系统级 APK 安装 / 卸载 / 替换事件，
+          通知 [com.aibox.infra.plugin.PluginManager] 同步插件启用状态。
+          exported=true 让系统广播能送达；PACKAGE_* 广播属"对所有人可见"白名单，静态注册有效。
+        -->
+        <receiver
+            android:name="com.aibox.infra.plugin.PluginInstallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PACKAGE_FULLY_REMOVED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

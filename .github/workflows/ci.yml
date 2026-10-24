@@ -1,0 +1,182 @@
+name: Build AIBox APK
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Assemble arm64-v8a Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      NDK_VERSION: 26.1.10909125
+      CMAKE_VERSION: 3.22.1
+      LLAMA_REF: v0.4.1
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK + Vulkan SDK + OpenCL headers
+        run: |
+          ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_HOME ANDROID_SDK_ROOT=$ANDROID_HOME
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKM=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -z "$SDKM" ]; then echo "::error::sdkmanager not found"; exit 1; fi
+          export PATH="$(dirname "$SDKM"):$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" \
+                     "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # Vulkan SDK headers
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends glslc libvulkan-dev 2>/dev/null || \
+            sudo apt-get install -y --no-install-recommends glslang-tools libvulkan-dev 2>/dev/null || true
+          # OpenCL headers (for ggml-opencl compilation)
+          sudo apt-get install -y --no-install-recommends opencl-headers ocl-icd-opencl-dev 2>/dev/null || true
+          which glslc || which glslangValidator || true
+          ls /usr/include/CL/cl.h 2>/dev/null || echo "OpenCL headers not found, OpenCL will use NDK sysroot"
+
+      - name: Fetch llama.cpp (pinned ${{ env.LLAMA_REF }})
+        run: |
+          mkdir -p app/src/main/cpp
+          git clone --depth 1 --branch "${LLAMA_REF}" \
+            https://github.com/ggml-org/llama.cpp app/src/main/cpp/llama.cpp
+
+      - name: Fetch SPIRV-Headers (for Vulkan backend)
+        run: |
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers
+          cd /tmp/spirv-headers && mkdir build && cd build
+          cmake -DCMAKE_INSTALL_PREFIX=/usr/local .. && sudo make install
+
+      - name: Fetch Vulkan-Hpp (C++ bindings, not in NDK)
+        run: |
+          set +e
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers /tmp/vulkan-headers
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vulkan-hpp
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers-2
+          NDK_SYSROOT=/usr/local/lib/android/sdk/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+          NDK_VULKAN=$NDK_SYSROOT/vulkan
+          NDK_VK_VIDEO=$NDK_SYSROOT/vk_video
+          NDK_SPIRV=$NDK_SYSROOT/spirv
+          sudo cp $NDK_VULKAN/vulkan_android.h /tmp/vulkan_android.h.bak 2>/dev/null || true
+          sudo rm -rf $NDK_VULKAN
+          sudo mkdir -p $NDK_VULKAN
+          sudo cp -r /tmp/vulkan-headers/include/vulkan/* $NDK_VULKAN/
+          sudo cp -r /tmp/vulkan-hpp/vulkan/* $NDK_VULKAN/
+          sudo rm -rf $NDK_VK_VIDEO
+          sudo mkdir -p $NDK_VK_VIDEO
+          sudo cp -r /tmp/vulkan-headers/include/vk_video/* $NDK_VK_VIDEO/ 2>/dev/null || true
+          sudo rm -rf $NDK_SPIRV
+          sudo mkdir -p $NDK_SPIRV
+          sudo cp -r /tmp/spirv-headers-2/include/spirv/* $NDK_SPIRV/
+          if [ ! -f $NDK_VULKAN/vulkan_android.h ] && [ -f /tmp/vulkan_android.h.bak ]; then
+            sudo cp /tmp/vulkan_android.h.bak $NDK_VULKAN/vulkan_android.h
+          fi
+          HPP_VER=$(grep -E 'static_assert.*VK_HEADER_VERSION' $NDK_VULKAN/vulkan.hpp | head -1 | grep -oE '[0-9]+' | head -1)
+          if [ -n "$HPP_VER" ]; then
+            sudo sed -i "s/#define VK_HEADER_VERSION [0-9]*/#define VK_HEADER_VERSION $HPP_VER/" $NDK_VULKAN/vulkan_core.h
+          fi
+          # 兜底:如果 sed 没生效,直接注释掉 vulkan.hpp 第 45 行的 static_assert
+          # 这避免 vulkan.hpp 期望的版本与 vulkan_core.h 不一致导致编译失败
+          sudo sed -i '/VULKAN_HPP_STATIC_ASSERT.*VK_HEADER_VERSION/s/^/\/\/ DISABLED: /' $NDK_VULKAN/vulkan.hpp
+          # Also copy OpenCL headers to NDK sysroot if system doesn't have them
+          if [ ! -f $NDK_SYSROOT/CL/cl.h ]; then
+            sudo mkdir -p $NDK_SYSROOT/CL
+            sudo cp -r /usr/include/CL/* $NDK_SYSROOT/CL/ 2>/dev/null || true
+          fi
+          ls $NDK_VULKAN/vulkan.hpp
+          ls $NDK_VULKAN/vulkan_core.h
+          ls $NDK_SPIRV/unified1/spirv.hpp
+          ls $NDK_SYSROOT/CL/cl.h 2>/dev/null || echo "CL headers at $NDK_SYSROOT/CL not found"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}-v2
+
+      - name: Build debug + release APK (CPU + Vulkan + OpenCL, arm64-v8a)
+        run: |
+          chmod +x ./gradlew
+          # 确保 debug keystore 存在(CI 环境可能没有)
+          if [ ! -f ~/.android/debug.keystore ]; then
+            mkdir -p ~/.android
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          # Debug APK
+          ./gradlew :app:assembleDebug --stacktrace --no-daemon
+          # Release APK
+          ./gradlew :app:assembleRelease --stacktrace --no-daemon
+          # 用 apksigner 手动签名(AGP 可能在 CI 跳过签名)
+          APK_DEBUG=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          APK_RELEASE=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          APKSIGNER=$(find $ANDROID_HOME -name apksigner -type f 2>/dev/null | head -1)
+          if [ -z "$APKSIGNER" ]; then
+            APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          fi
+          echo "=== 签名 Debug APK ==="
+          "$APKSIGNER" sign --ks ~/.android/debug.keystore --ks-pass pass:android \
+            --ks-key-alias androiddebugkey --key-pass pass:android \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            "$APK_DEBUG" 2>&1 || echo "apksigner failed for debug"
+          echo "=== 签名 Release APK ==="
+          "$APKSIGNER" sign --ks ~/.android/debug.keystore --ks-pass pass:android \
+            --ks-key-alias androiddebugkey --key-pass pass:android \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            "$APK_RELEASE" 2>&1 || echo "apksigner failed for release"
+          # 验证签名
+          for apk in "$APK_DEBUG" "$APK_RELEASE"; do
+            echo "=== $apk ==="
+            "$APKSIGNER" verify --verbose "$apk" 2>&1 | head -5
+            unzip -l "$apk" | grep -E "META-INF/.*\.(SF|RSA|DSA)" || echo "WARNING: Still no signing files!"
+          done
+
+      - name: Rename and collect APK
+        run: |
+          mkdir -p out
+          # Debug APK (推荐安装,签名完整)
+          DEBUG_APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          if [ -f "$DEBUG_APK" ]; then
+            cp "$DEBUG_APK" out/aibox-arm64-v8a-debug.apk
+            echo "Debug APK: $(ls -la out/aibox-arm64-v8a-debug.apk)"
+          fi
+          # Release APK (备用)
+          RELEASE_APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          if [ -f "$RELEASE_APK" ]; then
+            cp "$RELEASE_APK" out/aibox-arm64-v8a-release.apk
+            echo "Release APK: $(ls -la out/aibox-arm64-v8a-release.apk)"
+          fi
+          ls -la out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aibox-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LiteRT-LM Backend 插件 AndroidManifest。
+
+  与 Easy Chat 模块对比:
+    - Easy Chat 用 action `com.aibox.action.CHAT_MODULE`(供宿主读模型文件)。
+    - 本插件用 action `com.aibox.action.BACKEND_PLUGIN`(供宿主拉起推理后端 Binder)。
+    两个 action 完全正交:一个是"模块"分发通道,一个是"后端插件"分发通道。
+
+  Service 配置:
+    - exported=true 让宿主进程(不同 UID)可 bind。
+    - intent-filter 让宿主 PackageManager.queryIntentServices 能扫到本服务。
+    - 两个 meta-data:
+        aibox.descriptor_class: 宿主 Class.forName 反射加载 IPluginDescriptor 实现。
+        aibox.version: 与 PluginInfo.version 对齐,便于宿主双路校验。
+
+  宿主侧 <queries> 需要在宿主 AndroidManifest 加:
+    <queries>
+        <intent>
+            <action android:name="com.aibox.action.BACKEND_PLUGIN"/>
+        </intent>
+    </queries>
+  否则 Android 11+ 宿主侧 queryIntentServices 返回空(本 Task 范围不触碰宿主)。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      无权限申请:
+        - 模型从用户私人目录读(无 READ_EXTERNAL_STORAGE)。
+        - Service exported 让宿主 bind(无特殊权限)。
+        - 不访问网络(纯本地推理)。
+        - Hexagon NPU / QNN SDK 通过 LiteRT-LM 内部 dlopen 加载,不需要额外权限。
+    -->
+
+    <application
+        android:label="LiteRT-LM Backend"
+        android:icon="@android:drawable/ic_dialog_info"
+        android:supportsRtl="true"
+        android:allowBackup="false"
+        android:hasCode="true">
+
+        <!--
+          LiteRT-LM GPU 后端需要 OpenCL(libOpenCL.so)
+          NPU 后端需要 libvndksupport.so(Qualcomm Hexagon)
+          这两个 native library 由设备 OEM 提供,声明 required=false 让无 GPU 的设备也能装。
+        -->
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+
+        <!--
+          插件入口 Service。
+          宿主通过 Intent Action "com.aibox.action.BACKEND_PLUGIN" 发现本服务,
+          通过 IPluginInterface 调用推理功能,
+          通过 IPluginDescriptor(由 meta-data aibox.descriptor_class 反射加载)获取元数据。
+        -->
+        <service
+            android:name=".LiteRTPluginService"
+            android:exported="true"
+            android:enabled="true">
+
+            <intent-filter>
+                <action android:name="com.aibox.action.BACKEND_PLUGIN" />
+            </intent-filter>
+
+            <!--
+              描述符类名:宿主 Class.forName("com.aibox.litert.LiteRTDescriptor")
+              → newInstance() → 强转 IPluginDescriptor → 调用 describeCapabilities / getSettingsSchema。
+              宿主也可通过 binder.asInterface() 拿 descriptor(本工程让 LiteRTDescriptor
+              继承 IPluginDescriptor.Stub,两种方式都支持)。
+            -->
+            <meta-data
+                android:name="aibox.descriptor_class"
+                android:value="com.aibox.litert.LiteRTDescriptor" />
+
+            <!-- 与 PluginInfo.version 对齐,便于宿主双路校验 -->
+            <meta-data
+                android:name="aibox.version"
+                android:value="1.0.0" />
+        </service>
+    </application>
+</manifest>

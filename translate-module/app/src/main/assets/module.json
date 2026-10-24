@@ -1,0 +1,58 @@
+{
+  "name": "translate",
+  "displayName": "翻译模块",
+  "version": "1.0.0",
+  "description": "ASR + MT + TTS 三步组合工作流,支持多语言翻译",
+  "type": "translate",
+  "workflow": {
+    "step1": {
+      "name": "ASR",
+      "uses": "system_asr",
+      "config": {
+        "language": "auto",
+        "fallback": "zh-CN"
+      }
+    },
+    "step2": {
+      "name": "MT",
+      "uses": "llm_backend",
+      "config": {
+        "model": "user_selected",
+        "supportedModels": ["qwen2.5-0.5b", "qwen2.5-1.5b", "hunyuan-1.8b"],
+        "promptTemplate": "Translate the following {source_lang} text to {target_lang}. Only output the translation, no explanation.\n\nText: {text}"
+      }
+    },
+    "step3": {
+      "name": "TTS",
+      "uses": "system_tts",
+      "config": {
+        "language": "target_lang"
+      }
+    }
+  },
+  "supportedLanguages": [
+    {"code": "zh-CN", "name": "中文（简体）"},
+    {"code": "zh-TW", "name": "中文（繁体）"},
+    {"code": "en-US", "name": "English (US)"},
+    {"code": "en-GB", "name": "English (UK)"},
+    {"code": "ja-JP", "name": "日本語"},
+    {"code": "ko-KR", "name": "한국어"},
+    {"code": "fr-FR", "name": "Français"},
+    {"code": "de-DE", "name": "Deutsch"},
+    {"code": "es-ES", "name": "Español"},
+    {"code": "ru-RR", "name": "Русский"}
+  ],
+  "features": [
+    "real_time_translation",
+    "voice_input",
+    "voice_output",
+    "text_input_fallback",
+    "history",
+    "favorites"
+  ],
+  "permissions": ["RECORD_AUDIO"],
+  "author": {
+    "name": "AIBox Team"
+  },
+  "license": "MIT"
+}
