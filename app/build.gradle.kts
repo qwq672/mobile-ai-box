@@ -25,8 +25,13 @@ android {
         }
 
         // 固定 NDK 版本,与 ci.yml 替换 Vulkan headers 的版本一致
-        // AGP 8.7 默认可能用 NDK 27,但 ci.yml 只替换了 NDK 26.1 的 headers
         ndkVersion = "26.1.10909125"
+
+        // jniLibs: 回退到旧版配置(useLegacyPackaging=false)
+        // 旧版 AGP 8.5.2 + useLegacyPackaging=false + .so STORED 能正常安装
+        jniLibs {
+            useLegacyPackaging = false
+        }
 
         externalNativeBuild {
             cmake {
@@ -113,13 +118,7 @@ android {
                 "DebugProbesKt.bin"
             )
         }
-        // jniLibs: useLegacyPackaging=true 让 .so 在安装时解压到设备
-        // useLegacyPackaging=false 要求 .so 在 zip 里 page-aligned(4KB)
-        // 但 AGP 在 CI 环境可能不对齐 .so → 安装报"解析包时出现问题"
-        // true 是最安全的选项(体积略大但兼容性最好)
-        jniLibs {
-            useLegacyPackaging = true
-        }
+        // jniLibs 已在 defaultConfig 里设置,这里不重复
     }
 }
 
