@@ -1,0 +1,2 @@
+# jniLibs 占位文件,真实 LiteRT-LM .so 由 CI 注入。
+# 详见 README.md "构建与 .so 注入" 章节。

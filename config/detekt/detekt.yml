@@ -1,0 +1,17 @@
+complexity:
+  LongMethod: { active: false }
+  LongParameterList: { active: false }
+  ComplexCondition: { active: false }
+  CyclomaticComplexMethod: { active: false }
+  LargeClass: { active: false }
+  TooManyFunctions: { active: false }
+style:
+  ForbiddenComment: { active: false }
+  ReturnCount: { active: false }
+  MagicNumber: { active: false }
+empty-blocks:
+  EmptyFunctionBlock: { active: false }
+  EmptyClassBlock: { active: false }
+exceptions:
+  SwallowedException: { active: false }
+  TooGenericExceptionCaught: { active: false }

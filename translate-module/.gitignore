@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+build/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Kotlin / Java
+*.class
+hs_err_pid*
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+local.properties
+captures/
+
+
+# 但保留 .gitkeep 让 assets 目录可以被跟踪
+!app/src/main/assets/.gitkeep
+
+# OS 噪声
+.DS_Store
+Thumbs.db

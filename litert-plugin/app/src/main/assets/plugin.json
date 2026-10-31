@@ -1,0 +1,53 @@
+{
+  "name": "litert-lm",
+  "displayName": "LiteRT-LM Backend",
+  "version": "1.0.0",
+  "description": "Google 官方 LiteRT-LM 推理后端 (com.google.ai.edge.litertlm:litertlm-android:0.18.0)。支持 Gemma/Llama/Phi-4/Qwen 系列模型,Hexagon NPU 加速,多模态 (vision + audio),Tool Use (function calling)。",
+  "type": "backend",
+  "backend": {
+    "name": "litert",
+    "capabilities": {
+      "supportedTasks": ["text_generation", "multimodal_understanding", "embedding"],
+      "supportedInputModalities": ["text", "image", "audio"],
+      "supportedOutputModalities": ["text"],
+      "maxContextLength": 8192,
+      "maxImageResolution": 2048,
+      "supportedModelFormats": ["litertlm", "tflite"],
+      "supportedQuantizations": ["int8", "fp16", "bf16"],
+      "features": ["hexagon_npu", "streaming", "multimodal", "function_calling", "speculative_decoding"]
+    },
+    "delegatePriority": ["npu", "gpu", "cpu"],
+    "multimodalSupport": {
+      "encoder": "siglip",
+      "decoder": "gemma",
+      "visionResolution": [512, 1024, 2048],
+      "audioEncoder": "embedding_gemma_2"
+    },
+    "sdk": {
+      "maven": "com.google.ai.edge.litertlm:litertlm-android",
+      "version": "0.18.0"
+    },
+    "modelSources": [
+      "https://huggingface.co/litert-community"
+    ],
+    "supportedModels": [
+      "litert-community/gemma-4-E2B-it-litert-lm",
+      "litert-community/gemma-4-E4B-it-litert-lm",
+      "litert-community/Qwen3-0.6B",
+      "litert-community/Phi-4-mini-it-litert-lm"
+    ]
+  },
+  "sizeBytes": 50000000,
+  "author": {
+    "name": "AIBox Team"
+  },
+  "license": "Apache-2.0",
+  "notes": [
+    "用户从 HuggingFace litert-community 下载 .litertlm 模型文件",
+    "在 AIBox 宿主'模型管理'页导入",
+    "宿主路由到本插件后端 → loadModel(path) → Engine 初始化",
+    "聊天时 sendMessage → 流式回传 token",
+    "NPU 后端需要 Pixel 6+ 或骁龙 8 Gen3+ 设备",
+    "GPU 后端需要设备提供 libOpenCL.so(大多数现代 GPU 都有)"
+  ]
+}

@@ -1,0 +1,42 @@
+# Gradle
+.gradle/
+build/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Kotlin / Java
+*.class
+hs_err_pid*
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+local.properties
+captures/
+
+
+# NDK 产物
+.cxx/
+
+# LiteRT-LM / QNN SDK 注入的 .so(由 CI 下载 + 解压 + 放置;不提交源码仓库)
+# 注意:不忽略 .gitkeep,让 jniLibs/arm64-v8a/ 目录可跟踪
+app/src/main/jniLibs/arm64-v8a/*.so
+app/src/main/jniLibs/*/liblitert_lm.so
+app/src/main/jniLibs/*/libQnn*.so
+!app/src/main/jniLibs/arm64-v8a/.gitkeep
+
+# LiteRT-LM / QNN 头文件(CI 注入到 cpp/include/)
+app/src/main/cpp/include/
+
+# 真实模型 .tflite(用户从 HuggingFace 等下载;不打包到 APK)
+# 用户自己保管,本工程不处理下载。
+*.tflite
+
+# OS 噪声
+.DS_Store
+Thumbs.db

@@ -1,0 +1,60 @@
+{
+  "name": "easy-chat",
+  "displayName": "Easy Chat",
+  "version": "1.0.0",
+  "description": "零配置即用的轻量聊天模块,内置 Qwen2.5-0.5B Q4_K_M",
+  "type": "chat",
+  "model": {
+    "fileName": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    "sizeMb": 485,
+    "architecture": "qwen2",
+    "minLlamaCppVersion": "b2000",
+    "formats": ["gguf"],
+    "recommendedConfig": {
+      "backendPreference": ["vulkan", "cpu"],
+      "backendAvoid": ["npu"],
+      "contextLength": 1440,
+      "batchSize": 512,
+      "kvCacheType": "q8_0",
+      "kvCacheTypeV": "q8_0",
+      "flashAttention": true,
+      "mmap": true,
+      "threads": 2
+    },
+    "deviceTiers": {
+      "low_end": {
+        "minSoe": "snapdragon-4-gen1",
+        "minRamMb": 3000,
+        "threads": 2,
+        "contextLength": 1024
+      },
+      "mid_range": {
+        "minSoe": "snapdragon-6-gen1",
+        "minRamMb": 4000,
+        "threads": 4,
+        "contextLength": 1440
+      },
+      "flagship": {
+        "minSoe": "snapdragon-8-gen2",
+        "minRamMb": 6000,
+        "threads": 4,
+        "contextLength": 1440,
+        "preferredBackend": "vulkan"
+      }
+    },
+    "expectedPerformance": {
+      "realChatTg": 31,
+      "peakTg": 40,
+      "heavyLoadTg": 17,
+      "ttftMs": 2580,
+      "note": "实测于骁龙 8 Gen3 CPU 2 线程"
+    },
+    "noSystemPrompt": true,
+    "tags": ["chinese", "chat", "lightweight", "offline"]
+  },
+  "author": {
+    "name": "AIBox Team",
+    "url": "https://github.com/qwq672/mobile-ai-box"
+  },
+  "license": "MIT"
+}

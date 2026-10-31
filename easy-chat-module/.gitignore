@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Kotlin / Java
+*.class
+hs_err_pid*
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+local.properties
+captures/
+
+
+# 模型文件(485MB,由 CI 注入,见 README.md)
+app/src/main/assets/qwen2.5-0.5b-instruct-q4_k_m.gguf
+app/src/main/assets/*.gguf
+
+# 但保留 .gitkeep 让 assets 目录可以被跟踪
+!app/src/main/assets/.gitkeep
+
+# OS 噪声
+.DS_Store
+Thumbs.db

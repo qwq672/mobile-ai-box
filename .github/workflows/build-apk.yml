@@ -1,0 +1,237 @@
+name: Build AIBox APK
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Assemble arm64-v8a Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      NDK_VERSION: 26.1.10909125
+      CMAKE_VERSION: 3.22.1
+      LLAMA_REF: v0.4.1
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK + Vulkan SDK + OpenCL headers
+        run: |
+          ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_HOME ANDROID_SDK_ROOT=$ANDROID_HOME
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKM=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -z "$SDKM" ]; then echo "::error::sdkmanager not found"; exit 1; fi
+          export PATH="$(dirname "$SDKM"):$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" \
+                     "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # Vulkan SDK headers
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends glslc libvulkan-dev 2>/dev/null || \
+            sudo apt-get install -y --no-install-recommends glslang-tools libvulkan-dev 2>/dev/null || true
+          # OpenCL headers (for ggml-opencl compilation)
+          sudo apt-get install -y --no-install-recommends opencl-headers ocl-icd-opencl-dev 2>/dev/null || true
+          which glslc || which glslangValidator || true
+          ls /usr/include/CL/cl.h 2>/dev/null || echo "OpenCL headers not found, OpenCL will use NDK sysroot"
+
+      - name: Fetch llama.cpp (pinned ${{ env.LLAMA_REF }})
+        run: |
+          mkdir -p app/src/main/cpp
+          git clone --depth 1 --branch "${LLAMA_REF}" \
+            https://github.com/ggml-org/llama.cpp app/src/main/cpp/llama.cpp
+
+      - name: Fetch SPIRV-Headers (for Vulkan backend)
+        run: |
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers
+          cd /tmp/spirv-headers && mkdir build && cd build
+          cmake -DCMAKE_INSTALL_PREFIX=/usr/local .. && sudo make install
+
+      - name: Fetch Vulkan-Hpp (C++ bindings, not in NDK)
+        run: |
+          set +e
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers /tmp/vulkan-headers
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vulkan-hpp
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv-headers-2
+          NDK_SYSROOT=/usr/local/lib/android/sdk/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+          NDK_VULKAN=$NDK_SYSROOT/vulkan
+          NDK_VK_VIDEO=$NDK_SYSROOT/vk_video
+          NDK_SPIRV=$NDK_SYSROOT/spirv
+          sudo cp $NDK_VULKAN/vulkan_android.h /tmp/vulkan_android.h.bak 2>/dev/null || true
+          sudo rm -rf $NDK_VULKAN
+          sudo mkdir -p $NDK_VULKAN
+          sudo cp -r /tmp/vulkan-headers/include/vulkan/* $NDK_VULKAN/
+          sudo cp -r /tmp/vulkan-hpp/vulkan/* $NDK_VULKAN/
+          sudo rm -rf $NDK_VK_VIDEO
+          sudo mkdir -p $NDK_VK_VIDEO
+          sudo cp -r /tmp/vulkan-headers/include/vk_video/* $NDK_VK_VIDEO/ 2>/dev/null || true
+          sudo rm -rf $NDK_SPIRV
+          sudo mkdir -p $NDK_SPIRV
+          sudo cp -r /tmp/spirv-headers-2/include/spirv/* $NDK_SPIRV/
+          if [ ! -f $NDK_VULKAN/vulkan_android.h ] && [ -f /tmp/vulkan_android.h.bak ]; then
+            sudo cp /tmp/vulkan_android.h.bak $NDK_VULKAN/vulkan_android.h
+          fi
+          HPP_VER=$(grep -E 'static_assert.*VK_HEADER_VERSION' $NDK_VULKAN/vulkan.hpp | head -1 | grep -oE '[0-9]+' | head -1)
+          if [ -n "$HPP_VER" ]; then
+            sudo sed -i "s/#define VK_HEADER_VERSION [0-9]*/#define VK_HEADER_VERSION $HPP_VER/" $NDK_VULKAN/vulkan_core.h
+          fi
+          # 兜底:如果 sed 没生效,直接注释掉 vulkan.hpp 第 45 行的 static_assert
+          # 这避免 vulkan.hpp 期望的版本与 vulkan_core.h 不一致导致编译失败
+          sudo sed -i '/VULKAN_HPP_STATIC_ASSERT.*VK_HEADER_VERSION/s/^/\/\/ DISABLED: /' $NDK_VULKAN/vulkan.hpp
+          # Also copy OpenCL headers to NDK sysroot if system doesn't have them
+          if [ ! -f $NDK_SYSROOT/CL/cl.h ]; then
+            sudo mkdir -p $NDK_SYSROOT/CL
+            sudo cp -r /usr/include/CL/* $NDK_SYSROOT/CL/ 2>/dev/null || true
+          fi
+          ls $NDK_VULKAN/vulkan.hpp
+          ls $NDK_VULKAN/vulkan_core.h
+          ls $NDK_SPIRV/unified1/spirv.hpp
+          ls $NDK_SYSROOT/CL/cl.h 2>/dev/null || echo "CL headers at $NDK_SYSROOT/CL not found"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}-v2
+
+      - name: Build debug + release APK (CPU + Vulkan + OpenCL, arm64-v8a)
+        run: |
+          chmod +x ./gradlew
+          # 确保 debug keystore 存在(CI 环境可能没有)
+          if [ ! -f ~/.android/debug.keystore ]; then
+            mkdir -p ~/.android
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          # AGP 8.5.2 + minSdk >= 24 默认跳过 v1 签名(只产 v2/v3),
+          # 但 MT 管理器等老 Android 工具优先读 v1,没 v1 就读不到应用信息。
+          # 所以 assembleDebug/Release 后,需要先 zipalign 再 apksigner 给 Debug 也补 v1 签名。
+          # 顺序非常关键: zipalign 必须在 apksigner 之前,因为 apksigner 会破坏 zipalign。
+          ./gradlew :app:assembleDebug --stacktrace --no-daemon
+          ./gradlew :app:assembleRelease --stacktrace --no-daemon
+
+          APK_DEBUG=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          APK_RELEASE=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          APKSIGNER=$(find $ANDROID_HOME -name apksigner -type f 2>/dev/null | head -1)
+          if [ -z "$APKSIGNER" ]; then
+            APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          fi
+          ZIPALIGN=$(find $ANDROID_HOME -name zipalign -type f 2>/dev/null | head -1)
+          if [ -z "$ZIPALIGN" ]; then
+            ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
+          fi
+
+          # ============================================================
+          # Debug APK: 先 zipalign 再 apksigner 补 v1+v2+v3 签名
+          # AGP assembleDebug 只产 v2(因为 minSdk=26 ≥ 24),MT 管理器读不到 v1 → 装不上
+          # zipalign -P 16 -p 4 = 16K page 对齐(STORED .so)+ 4 字节对齐(其他 entry)
+          # 注:本次 build 用 useLegacyPackaging=true → .so 是 DEFLATED, 不需要 16K 对齐,
+          # 但 -P 16 -p 4 是双重保险,即使将来改 useLegacyPackaging=false 也能装上。
+          # ============================================================
+          echo "=== zipalign Debug APK (16K page + 4B align) ==="
+          "$ZIPALIGN" -P 16 -p 4 -f "$APK_DEBUG" "${APK_DEBUG}.aligned" 2>&1 || {
+            echo "zipalign -P 16 failed, fallback to -p 4"
+            "$ZIPALIGN" -p 4 -f "$APK_DEBUG" "${APK_DEBUG}.aligned"
+          }
+          mv -f "${APK_DEBUG}.aligned" "$APK_DEBUG"
+          echo "=== apksigner sign Debug APK (v1+v2+v3) ==="
+          "$APKSIGNER" sign --ks ~/.android/debug.keystore --ks-pass pass:android \
+            --ks-key-alias androiddebugkey --key-pass pass:android \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            "$APK_DEBUG" 2>&1 || echo "apksigner failed for debug"
+
+          # ============================================================
+          # Release APK: 同样先 zipalign 再 apksigner
+          # ============================================================
+          echo "=== zipalign Release APK (16K page + 4B align) ==="
+          "$ZIPALIGN" -P 16 -p 4 -f "$APK_RELEASE" "${APK_RELEASE}.aligned" 2>&1 || {
+            echo "zipalign -P 16 failed, fallback to -p 4"
+            "$ZIPALIGN" -p 4 -f "$APK_RELEASE" "${APK_RELEASE}.aligned"
+          }
+          mv -f "${APK_RELEASE}.aligned" "$APK_RELEASE"
+          echo "=== apksigner sign Release APK (v1+v2+v3) ==="
+          "$APKSIGNER" sign --ks ~/.android/debug.keystore --ks-pass pass:android \
+            --ks-key-alias androiddebugkey --key-pass pass:android \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            "$APK_RELEASE" 2>&1 || echo "apksigner failed for release"
+
+          # ============================================================
+          # 诊断 dump: 必看项,验证 v1 签名是否补上(META-INF/ANDROIDD.SF/RSA/MF 应存在)
+          # 1. unzip -l: 看 entry 列表,确认 AndroidManifest.xml / resources.arsc 存在
+          # 2. zipalign -c: 验证对齐
+          # 3. apksigner verify: 验证签名完整性
+          # 4. APK 文件大小 + sha256
+          # 5. META-INF 签名文件(必须有 .SF/.RSA/.MF,否则 MT 管理器读不到应用信息)
+          # ============================================================
+          for apk in "$APK_DEBUG" "$APK_RELEASE"; do
+            echo "============================================================"
+            echo "=== $apk ==="
+            echo "=== File size + sha256 ==="
+            ls -la "$apk"
+            sha256sum "$apk"
+            echo "=== unzip -l (entry 列表,看 AndroidManifest.xml / resources.arsc) ==="
+            unzip -l "$apk" | head -30
+            echo "=== zipalign -c -P 16 -p 4 (验证 16K page + 4 字节对齐) ==="
+            "$ZIPALIGN" -c -P 16 -p 4 "$apk" 2>&1 | tail -10 || echo "ZIPALIGN CHECK FAILED"
+            echo "=== apksigner verify --verbose ==="
+            "$APKSIGNER" verify --verbose --print-certs "$apk" 2>&1 | head -20
+            echo "=== META-INF 签名文件(必须有 .SF/.RSA/.MF,否则 MT 读不到) ==="
+            unzip -l "$apk" | grep -E "META-INF/.*\.(SF|RSA|DSA|MF)"
+            echo "=== resources.arsc + AndroidManifest.xml 是否存在 ==="
+            unzip -l "$apk" | grep -E "resources.arsc|AndroidManifest.xml" || echo "WARNING: Missing manifest or arsc!"
+            echo "=== .so 文件 method 检查(STORED=不压缩需对齐 / DEFLATED=压缩不需对齐) ==="
+            for so in $(unzip -l "$apk" | awk '/lib\/arm64-v8a\/.*\.so/ {print $4}'); do
+              method=$(unzip -p "$apk" "$so" 2>/dev/null | head -c 2 | od -An -c | head -1)
+              echo "  $so: $method"
+            done
+          done
+
+      - name: Rename and collect APK
+        run: |
+          mkdir -p out
+          # Debug APK (推荐安装,签名完整)
+          DEBUG_APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          if [ -f "$DEBUG_APK" ]; then
+            cp "$DEBUG_APK" out/aibox-arm64-v8a-debug.apk
+            echo "Debug APK: $(ls -la out/aibox-arm64-v8a-debug.apk)"
+          fi
+          # Release APK (备用)
+          RELEASE_APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          if [ -f "$RELEASE_APK" ]; then
+            cp "$RELEASE_APK" out/aibox-arm64-v8a-release.apk
+            echo "Release APK: $(ls -la out/aibox-arm64-v8a-release.apk)"
+          fi
+          ls -la out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aibox-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 30

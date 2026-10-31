@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 插件注册到宿主所需的权限 -->
+    <uses-permission android:name="com.aibox.permission.REGISTER_PLUGIN" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@android:drawable/ic_dialog_info"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.NoDisplay">
+
+        <!-- 插件入口 Service：通过 Intent Action 让宿主发现 -->
+        <service
+            android:name=".EchoPluginService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.aibox.plugin.INFERENCE_BACKEND" />
+            </intent-filter>
+            <meta-data
+                android:name="aibox_plugin_version"
+                android:value="0.1.0" />
+            <meta-data
+                android:name="aibox_api_version"
+                android:value="1" />
+        </service>
+    </application>
+
+</manifest>
