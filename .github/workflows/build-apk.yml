@@ -149,12 +149,12 @@ jobs:
           # ============================================================
           # Debug APK: 先 zipalign 再 apksigner 补 v1+v2+v3 签名
           # AGP assembleDebug 只产 v2(因为 minSdk=26 ≥ 24),MT 管理器读不到 v1 → 装不上
-          # zipalign -P 16 -p 4 = 16K page 对齐(STORED .so)+ 4 字节对齐(其他 entry)
+          # zipalign -P 16 4 = 16K page 对齐(STORED .so)+ 4 字节对齐(其他 entry)
           # 注:本次 build 用 useLegacyPackaging=true → .so 是 DEFLATED, 不需要 16K 对齐,
-          # 但 -P 16 -p 4 是双重保险,即使将来改 useLegacyPackaging=false 也能装上。
+          # 但 -P 16 4 是双重保险,即使将来改 useLegacyPackaging=false 也能装上。
           # ============================================================
-          echo "=== zipalign Debug APK (16K page + 4B align) ==="
-          "$ZIPALIGN" -P 16 -p 4 -f "$APK_DEBUG" "${APK_DEBUG}.aligned" 2>&1 || {
+          echo "=== zipalign Debug APK (16K page) ==="
+          "$ZIPALIGN" -P 16 -f 4 "$APK_DEBUG" "${APK_DEBUG}.aligned" 2>&1 || {
             echo "zipalign -P 16 failed, fallback to -p 4"
             "$ZIPALIGN" -p 4 -f "$APK_DEBUG" "${APK_DEBUG}.aligned"
           }
@@ -168,8 +168,8 @@ jobs:
           # ============================================================
           # Release APK: 同样先 zipalign 再 apksigner
           # ============================================================
-          echo "=== zipalign Release APK (16K page + 4B align) ==="
-          "$ZIPALIGN" -P 16 -p 4 -f "$APK_RELEASE" "${APK_RELEASE}.aligned" 2>&1 || {
+          echo "=== zipalign Release APK (16K page) ==="
+          "$ZIPALIGN" -P 16 -f 4 "$APK_RELEASE" "${APK_RELEASE}.aligned" 2>&1 || {
             echo "zipalign -P 16 failed, fallback to -p 4"
             "$ZIPALIGN" -p 4 -f "$APK_RELEASE" "${APK_RELEASE}.aligned"
           }
@@ -196,8 +196,8 @@ jobs:
             sha256sum "$apk"
             echo "=== unzip -l (entry 列表,看 AndroidManifest.xml / resources.arsc) ==="
             unzip -l "$apk" | head -30
-            echo "=== zipalign -c -P 16 -p 4 (验证 16K page + 4 字节对齐) ==="
-            "$ZIPALIGN" -c -P 16 -p 4 "$apk" 2>&1 | tail -10 || echo "ZIPALIGN CHECK FAILED"
+            echo "=== zipalign -c -P 16 4 (验证 16K page + 4 字节对齐) ==="
+            "$ZIPALIGN" -c -P 16 4 "$apk" 2>&1 | tail -10 || echo "ZIPALIGN CHECK FAILED"
             echo "=== apksigner verify --verbose ==="
             "$APKSIGNER" verify --verbose --print-certs "$apk" 2>&1 | head -20
             echo "=== META-INF 签名文件(必须有 .SF/.RSA/.MF,否则 MT 读不到) ==="
