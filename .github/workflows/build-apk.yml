@@ -128,65 +128,60 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
-          # AGP 8.5.2 + minSdk >= 24 默认跳过 v1 签名(只产 v2/v3),
-          # 但 MT 管理器等老 Android 工具优先读 v1,没 v1 就读不到应用信息。
-          # 所以 assembleDebug/Release 后,需要先 zipalign 再 apksigner 给 Debug 也补 v1 签名。
-          # 顺序非常关键: zipalign 必须在 apksigner 之前,因为 apksigner 会破坏 zipalign。
+          # ============================================================
+          # 重要修复(2026-11-06): 移除 apksigner sign 步骤,让 AGP 8.5.2 默认签名
+          # 原因: 之前用 apksigner 重签加 v1,但 v1 文件存在 + v1 verify=False 是
+          # "v1 stripping protection" 占位,部分 Android 16 OEM ROM 会拒绝安装。
+          # AGP 8.5.2 + minSdk=26 默认: v1 disabled (无 META-INF/.SF/.RSA/.MF) +
+          # v2 真签名 +(Release 默认还有 v3)。META-INF 干净,类似 aibox-old (10-21 能装版)。
+          # zipalign -P 16 -f 4 是双重保险: 16K page 对齐(STORED .so)+ 4 字节对齐(其他 entry)。
+          # ============================================================
           ./gradlew :app:assembleDebug --stacktrace --no-daemon
           ./gradlew :app:assembleRelease --stacktrace --no-daemon
 
           APK_DEBUG=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           APK_RELEASE=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          APKSIGNER=$(find $ANDROID_HOME -name apksigner -type f 2>/dev/null | head -1)
-          if [ -z "$APKSIGNER" ]; then
-            APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          fi
           ZIPALIGN=$(find $ANDROID_HOME -name zipalign -type f 2>/dev/null | head -1)
           if [ -z "$ZIPALIGN" ]; then
             ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
           fi
+          APKSIGNER=$(find $ANDROID_HOME -name apksigner -type f 2>/dev/null | head -1)
+          if [ -z "$APKSIGNER" ]; then
+            APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          fi
 
           # ============================================================
-          # Debug APK: 先 zipalign 再 apksigner 补 v1+v2+v3 签名
-          # AGP assembleDebug 只产 v2(因为 minSdk=26 ≥ 24),MT 管理器读不到 v1 → 装不上
-          # zipalign -P 16 4 = 16K page 对齐(STORED .so)+ 4 字节对齐(其他 entry)
-          # 注:本次 build 用 useLegacyPackaging=true → .so 是 DEFLATED, 不需要 16K 对齐,
-          # 但 -P 16 4 是双重保险,即使将来改 useLegacyPackaging=false 也能装上。
+          # Debug APK: 仅 zipalign,不重签(保留 AGP 默认 v2 签名,META-INF 干净)
+          # zipalign -P 16 -f 4: 16K page 对齐(STORED .so)+ 4 字节对齐
+          # 注:useLegacyPackaging=true 时 .so 是 DEFLATED, 不需要 16K 对齐,
+          # 但 -P 16 是双重保险,即使将来 useLegacyPackaging=false 也能装上。
           # ============================================================
-          echo "=== zipalign Debug APK (16K page) ==="
+          echo "=== zipalign Debug APK (16K page + 4B align) ==="
           "$ZIPALIGN" -P 16 -f 4 "$APK_DEBUG" "${APK_DEBUG}.aligned" 2>&1 || {
             echo "zipalign -P 16 failed, fallback to -p 4"
             "$ZIPALIGN" -p 4 -f "$APK_DEBUG" "${APK_DEBUG}.aligned"
           }
           mv -f "${APK_DEBUG}.aligned" "$APK_DEBUG"
-          echo "=== apksigner sign Debug APK (v1+v2+v3) ==="
-          "$APKSIGNER" sign --ks ~/.android/debug.keystore --ks-pass pass:android \
-            --ks-key-alias androiddebugkey --key-pass pass:android \
-            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            "$APK_DEBUG" 2>&1 || echo "apksigner failed for debug"
+          echo "=== Debug APK AGP 默认签名保留 (v2 真签名,META-INF 干净) ==="
 
           # ============================================================
-          # Release APK: 同样先 zipalign 再 apksigner
+          # Release APK: 同样仅 zipalign,不重签(保留 AGP 默认 v2+v3 签名)
           # ============================================================
-          echo "=== zipalign Release APK (16K page) ==="
+          echo "=== zipalign Release APK (16K page + 4B align) ==="
           "$ZIPALIGN" -P 16 -f 4 "$APK_RELEASE" "${APK_RELEASE}.aligned" 2>&1 || {
             echo "zipalign -P 16 failed, fallback to -p 4"
             "$ZIPALIGN" -p 4 -f "$APK_RELEASE" "${APK_RELEASE}.aligned"
           }
           mv -f "${APK_RELEASE}.aligned" "$APK_RELEASE"
-          echo "=== apksigner sign Release APK (v1+v2+v3) ==="
-          "$APKSIGNER" sign --ks ~/.android/debug.keystore --ks-pass pass:android \
-            --ks-key-alias androiddebugkey --key-pass pass:android \
-            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
-            "$APK_RELEASE" 2>&1 || echo "apksigner failed for release"
+          echo "=== Release APK AGP 默认签名保留 (v2+v3 真签名,META-INF 干净) ==="
 
           # ============================================================
-          # 诊断 dump: 必看项,验证 v1 签名是否补上(META-INF/ANDROIDD.SF/RSA/MF 应存在)
+          # 诊断 dump: 必看项,验证 AGP 默认签名是否齐全
           # 1. unzip -l: 看 entry 列表,确认 AndroidManifest.xml / resources.arsc 存在
           # 2. zipalign -c: 验证对齐
           # 3. apksigner verify: 验证签名完整性
           # 4. APK 文件大小 + sha256
-          # 5. META-INF 签名文件(必须有 .SF/.RSA/.MF,否则 MT 管理器读不到应用信息)
+          # 5. META-INF 应该干净(无 .SF/.RSA/.MF),只有 androidx.*.version 等依赖元数据
           # ============================================================
           for apk in "$APK_DEBUG" "$APK_RELEASE"; do
             echo "============================================================"
@@ -200,8 +195,8 @@ jobs:
             "$ZIPALIGN" -c -P 16 4 "$apk" 2>&1 | tail -10 || echo "ZIPALIGN CHECK FAILED"
             echo "=== apksigner verify --verbose ==="
             "$APKSIGNER" verify --verbose --print-certs "$apk" 2>&1 | head -20
-            echo "=== META-INF 签名文件(必须有 .SF/.RSA/.MF,否则 MT 读不到) ==="
-            unzip -l "$apk" | grep -E "META-INF/.*\.(SF|RSA|DSA|MF)"
+            echo "=== META-INF 签名文件(应为空,AGP 默认不写 v1) ==="
+            unzip -l "$apk" | grep -E "META-INF/.*\.(SF|RSA|DSA|MF)" || echo "(无 v1 文件,符合预期)"
             echo "=== resources.arsc + AndroidManifest.xml 是否存在 ==="
             unzip -l "$apk" | grep -E "resources.arsc|AndroidManifest.xml" || echo "WARNING: Missing manifest or arsc!"
             echo "=== .so 文件 method 检查(STORED=不压缩需对齐 / DEFLATED=压缩不需对齐) ==="
