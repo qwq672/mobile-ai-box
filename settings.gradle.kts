@@ -13,5 +13,7 @@ dependencyResolutionManagement {
         maven("https://jitpack.io")
     }
 }
+
 rootProject.name = "AIBox"
 include(":app")
+
