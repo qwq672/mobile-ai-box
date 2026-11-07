@@ -1,22 +1,22 @@
 # Keep native bridge — JNI 外部方法名不能被 R8 改名
--keep class com.aibox.infra.jni.** { *; }
+-keep class com.pocketllm.infra.jni.** { *; }
 -keepclasseswithmembernames class * { native <methods>; }
 
 # Keep data models used by Room / Moshi / kotlinx.serialization
--keep class com.aibox.data.model.** { *; }
--keep class com.aibox.data.db.** { *; }
--keep class com.aibox.domain.inference.** { *; }
--keep class com.aibox.domain.download.** { *; }
--keep class com.aibox.util.** { *; }
+-keep class com.pocketllm.data.model.** { *; }
+-keep class com.pocketllm.data.db.** { *; }
+-keep class com.pocketllm.domain.inference.** { *; }
+-keep class com.pocketllm.domain.download.** { *; }
+-keep class com.pocketllm.util.** { *; }
 
 # Moshi Kotlin 反射：保留 data class 构造函数参数
--keepclassmembers class com.aibox.** { <init>(...); }
+-keepclassmembers class com.pocketllm.** { <init>(...); }
 
 # kotlinx.serialization
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.**
 -keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
--keepclasseswithmembers class com.aibox.** { kotlinx.serialization.KSerializer serializer(...); }
+-keepclasseswithmembers class com.pocketllm.** { kotlinx.serialization.KSerializer serializer(...); }
 -keep class **$$serializer { *; }
 
 # Room generated

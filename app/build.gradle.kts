@@ -24,13 +24,9 @@ android {
             abiFilters += listOf("arm64-v8a")
         }
 
-        // 固定 NDK 版本,与 ci.yml 替换 Vulkan headers 的版本一致
-        ndkVersion = "26.1.10909125"
-
-        // 注:不再显式声明 extractNativeLibs,让 AGP 8.5.2 自动处理
-        // AGP 默认: useLegacyPackaging=false → extractNativeLibs=false → .so STORED + mmap 加载
-        // AGP 会自动 zipalign(STORED .so 16K page align + 4 字节对齐)
-        // 这与 aibox-old (10-21 能装版) 的处理完全一致
+        // 注: 实验 A 完全模仿 pocket-llm 风格, 不显式声明 ndkVersion
+        // (pocket-llm 没有这一行, 用 AGP 默认 NDK; aibox 之前显式 = 26.1.10909125)
+        // 但 ci.yml 仍然 install ndk;26.1.10909125, AGP 会自动找到
 
         externalNativeBuild {
             cmake {
@@ -77,7 +73,6 @@ android {
 
     // 资源压缩 + 代码混淆，缩小体积
     buildTypes {
-        lint { abortOnError = false; checkReleaseBuilds = false }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -85,20 +80,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("debug") // 简化首发，正式版请换正式签名
         }
         debug {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
-            // 显式指定 debug 签名,确保 CI 环境也生成签名文件
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
-
-    // 注:v1 签名(JAR signature,META-INF/MANIFEST.MF + CERT.SF + CERT.RSA)的启用由 ci.yml 处理
-    // AGP 8.5.2 在 minSdk >= 24 时默认跳过 v1(只产 v2/v3),
-    // 但 MT 管理器等老 Android 工具优先读 v1,没 v1 就读不到应用信息(装不上的根因)。
-    // CI 里用 zipalign + apksigner 给 Debug APK 补 v1 签名(顺序:先 zipalign 再 apksigner,否则破坏对齐)
 
     // 只打包需要的语言
     bundle {
@@ -122,10 +110,7 @@ android {
                 "DebugProbesKt.bin"
             )
         }
-        // jniLibs: useLegacyPackaging = false → .so STORED + extractNativeLibs=false
-        // Android 16 / 16K page size + Magic OS 要求: .so STORED + 16K page align
-        // (extractNativeLibs=false → .so mmap 加载,要求 page-align,ci.yml 用 zipalign -P 16 强制)
-        // 之前用 useLegacyPackaging=true → .so DEFLATED + extractNativeLibs=true 在某些 Android 16 设备被拒绝
+        // 避免重复 jni 库 (pocket-llm 风格: useLegacyPackaging = false)
         jniLibs {
             useLegacyPackaging = false
         }
@@ -147,51 +132,35 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    // extended 提供 Send/Stop/SmartToy/Bolt 等图标；BOM 已自动收敛版本
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.animation:animation")
 
-    // Navigation
     implementation("androidx.navigation:navigation-compose:2.8.1")
 
-    // DataStore + Room
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
-    // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // Networking（下载源）
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     debugImplementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
-    // moshi-kotlin 反射需要与 Kotlin 编译器同版本的 kotlin-reflect，否则运行时 TypeUtils NoSuchMethodError
     implementation("org.jetbrains.kotlin:kotlin-reflect:2.0.20")
 
-    // Jsoup（B4 UrlReaderTool 抓取并解析网页 HTML）
-    // 注：B3 WebSearchTool 的 DuckDuckGo HTML 兜底解析也复用此依赖
     implementation("org.jsoup:jsoup:1.18.1")
 
-    // WorkManager（断点续传、后台下载）
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
-    // Splash
     implementation("androidx.core:core-splashscreen:1.0.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
-    // ===================================================
-    // B2-B5：基础工具单元测试
-    // 环境无 Android SDK，无法跑 :app:assembleDebug 验证编译，但写测试代码本身有意义
-    // 测试只覆盖纯 Kotlin 逻辑（DateTime / Calculator / ExpressionParser），
-    // 涉及 Android 类（Build / Context / DataStore）的工具靠人工 review
-    // ===================================================
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }
