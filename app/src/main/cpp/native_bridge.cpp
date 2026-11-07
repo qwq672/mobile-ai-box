@@ -24,9 +24,9 @@
 #include "memory_pool.h"
 #include "bridge.h"
 
-#define TAG "AIBox-Native"
+#define TAG "PocketLLM-Native"
 
-// 双路日志：__android_log_print + 通过 JNI 回调传给 Kotlin LogSystem 写文件。
+// 双路日志：__android_log_print + 通过 JNI 回调传给 Kotlin AppLogger 写文件。
 // g_vm 必须在 native_log 之前声明（native_log 内部用 g_vm attach 线程调到 Kotlin）
 static JavaVM* g_vm = nullptr;
 
@@ -96,7 +96,7 @@ static std::string g_backend_str = "cpu";
 
 // ---------- 后端可用性 ----------
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_aibox_infra_jni_NativeBridge_vulkanAvailable(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_vulkanAvailable(JNIEnv*, jclass) {
 #if defined(POCKET_VULKAN)
     void* h = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
     if (h) { dlclose(h); return JNI_TRUE; }
@@ -105,7 +105,7 @@ Java_com_aibox_infra_jni_NativeBridge_vulkanAvailable(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
 #if defined(POCKET_NPU)
     void* h1 = dlopen("libQnnHtp.so",          RTLD_NOW | RTLD_LOCAL);
     void* h2 = dlopen("libhexagon_nn_skel.so", RTLD_NOW | RTLD_LOCAL);
@@ -118,7 +118,7 @@ Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_aibox_infra_jni_NativeBridge_openclAvailable(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_openclAvailable(JNIEnv*, jclass) {
 #if defined(POCKET_OPENCL)
     void* h = dlopen("libOpenCL.so", RTLD_NOW | RTLD_LOCAL);
     if (h) { dlclose(h); return JNI_TRUE; }
@@ -127,14 +127,14 @@ Java_com_aibox_infra_jni_NativeBridge_openclAvailable(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_aibox_infra_jni_NativeBridge_nativeVersion(JNIEnv* env, jclass) {
-    std::string v = "llama.cpp=" + std::string(llama_print_system_info()) + " aibox=v261018-1";
+Java_com_pocketllm_infra_jni_NativeBridge_nativeVersion(JNIEnv* env, jclass) {
+    std::string v = "llama.cpp=" + std::string(llama_print_system_info()) + " pocket=1.0.0";
     return env->NewStringUTF(v.c_str());
 }
 
 // ---------- 加载 ----------
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
+Java_com_pocketllm_infra_jni_NativeBridge_llamaLoad(
     JNIEnv* env, jclass, jstring jpath, jstring jbackend,
     jint nGpuLayers, jint threads,
     jint physicalBatch, jint batch,
@@ -224,7 +224,7 @@ fail:
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
     std::lock_guard<std::mutex> lk(g_mutex);
     if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
@@ -238,7 +238,7 @@ Java_com_aibox_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaSetSampler(
+Java_com_pocketllm_infra_jni_NativeBridge_llamaSetSampler(
     JNIEnv*, jclass, jfloat temp, jint topK, jfloat topP, jfloat repeat)
 {
     bridge_sampler_t s{ temp, topK, topP, repeat };
@@ -249,14 +249,14 @@ Java_com_aibox_infra_jni_NativeBridge_llamaSetSampler(
 // 用 Java interface StringCallback（无 generic）替代 Kotlin Function1，
 // 因为某些 NDK/ART 版本下 GetMethodID 在 Kotlin Function1.invoke 上失败。
 // StringCallback.onValue(String) 的签名固定：'(Ljava/lang/String;)V'
-static jclass    g_cb_cls       = nullptr;  // 全局 ref to com.aibox.infra.jni.StringCallback
+static jclass    g_cb_cls       = nullptr;  // 全局 ref to com.pocketllm.infra.jni.StringCallback
 static jmethodID g_cb_mid       = nullptr;  // StringCallback.onValue methodID
 
 static bool ensure_cb_cache(JNIEnv* env) {
     if (g_cb_cls && g_cb_mid) return true;
     if (!env) return false;
     if (!g_cb_cls) {
-        jclass local = env->FindClass("com/aibox/infra/jni/StringCallback");
+        jclass local = env->FindClass("com/pocketllm/infra/jni/StringCallback");
         if (!local || env->ExceptionCheck()) {
             env->ExceptionClear();
             LOGE("ensure_cb_cache: FindClass(StringCallback) failed");
@@ -295,7 +295,7 @@ static bool call_string_cb(JNIEnv* env, jobject cb, const std::string& s) {
 
 // ---------- 流式补全（同步执行，由 Kotlin 协程在 Dispatchers.Default 调用） ----------
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaCompletion(
+Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletion(
     JNIEnv* env, jclass, jstring jprompt,
     jobject tokenCb, jobject stopCb)
 {
@@ -447,7 +447,7 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletion(
 // ---------- chat template 版补全 ----------
 // 把 messages 数组用模型内置 chat template 格式化，然后走相同的增量 eval + 生成流程
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
+Java_com_pocketllm_infra_jni_NativeBridge_llamaCompletionChat(
     JNIEnv* env, jclass,
     jobjectArray jMessages, jboolean jThinkingMode,
     jobject tokenCb, jobject stopCb)
@@ -470,7 +470,7 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     }
 
     // 找 ChatMsg class 的 role / content 字段
-    jclass msgCls = env->FindClass("com/aibox/infra/jni/NativeBridge$ChatMsg");
+    jclass msgCls = env->FindClass("com/pocketllm/infra/jni/NativeBridge$ChatMsg");
     if (!msgCls || env->ExceptionCheck()) {
         env->ExceptionClear();
         LOGE("llamaCompletionChat: cannot find ChatMsg class");
@@ -666,13 +666,13 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaInterrupt(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_llamaInterrupt(JNIEnv*, jclass) {
     g_interrupt.store(true);
 }
 
 // ---------- 状态 ----------
 extern "C" JNIEXPORT jfloat JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaTokensPerSecond(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_llamaTokensPerSecond(JNIEnv*, jclass) {
     if (!g_ctx) return 0.f;
     auto pd = llama_perf_context(g_ctx);
     if (pd.t_eval_ms <= 0.0 || pd.n_eval <= 0) return 0.f;
@@ -680,50 +680,50 @@ Java_com_aibox_infra_jni_NativeBridge_llamaTokensPerSecond(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaContextUsed(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_llamaContextUsed(JNIEnv*, jclass) {
     return (jint)g_ctx_used.load();
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_aibox_infra_jni_NativeBridge_llamaContextMax(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_llamaContextMax(JNIEnv*, jclass) {
     if (!g_ctx) return 0;
     return (jint)llama_n_ctx(g_ctx);
 }
 
 // ---------- 内存池 ----------
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_memoryPoolWarmup(JNIEnv*, jclass, jlong kv, jlong comp) {
+Java_com_pocketllm_infra_jni_NativeBridge_memoryPoolWarmup(JNIEnv*, jclass, jlong kv, jlong comp) {
     g_pool.warmup_bytes(kv, comp);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_memoryPoolRelease(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_memoryPoolRelease(JNIEnv*, jclass) {
     g_pool.releaseAll();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_memoryPoolShrinkIdle(JNIEnv*, jclass, jlong idleMs, jint keep) {
+Java_com_pocketllm_infra_jni_NativeBridge_memoryPoolShrinkIdle(JNIEnv*, jclass, jlong idleMs, jint keep) {
     g_pool.shrink_idle(idleMs, keep);
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_aibox_infra_jni_NativeBridge_memoryPoolPeakMb(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_memoryPoolPeakMb(JNIEnv*, jclass) {
     return (jlong)g_pool.peak_mb();
 }
 
 extern "C" JNIEXPORT jobject JNICALL
-Java_com_aibox_infra_jni_NativeBridge_borrowDirectBuffer(JNIEnv* env, jclass, jint size) {
+Java_com_pocketllm_infra_jni_NativeBridge_borrowDirectBuffer(JNIEnv* env, jclass, jint size) {
     return g_pool.borrow_direct(env, size);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_aibox_infra_jni_NativeBridge_returnDirectBuffer(JNIEnv* env, jclass, jobject buf) {
+Java_com_pocketllm_infra_jni_NativeBridge_returnDirectBuffer(JNIEnv* env, jclass, jobject buf) {
     g_pool.return_direct(env, buf);
 }
 
 // ---------- 热感知 ----------
 extern "C" JNIEXPORT jint JNICALL
-Java_com_aibox_infra_jni_NativeBridge_thermalPercent(JNIEnv*, jclass) {
+Java_com_pocketllm_infra_jni_NativeBridge_thermalPercent(JNIEnv*, jclass) {
     return (jint)bridge_read_thermal_percent();
 }
 
@@ -741,7 +741,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     // 线程上 FindClass 失败（虽然项目类一般能找到，但保险起见）。
     ensure_cb_cache(env);
     // 缓存 NativeBridge.onNativeLog 静态方法用于 native_log 回调
-    jclass local = env->FindClass("com/aibox/infra/jni/NativeBridge");
+    jclass local = env->FindClass("com/pocketllm/infra/jni/NativeBridge");
     if (local && !env->ExceptionCheck()) {
         g_log_cls = (jclass) env->NewGlobalRef(local);
         env->DeleteLocalRef(local);

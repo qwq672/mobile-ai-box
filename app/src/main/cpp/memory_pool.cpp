@@ -6,7 +6,7 @@
 #include <cstring>
 #include <algorithm>
 
-#define TAG "AIBox-MemPool"
+#define TAG "PocketLLM-MemPool"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 
 static long now_ms() {

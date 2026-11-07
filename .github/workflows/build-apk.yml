@@ -1,8 +1,10 @@
-name: Build AIBox APK
+name: Build AIBox APK (Exp B - Pocket-LLM Source)
 
+# 实验 B: 用 aibox 配置 + pocket-llm 源码 (隔离实验)
+# 触发条件: exp-b-pocket-source 分支 push + workflow_dispatch
 on:
   push:
-    branches: [ main ]
+    branches: [ main, exp-b-pocket-source ]
     paths-ignore:
       - '**.md'
       - '.gitignore'
@@ -188,24 +190,24 @@ jobs:
       - name: Rename and collect APK
         run: |
           mkdir -p out
-          # Debug APK (推荐安装,签名完整)
+          # Debug APK
           DEBUG_APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           if [ -f "$DEBUG_APK" ]; then
-            cp "$DEBUG_APK" out/aibox-arm64-v8a-debug.apk
-            echo "Debug APK: $(ls -la out/aibox-arm64-v8a-debug.apk)"
+            cp "$DEBUG_APK" out/exp-b-debug.apk
+            echo "Debug APK: $(ls -la out/exp-b-debug.apk)"
           fi
-          # Release APK (备用)
+          # Release APK
           RELEASE_APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
           if [ -f "$RELEASE_APK" ]; then
-            cp "$RELEASE_APK" out/aibox-arm64-v8a-release.apk
-            echo "Release APK: $(ls -la out/aibox-arm64-v8a-release.apk)"
+            cp "$RELEASE_APK" out/exp-b-release.apk
+            echo "Release APK: $(ls -la out/exp-b-release.apk)"
           fi
           ls -la out
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aibox-apk
+          name: aibox-apk-exp-b
           path: out/*.apk
           if-no-files-found: error
           retention-days: 30
