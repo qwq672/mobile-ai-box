@@ -178,6 +178,9 @@ class ChatViewModel : ViewModel() {
 
         viewModelScope.launch {
             val collected = StringBuilder()
+            // 本轮 tps 本地计时: 避免 engine.stats 轮询延迟读到旧值 (首轮 tps=0 的根因)
+            var firstTokMs = 0L
+            var tokCount = 0
             try {
                 // 构造 messages 数组，用模型内置 chat template
                 val messages = buildChatMessages(_ui.value.messages)
@@ -185,11 +188,14 @@ class ChatViewModel : ViewModel() {
                     messages = messages,
                     thinkingMode = thinkingMode,
                     onToken = { tok ->
+                        if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
+                        tokCount++
                         collected.append(tok)
                         _ui.value = _ui.value.copy(currentStream = collected.toString())
                     },
                     onStop = { reason ->
-                        val tps = engine.stats.value.tokensPerSecond
+                        val genMs = if (firstTokMs > 0) (System.currentTimeMillis() - firstTokMs).coerceAtLeast(1) else 0L
+                        val tps = if (tokCount > 0 && genMs > 0) tokCount * 1000f / genMs else 0f
                         val assistant = ChatMessage(
                             role = "assistant",
                             content = collected.toString(),
@@ -258,17 +264,23 @@ class ChatViewModel : ViewModel() {
         LogSystem.info("aibox.ui.chat", "ChatViewModel: regenerate")
         viewModelScope.launch {
             val collected = StringBuilder()
+            // 本轮 tps 本地计时 (同 continueSend)
+            var firstTokMs = 0L
+            var tokCount = 0
             try {
                 val messages = buildChatMessages(withoutLast)
                 engine.completionChat(
                     messages = messages,
                     thinkingMode = thinkingMode,
                     onToken = { tok ->
+                        if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
+                        tokCount++
                         collected.append(tok)
                         _ui.value = _ui.value.copy(currentStream = collected.toString())
                     },
                     onStop = { reason ->
-                        val tps = engine.stats.value.tokensPerSecond
+                        val genMs = if (firstTokMs > 0) (System.currentTimeMillis() - firstTokMs).coerceAtLeast(1) else 0L
+                        val tps = if (tokCount > 0 && genMs > 0) tokCount * 1000f / genMs else 0f
                         val assistant = ChatMessage(
                             role = "assistant",
                             content = collected.toString(),

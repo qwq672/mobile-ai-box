@@ -107,10 +107,12 @@ class BasicBenchmark(
         }
 
         // ---- 取中位数 ----
-        val medianPpTps = medianDouble(reps.map { it.ppTps })
-        val medianTgTps = medianDouble(reps.map { it.tgTps })
-        val medianTtft = medianLong(reps.map { it.ttftMs })
-        val medianTotal = medianLong(reps.map { it.totalTimeMs })
+        // 过滤无效 rep (0 token EOG 立即返回的), 只要有至少 1 个有效 rep 就用有效的算
+        val validReps = reps.filter { it.tgTps > 0 || it.ppTps > 0 }.ifEmpty { reps }
+        val medianPpTps = medianDouble(validReps.map { it.ppTps })
+        val medianTgTps = medianDouble(validReps.map { it.tgTps })
+        val medianTtft = medianLong(validReps.map { it.ttftMs })
+        val medianTotal = medianLong(validReps.map { it.totalTimeMs })
         val peakMem = reps.map { it.peakMem }.maxOrNull() ?: 0L
 
         // ---- 能耗 / 环境快照后 ----
@@ -204,6 +206,12 @@ class BasicBenchmark(
         val totalMs = (end - start).coerceAtLeast(1L)
         val ttft = (firstTokenTime - start).coerceAtLeast(0L).let { if (it == 0L) totalMs else it }
 
+        // 保护: 生成 0 token (EOG at i=0) 时本次 rep 无效, 直接返回 0 避免指标爆表
+        if (generatedTokens <= 0) {
+            LogSystem.warn(tag, "runOnce generated 0 tokens (model EOG immediately), rep invalid", sessionId = sessionId)
+            return RepResult(0.0, 0.0, 0L, totalMs, readPeakMemory())
+        }
+
         // PP t/s = ppSize / TTFT 秒（近似）
         val ppTps = if (ttft > 0) spec.ppSize.toDouble() * 1000.0 / ttft else 0.0
         // TG t/s = generatedTokens / (total - TTFT) 秒
@@ -229,8 +237,11 @@ class BasicBenchmark(
     private fun generatePrompt(approxTokens: Int): String {
         val unit = "The quick brown fox jumps over the lazy dog. "
         val targetChars = (approxTokens * 4).coerceAtLeast(20)
-        val sb = StringBuilder(targetChars + unit.length)
+        val sb = StringBuilder(targetChars + unit.length + 32)
         while (sb.length < targetChars) sb.append(unit)
+        // 关键: 末尾加续写引导句, 否则裸重复文本会让小模型立即输出 EOG
+        // (实测 LFM2.5-350M 对裸重复文本 EOG at i=0, tgTps=0, ppTps 爆表 64000)
+        sb.append("\nOnce upon a time, the fox")
         return sb.toString()
     }
 

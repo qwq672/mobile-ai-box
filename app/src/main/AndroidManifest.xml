@@ -20,6 +20,22 @@
          (pocket-llm 没有这些, 实验 A 极简化)
          源码里的 PhoneControlTool / SpeechRecognizer 等工具运行时会降级或抛异常, 但不影响编译 -->
 
+    <!-- 模块可见性 (Android 11+ 包可见性要求):
+         之前用 <queries><intent> 声明 4 个自定义 action, 但荣耀 Magic OS 8 拒绝安装含
+         自定义 action queries 的 APK (装不上根因之一)。改用显式 <package> 声明已知模块包名:
+         - Android 11+ 上 <queries><package> 让 queryIntentServices/getPackageInfo 能看到这些包
+         - ModuleDiscoveryService 的 queryIntentServices(自定义 action) 在显式 package 可见后
+           也能查到 (包可见性是按包过滤, 不是按 action)
+         - 未来新模块需要在此追加包名 (或引导用户手动刷新) -->
+    <queries>
+        <!-- LiteRT 推理插件 -->
+        <package android:name="com.aibox.litert.backend" />
+        <!-- Easy Chat 聊天模块 -->
+        <package android:name="com.easychat.aibox.module" />
+        <!-- 翻译模块 -->
+        <package android:name="com.aibox.translate.module" />
+    </queries>
+
     <application
         android:name=".AIBoxApp"
         android:allowBackup="false"
