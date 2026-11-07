@@ -275,7 +275,7 @@ object ParcelableConverters {
                     preallocateKV = optObj?.get("preallocateKV")?.jsonPrimitive?.booleanOrNullSafe() ?: true,
                     prebuildSampler = optObj?.get("prebuildSampler")?.jsonPrimitive?.booleanOrNullSafe() ?: true,
                     streamFirstTokenImmediately = optObj?.get("streamFirstTokenImmediately")?.jsonPrimitive?.booleanOrNullSafe() ?: true,
-                    forceFlashAttention = optObj?.get("forceFlashAttention")?.jsonPrimitive?.booleanOrNullSafe() ?: true,
+                    forceFlashAttention = optObj?.get("forceFlashAttention")?.jsonPrimitive?.booleanOrNullSafe() ?: false,
                     aggressiveGraphOpt = optObj?.get("aggressiveGraphOpt")?.jsonPrimitive?.booleanOrNullSafe() ?: true,
                     continuousKVLayout = optObj?.get("continuousKVLayout")?.jsonPrimitive?.booleanOrNullSafe() ?: true,
                     reuseSampler = optObj?.get("reuseSampler")?.jsonPrimitive?.booleanOrNullSafe() ?: true,

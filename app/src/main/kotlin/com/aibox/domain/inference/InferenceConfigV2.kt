@@ -99,7 +99,7 @@ data class OptimizationFlags(
     val streamFirstTokenImmediately: Boolean = true,
 
     // === TG 优化 ===
-    val forceFlashAttention: Boolean = true,
+    val forceFlashAttention: Boolean = false,
     val aggressiveGraphOpt: Boolean = true,
     val continuousKVLayout: Boolean = true,
     val reuseSampler: Boolean = true,

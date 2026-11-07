@@ -68,7 +68,7 @@ class OptimizationSettingsRepository(private val context: Context) {
                 prebuildSampler            = p[Keys.PREBUILD_SAMPLER]             ?: true,
                 streamFirstTokenImmediately = p[Keys.STREAM_FIRST_TOKEN_IMMEDIATE] ?: true,
                 // TG
-                forceFlashAttention        = p[Keys.FORCE_FLASH_ATTENTION]        ?: true,
+                forceFlashAttention        = p[Keys.FORCE_FLASH_ATTENTION]        ?: false,
                 aggressiveGraphOpt         = p[Keys.AGGRESSIVE_GRAPH_OPT]         ?: true,
                 continuousKVLayout         = p[Keys.CONTINUOUS_KV_LAYOUT]         ?: true,
                 reuseSampler               = p[Keys.REUSE_SAMPLER]                ?: true,
@@ -99,7 +99,7 @@ class OptimizationSettingsRepository(private val context: Context) {
                 preallocateKV              = p[Keys.PREALLOCATE_KV]               ?: true,
                 prebuildSampler            = p[Keys.PREBUILD_SAMPLER]             ?: true,
                 streamFirstTokenImmediately = p[Keys.STREAM_FIRST_TOKEN_IMMEDIATE] ?: true,
-                forceFlashAttention        = p[Keys.FORCE_FLASH_ATTENTION]        ?: true,
+                forceFlashAttention        = p[Keys.FORCE_FLASH_ATTENTION]        ?: false,
                 aggressiveGraphOpt         = p[Keys.AGGRESSIVE_GRAPH_OPT]         ?: true,
                 continuousKVLayout         = p[Keys.CONTINUOUS_KV_LAYOUT]         ?: true,
                 reuseSampler               = p[Keys.REUSE_SAMPLER]                ?: true,

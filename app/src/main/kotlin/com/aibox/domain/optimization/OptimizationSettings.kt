@@ -41,8 +41,10 @@ data class OptimizationSettings(
     val streamFirstTokenImmediately: Boolean = true,
 
     // === TG 优化（生成速度） ===
-    /** 强制使用 Flash Attention；后端不支持则静默忽略。 */
-    val forceFlashAttention: Boolean = true,
+    /** 强制使用 Flash Attention；后端不支持则静默忽略。
+     *  默认 false: LFM2.5/Mamba/RWKV 等非 Transformer 架构不兼容 FA, 强制开会导致输出问号。
+     *  Transformer 架构(Qwen/Llama/Qwen2.5)可在设置页手动开启。 */
+    val forceFlashAttention: Boolean = false,
     /** 启用激进的算子融合 / 常量折叠（增加编译时间换推理速度）。 */
     val aggressiveGraphOpt: Boolean = true,
     /** 使用连续 KV 内存布局（vs 分块），提速但占内存更整块。 */

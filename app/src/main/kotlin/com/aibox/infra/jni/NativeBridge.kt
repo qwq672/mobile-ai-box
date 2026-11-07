@@ -33,7 +33,8 @@ class NativeBridge {
         physicalBatch: Int,
         batch: Int,
         contextLength: Int,
-        kvQuant: String
+        kvQuant: String,
+        forceFa: Boolean = false
     ): Boolean
 
     external fun llamaUnload()

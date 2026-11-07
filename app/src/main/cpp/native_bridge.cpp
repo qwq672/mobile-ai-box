@@ -138,7 +138,8 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     JNIEnv* env, jclass, jstring jpath, jstring jbackend,
     jint nGpuLayers, jint threads,
     jint physicalBatch, jint batch,
-    jint ctxLen, jstring jkvq)
+    jint ctxLen, jstring jkvq,
+    jboolean jforceFa)
 {
     if (!jpath || !jbackend || !jkvq) {
         LOGE("llamaLoad: null string argument");
@@ -154,6 +155,7 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         LOGE("llamaLoad: GetStringUTFChars returned null");
         return JNI_FALSE;
     }
+    const bool forceFa = (jforceFa == JNI_TRUE);
     g_backend_str = backend;
 
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -194,7 +196,11 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         cp.n_ubatch     = physicalBatch;
         cp.n_threads    = threads > 0 ? threads : 4;
         cp.n_threads_batch = threads > 0 ? threads : 4;
-        POCKET_SET_FLASH_ATTN(cp);
+        // 关键修复: 只在 forceFa=true 时启用 FlashAttention
+        // LFM2.5 / Mamba / RWKV 等非 Transformer 架构不兼容 FA, 强制开会导致输出问号
+        if (forceFa) {
+            POCKET_SET_FLASH_ATTN(cp);
+        }
         cp.no_perf      = false;
 
         const std::string kvq_str(kvq);

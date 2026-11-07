@@ -103,9 +103,16 @@ fun SearchScreen(
         }
     }
 
-    // 自动聚焦搜索框
+    // 自动聚焦搜索框 (修复 FocusRequester is not initialized)
+    // 用 delay 等一帧让 TextField 真正 attach 到 composition,
+    // 再 try-catch 防止 attach 失败时崩溃
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+        try {
+            kotlinx.coroutines.delay(50)
+            focusRequester.requestFocus()
+        } catch (_: Exception) {
+            // FocusRequester 还没 attach, 忽略 (用户点击搜索框时会自动聚焦)
+        }
     }
 
     Scaffold(
