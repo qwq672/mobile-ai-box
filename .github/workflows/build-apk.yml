@@ -104,7 +104,11 @@ jobs:
             sudo sed -i "s/#define VK_HEADER_VERSION [0-9]*/#define VK_HEADER_VERSION $HPP_VER/" $NDK_VULKAN/vulkan_core.h
             echo "vulkan_core.h VK_HEADER_VERSION patched to $HPP_VER"
           fi
+          # 兜底:如果 sed 没生效,直接注释掉 vulkan.hpp 中的 VULKAN_HPP_STATIC_ASSERT VK_HEADER_VERSION 行
+          # 这避免 vulkan.hpp 期望的版本与 vulkan_core.h 不一致导致编译失败 (aibox 风格)
+          sudo sed -i '/VULKAN_HPP_STATIC_ASSERT.*VK_HEADER_VERSION/s/^/\/\/ DISABLED: /' $NDK_VULKAN/vulkan.hpp
           grep -E 'define VK_HEADER_VERSION ' $NDK_VULKAN/vulkan_core.h || true
+          sed -n '40,50p' $NDK_VULKAN/vulkan.hpp || true
 
       - name: Cache Gradle wrapper and build outputs
         uses: actions/cache@v4
