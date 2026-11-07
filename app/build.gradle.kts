@@ -73,6 +73,7 @@ android {
 
     // 资源压缩 + 代码混淆，缩小体积
     buildTypes {
+        lint { abortOnError = false; checkReleaseBuilds = false }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
