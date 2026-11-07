@@ -81,18 +81,6 @@
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="https" />
         </intent>
-        <!-- 发现 AIBox 聊天模块（Easy Chat 等） -->
-        <intent>
-            <action android:name="com.aibox.action.CHAT_MODULE" />
-        </intent>
-        <!-- 发现 AIBox 翻译模块 -->
-        <intent>
-            <action android:name="com.aibox.action.TRANSLATE_MODULE" />
-        </intent>
-        <!-- 发现 AIBox 图像生成模块（未来） -->
-        <intent>
-            <action android:name="com.aibox.action.IMAGE_GEN_MODULE" />
-        </intent>
     </queries>
 
     <application
@@ -100,7 +88,6 @@
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:extractNativeLibs="${extractNativeLibs}"
         android:allowBackup="true"
         android:supportsRtl="true"
         android:largeHeap="true"

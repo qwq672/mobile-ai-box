@@ -27,11 +27,10 @@ android {
         // 固定 NDK 版本,与 ci.yml 替换 Vulkan headers 的版本一致
         ndkVersion = "26.1.10909125"
 
-        // 双保险:强制 manifest 里 extractNativeLibs=true
-        // 即使 useLegacyPackaging=true 没生效(沙盒回滚),manifest 也会显式写 extractNativeLibs=true
-        // extractNativeLibs=true → .so 解压到磁盘加载,不要求 page align → 兼容 Android 16 / 16K page
-        // extractNativeLibs=false(AGP 默认) → .so mmap 加载,要求 page align → 没对齐就装不上
-        manifestPlaceholders["extractNativeLibs"] = "true"
+        // 注:不再显式声明 extractNativeLibs,让 AGP 8.5.2 自动处理
+        // AGP 默认: useLegacyPackaging=false → extractNativeLibs=false → .so STORED + mmap 加载
+        // AGP 会自动 zipalign(STORED .so 16K page align + 4 字节对齐)
+        // 这与 aibox-old (10-21 能装版) 的处理完全一致
 
         externalNativeBuild {
             cmake {
@@ -123,13 +122,12 @@ android {
                 "DebugProbesKt.bin"
             )
         }
-        // jniLibs: useLegacyPackaging = true → .so DEFLATED + extractNativeLibs=true
-        // 关键修复:Android 15+/16K page size + SM8650 启用 16K page mode
-        // useLegacyPackaging=false → .so STORED 但没 16K 对齐 → Android 11+ 装不上
-        // (extractNativeLibs=false 要求 .so page-aligned 才能 mmap,但 AGP 8.5.2 默认不 16K 对齐)
-        // useLegacyPackaging=true → .so DEFLATED + extractNativeLibs=true → .so 解压到磁盘,不需对齐
+        // jniLibs: useLegacyPackaging = false → .so STORED + extractNativeLibs=false
+        // Android 16 / 16K page size + Magic OS 要求: .so STORED + 16K page align
+        // (extractNativeLibs=false → .so mmap 加载,要求 page-align,ci.yml 用 zipalign -P 16 强制)
+        // 之前用 useLegacyPackaging=true → .so DEFLATED + extractNativeLibs=true 在某些 Android 16 设备被拒绝
         jniLibs {
-            useLegacyPackaging = true
+            useLegacyPackaging = false
         }
     }
 }
