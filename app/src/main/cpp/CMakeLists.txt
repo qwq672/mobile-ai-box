@@ -83,3 +83,28 @@ target_compile_options(aibox PRIVATE
 target_link_options(aibox PRIVATE
     -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-s
 )
+
+# ============================================================
+# 模块加载器 JNI (独立库,不依赖 llama.cpp)
+# - libaibox_module_loader.so
+# - 提供 dlopen/dlclose/dlerror 的 JNI 包装,供 NativeLibLoader 调用
+# - 独立 CMake target,不影响 aibox 主库构建
+# ============================================================
+add_library(aibox_module_loader SHARED
+    module_loader_jni.cpp
+)
+
+target_include_directories(aibox_module_loader PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# 仅链接 libdl + liblog
+find_library(LOG_LIB_ML log REQUIRED)
+target_link_libraries(aibox_module_loader PRIVATE ${LOG_LIB_ML} dl)
+
+target_compile_options(aibox_module_loader PRIVATE
+    -Os -fvisibility=hidden -ffunction-sections -fdata-sections
+)
+target_link_options(aibox_module_loader PRIVATE
+    -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-s
+)

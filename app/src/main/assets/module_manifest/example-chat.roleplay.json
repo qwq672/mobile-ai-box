@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "module_id": "chat.roleplay",
+  "version": "0.1.0",
+  "module_type": "roleplay",
+  "min_host_api": 1,
+  "abi_filters": ["arm64-v8a"],
+  "depends_on_libs": [
+    {"soname": "libsqlite.so", "shared": false}
+  ],
+  "depends_on_modules": [
+    {"module_id": "chat.basic", "min_version": "0.1.0"}
+  ],
+  "exports": ["aibox_roleplay_v1"],
+  "interface_aidl": "com.aibox.roleplay.IRoleplayModule",
+  "capabilities": ["character_card", "lorebook", "world_info", "variable_subst", "token_count"]
+}

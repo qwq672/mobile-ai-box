@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "module_id": "chat.basic",
+  "version": "0.1.0",
+  "module_type": "chat",
+  "min_host_api": 1,
+  "abi_filters": ["arm64-v8a"],
+  "depends_on_libs": [
+    {"soname": "libllama.so", "shared": true, "min_version": "0.4.1"},
+    {"soname": "libggml-vulkan.so", "shared": true}
+  ],
+  "depends_on_modules": [],
+  "exports": ["aibox_chat_v1"],
+  "interface_aidl": "com.aibox.chat.IChatModule",
+  "capabilities": ["chat_completion", "token_stream", "kv_cache_manage"]
+}

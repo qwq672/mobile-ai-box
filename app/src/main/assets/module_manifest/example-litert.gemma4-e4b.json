@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "module_id": "litert.gemma4-e4b",
+  "version": "0.1.0",
+  "module_type": "backend_consumer",
+  "min_host_api": 1,
+  "abi_filters": ["arm64-v8a"],
+  "depends_on_libs": [
+    {"soname": "liblitert.so", "shared": true, "min_version": "1.0.0"}
+  ],
+  "depends_on_modules": [],
+  "exports": ["aibox_litert_gemma4_e4b_v1"],
+  "interface_aidl": "com.aibox.litert.ILitertModule",
+  "capabilities": ["chat_completion", "token_stream", "safe_context_auto_detect"],
+  "safe_context": {
+    "auto_detect": false,
+    "default_safe": 1500,
+    "default_warn": 2000,
+    "default_block": 2500,
+    "metric": "perplexity_ratio",
+    "threshold": 0.7,
+    "cache_key": "litert.gemma4-e4b:0.1.0",
+    "model_id": "gemma-4-e4b"
+  }
+}

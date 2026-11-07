@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aibox.local/schemas/module-manifest-v1.json",
+  "title": "AIBox Module Manifest",
+  "description": "每个 AIBox 模块 APK 在 assets/module_manifest/manifest.json 提供此契约。宿主通过它做依赖解析、拓扑排序、native 库加载、安全上下文检测。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "module_id",
+    "version",
+    "module_type",
+    "min_host_api",
+    "abi_filters",
+    "exports"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "manifest schema 版本。当前 1.0.0。"
+    },
+    "module_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z0-9_-]+)+$",
+      "description": "全局唯一模块标识,小写 + 点分,如 'chat.basic'、'agent.react'、'litert.gemma4-e2b'。"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-z0-9.]+)?$",
+      "description": "语义化版本号,如 '0.1.0'。"
+    },
+    "module_type": {
+      "type": "string",
+      "enum": [
+        "backend_runtime",
+        "backend_provider",
+        "backend_consumer",
+        "chat",
+        "agent",
+        "roleplay",
+        "translate",
+        "tts",
+        "asr",
+        "image_gen",
+        "embedding",
+        "utility"
+      ],
+      "description": "模块类型。backend_runtime=L1 共享运行时,backend_provider=L2 提供者,backend_consumer=L3 消费者,其余按业务能力划分。"
+    },
+    "min_host_api": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "宿主 API 最低版本。宿主当前 API 版本低于此值则拒绝加载。"
+    },
+    "abi_filters": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["arm64-v8a", "armeabi-v7a", "x86_64", "x86"]
+      },
+      "minItems": 1,
+      "description": "支持 ABI 列表。设备 ABI 不在列表中则不加载。"
+    },
+    "depends_on_libs": {
+      "type": "array",
+      "description": "依赖的 native 库列表。宿主按 SONAME 去重 + 引用计数 dlopen。共享库被加载一次,后续模块复用。",
+      "items": {
+        "type": "object",
+        "required": ["soname", "shared"],
+        "additionalProperties": false,
+        "properties": {
+          "soname": {
+            "type": "string",
+            "description": "库的 SONAME,如 'libonnxruntime.so.1.16'。构建期 readelf -d 验证一致。"
+          },
+          "shared": {
+            "type": "boolean",
+            "description": "true=L1 共享运行时,RTLD_GLOBAL + 引用计数;false=L2 模块私有,RTLD_LOCAL。"
+          },
+          "min_version": {
+            "type": "string",
+            "description": "最低可接受版本号(从 SONAME 解析)。如 '1.16.0'。"
+          },
+          "fallback_isolated_process": {
+            "type": "boolean",
+            "default": false,
+            "description": "版本冲突且不能向后兼容时,是否允许独立子进程隔离加载。默认 false,只有 manifest 显式声明才能用此兜底。"
+          }
+        }
+      }
+    },
+    "depends_on_modules": {
+      "type": "array",
+      "description": "依赖的其他模块。宿主做拓扑排序,被依赖模块先加载。",
+      "items": {
+        "type": "object",
+        "required": ["module_id", "min_version"],
+        "additionalProperties": false,
+        "properties": {
+          "module_id": {
+            "type": "string",
+            "description": "被依赖模块 ID,如 'chat.basic'。"
+          },
+          "min_version": {
+            "type": "string",
+            "description": "最低可接受版本,如 '0.1.0'。"
+          }
+        }
+      }
+    },
+    "exports": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^aibox_[a-z][a-z0-9_]*_v\\d+$",
+        "description": "导出的符号名,如 'aibox_chat_v1'、'aibox_litert_v1'。供其他模块通过 depends_on_modules + exports 解析能力。"
+      },
+      "description": "本模块导出的接口符号(供其他模块依赖)。"
+    },
+    "interface_aidl": {
+      "type": "string",
+      "description": "本模块实现的 AIDL 接口全限定名,如 'com.aibox.chat.IChatModule'。"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "能力声明,如 'chat_completion'、'token_stream'、'tool_call'、'character_card'、'safe_context_auto_detect'。"
+      },
+      "description": "声明本模块提供的能力,供宿主和上层模块按能力查询。"
+    },
+    "safe_context": {
+      "type": "object",
+      "description": "LiteRT 模块专属:模型在长输入下乱输出的实测临界点。仅当 module_type=backend_runtime 或 backend_consumer 且实际跑 LiteRT 模型时填写。",
+      "additionalProperties": false,
+      "properties": {
+        "auto_detect": {
+          "type": "boolean",
+          "default": false,
+          "description": "true=模块加载时跑 benchmark 实测安全上下文并缓存;false=使用 manifest 提供的 default_* 静态值。"
+        },
+        "default_safe": {
+          "type": "integer",
+          "minimum": 64,
+          "description": "默认安全上下文(可放心使用的最大 token 数)。基于实测留约 30% 裕度。"
+        },
+        "default_warn": {
+          "type": "integer",
+          "minimum": 64,
+          "description": "超过此值时弹警告提醒用户'可能乱输出',仍允许继续。"
+        },
+        "default_block": {
+          "type": "integer",
+          "minimum": 64,
+          "description": "强烈不建议超过的值。仍可由用户强制覆盖。"
+        },
+        "benchmark_corpus": {
+          "type": "string",
+          "description": "auto_detect=true 时使用的标准语料路径,如 'assets://standard_corpus_zh.txt'。"
+        },
+        "metric": {
+          "type": "string",
+          "enum": ["cosine_similarity", "exact_match", "label_match", "perplexity_ratio"],
+          "description": "benchmark 评估指标。embedding 用 cosine_similarity,分类用 label_match,生成用 perplexity_ratio。"
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "metric 跌破此阈值即判定为'乱输出临界点'。如 cosine < 0.9。"
+        },
+        "cache_key": {
+          "type": "string",
+          "description": "缓存 benchmark 结果的 key,推荐 'model_sha256:<前 16 字节>' 或 'module_id:version'。"
+        },
+        "model_id": {
+          "type": "string",
+          "description": "本 manifest 对应的模型标识(如 'gemma-4-e2b'、'bge-micro-v2')。"
+        }
+      },
+      "required": ["auto_detect"]
+    },
+    "native_libs_bundled": {
+      "type": "array",
+      "description": "本 APK 自带的 native 库(从 lib/<abi>/ 扫描)。构建期 CI 会用 readelf -d 比对此列表与实际文件,不一致拒绝入库。",
+      "items": {
+        "type": "object",
+        "required": ["soname", "abi"],
+        "additionalProperties": false,
+        "properties": {
+          "soname": { "type": "string" },
+          "abi": {
+            "type": "string",
+            "enum": ["arm64-v8a", "armeabi-v7a", "x86_64", "x86"]
+          },
+          "size_bytes": { "type": "integer" },
+          "sha256": { "type": "string" }
+        }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "description": "manifest 内容本身的 sha256 签名(可选)。用于完整性校验,防 manifest 被篡改。"
+    }
+  }
+}
