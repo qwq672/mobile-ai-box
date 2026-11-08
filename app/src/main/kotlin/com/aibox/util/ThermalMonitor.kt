@@ -381,9 +381,9 @@ class ThermalMonitor {
     /**
      * 扫描所有可能的 GPU 主频路径(高通 Adreno kgsl + Mali devfreq)。
      *
-     * 高通 Adreno: /sys/class/kgsl/3d/gpuclk / /sys/class/kgsl/3d/devfreq/cur_freq
-     * Mali:        /sys/class/devfreq/mali-0/cur_freq / /sys/class/misc/mali0/device/clock
-     * PowerVR:     /sys/devices/platform/*.img-rogue/cur_freq
+     * 高通 Adreno: /sys/class/kgsl/3d/gpuclk + /sys/class/kgsl/3d/devfreq/cur_freq
+     * Mali:        /sys/class/devfreq/mali-0/cur_freq + /sys/class/misc/mali0/device/clock
+     * PowerVR:     /sys/devices/platform/[name].img-rogue/cur_freq
      */
     private fun findAllGpuFreqPaths(): List<String> {
         val candidates = listOf(
