@@ -215,7 +215,7 @@ data class SafeContextPolicy(
 ) {
     fun judge(inputTokens: Int): Judgment {
         return when {
-            measuredBlock != null && inputTokens > measuredBlock -> Judgment.Block
+            measuredBlock != null && inputTokens > measuredBlock -> Judgment.Block(inputTokens, measuredBlock)
             measuredWarn != null && inputTokens > measuredWarn -> Judgment.Warn(inputTokens, measuredWarn)
             inputTokens > measuredSafe -> Judgment.Warn(inputTokens, measuredSafe)
             else -> Judgment.Safe
