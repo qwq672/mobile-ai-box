@@ -228,9 +228,9 @@ fun HomeScreen(
                 }
             }
 
-            // ============== 4. 散热监控 ==============
+            // ============== 4. 设备状态 ==============
             item(key = "section_thermal_header") {
-                SectionHeader(title = "散热监控")
+                SectionHeader(title = "设备状态")
             }
             item(key = "thermal_card") {
                 ThermalMonitorCard(

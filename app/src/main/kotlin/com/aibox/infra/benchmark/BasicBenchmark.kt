@@ -84,10 +84,10 @@ class BasicBenchmark(
         val energyBefore = energyProfiler.before()
         val promptText = generatePrompt(spec.ppSize)
 
-        // 推理配置：覆盖 maxTokens = tgSize，启用 streaming
+        // 推理配置:覆盖 maxTokens = tgSize,启用 streaming
         val runConfig = spec.config.copy(maxTokens = spec.tgSize)
 
-        // ---- 预热（不计入统计） ----
+        // ---- 预热(不计入统计) ----
         repeat(spec.warmup.coerceAtLeast(0)) { idx ->
             LogSystem.debug(tag, "warmup #${idx + 1}/${spec.warmup}", sessionId = sessionId)
             runOnce(backend, loadedModel, spec, promptText, runConfig, sessionId, isWarmup = true)
@@ -95,9 +95,17 @@ class BasicBenchmark(
 
         // ---- 正式重复 ----
         val reps = mutableListOf<RepResult>()
+        // 测试期间采样 CPU/GPU/内存,记录最大值(峰值)与平均值
+        val cpuSamples = mutableListOf<Int>()
+        val gpuSamples = mutableListOf<Int>()
+        val memSamples = mutableListOf<Int>()
+        val appPssSamples = mutableListOf<Long>()
+        val appNativeSamples = mutableListOf<Long>()
 
         repeat(spec.repCount.coerceAtLeast(1)) { idx ->
             val r = runOnce(backend, loadedModel, spec, promptText, runConfig, sessionId, isWarmup = false)
+            // 每次推理后采样一次(若想高频,可在 runOnce 内部采样,但开销大)
+            sampleDeviceUsage(cpuSamples, gpuSamples, memSamples, appPssSamples, appNativeSamples)
             LogSystem.info(
                 tag,
                 "rep #${idx + 1}/${spec.repCount}: ppTps=${"%.2f".format(r.ppTps)} tgTps=${"%.2f".format(r.tgTps)} ttft=${r.ttftMs}ms total=${r.totalTimeMs}ms peakMem=${r.peakMem}",
@@ -121,7 +129,17 @@ class BasicBenchmark(
         val envAfter = environmentMonitor.snapshot()
         LogSystem.info(tag, "EnvAfter: thermal=${envAfter.thermalState} bgCpu=${envAfter.backgroundCpuUsage}% battery=${envAfter.batteryLevel}% energyMj=$energyMj", sessionId = sessionId)
 
-        // 后置环境用 "before"（保持与 spec 一致；详细变化已写在日志）
+        // ---- 设备状态聚合 ----
+        val avgCpu = if (cpuSamples.isNotEmpty()) cpuSamples.filter { it in 0..100 }.average().toInt() else -1
+        val avgGpu = if (gpuSamples.isNotEmpty()) gpuSamples.filter { it in 0..100 }.average().toInt() else -1
+        val avgMem = if (memSamples.isNotEmpty()) memSamples.filter { it in 0..100 }.average().toInt() else -1
+        val peakPss = appPssSamples.filter { it > 0 }.maxOrNull() ?: -1L
+        val peakNative = appNativeSamples.filter { it > 0 }.maxOrNull() ?: -1L
+
+        // ---- 能耗比 ----
+        val energyEff = BenchmarkResult.computeEnergyEfficiency(medianTgTps, energyMj, medianTotal)
+
+        // 后置环境用 "before"(保持与 spec 一致;详细变化已写在日志)
         val envSnapshot = envBefore
 
         val summary = """
@@ -134,7 +152,13 @@ class BasicBenchmark(
             TTFT (median): ${medianTtft}ms
             Total time (median): ${medianTotal}ms
             Peak memory: ${peakMem / 1024 / 1024}MB
+            App PSS peak: ${peakPss}MB
+            App Native peak: ${peakNative}MB
+            System mem usage (avg): ${if (avgMem >= 0) "$avgMem%" else "未读到"}
+            CPU usage (avg): ${if (avgCpu >= 0) "$avgCpu%" else "未读到"}
+            GPU usage (avg): ${if (avgGpu >= 0) "$avgGpu%" else "未读到"}
             Energy: ${energyMj ?: "unknown"} mJ
+            Energy efficiency: ${energyEff?.let { "%.2f tokens/J".format(it) } ?: "unknown"}
             Environment before: ${envBefore.deviceSoC} thermal=${envBefore.thermalState} bgCpu=${envBefore.backgroundCpuUsage}% battery=${envBefore.batteryLevel}% ramFree=${envBefore.freeRamMb}MB
             Environment after : thermal=${envAfter.thermalState} bgCpu=${envAfter.backgroundCpuUsage}% battery=${envAfter.batteryLevel}% ramFree=${envAfter.freeRamMb}MB
         """.trimIndent()
@@ -149,10 +173,61 @@ class BasicBenchmark(
             totalTimeMs = medianTotal,
             peakMemoryBytes = peakMem,
             energyMilliJoules = energyMj,
+            memUsagePercent = avgMem,
+            appPssMb = peakPss,
+            appNativeMb = peakNative,
+            energyEfficiencyTokensPerJoule = energyEff,
+            avgCpuUsage = avgCpu,
+            avgGpuUsage = avgGpu,
             environment = envSnapshot,
             logFilePath = null, // 由 BenchmarkStorage / 上层补 path
             timestamp = System.currentTimeMillis()
         )
+    }
+
+    /** 采样 CPU/GPU/内存利用率,追加到对应 list。读不到的项追加 -1,统计时过滤。 */
+    private fun sampleDeviceUsage(
+        cpu: MutableList<Int>,
+        gpu: MutableList<Int>,
+        mem: MutableList<Int>,
+        appPss: MutableList<Long>,
+        appNative: MutableList<Long>
+    ) {
+        // CPU 利用率:从 EnvironmentMonitor 读 backgroundCpuUsage 近似
+        try {
+            val env = environmentMonitor.snapshot()
+            cpu.add(env.backgroundCpuUsage.coerceAtLeast(-1))
+        } catch (_: Throwable) { cpu.add(-1) }
+
+        // GPU 利用率:本类无法直接读(需要 ThermalMonitor 路径),先填 -1,后续可注入
+        gpu.add(-1)
+
+        // 系统内存使用率:用 EnvironmentMonitor 读
+        try {
+            val env = environmentMonitor.snapshot()
+            val total = env.totalRamMb
+            val free = env.freeRamMb
+            if (total > 0) {
+                val used = total - free
+                val pct = (used * 100 / total).toInt().coerceIn(0, 100)
+                mem.add(pct)
+            } else {
+                mem.add(-1)
+            }
+        } catch (_: Throwable) { mem.add(-1) }
+
+        // app PSS / Native
+        try {
+            val dm = android.os.Debug.MemoryInfo()
+            android.os.Debug.getMemoryInfo(dm)
+            val pss = dm.totalPss / 1024L
+            val native = dm.nativePss / 1024L
+            appPss.add(pss)
+            appNative.add(native)
+        } catch (_: Throwable) {
+            appPss.add(-1L)
+            appNative.add(-1L)
+        }
     }
 
     /**

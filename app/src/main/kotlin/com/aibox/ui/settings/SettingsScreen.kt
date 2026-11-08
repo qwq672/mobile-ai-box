@@ -229,9 +229,9 @@ fun SettingsScreen(
                 }
             }
 
-            /* ============== 散热状态（A2 ThermalMonitorCard） ============== */
+            /* ============== 设备状态（A2 ThermalMonitorCard + 综合状态） ============== */
             item {
-                SectionHeader(icon = Icons.Outlined.Thermostat, title = "散热状态")
+                SectionHeader(icon = Icons.Outlined.Thermostat, title = "设备状态")
                 com.aibox.ui.thermal.ThermalMonitorCard(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = onOpenThermal

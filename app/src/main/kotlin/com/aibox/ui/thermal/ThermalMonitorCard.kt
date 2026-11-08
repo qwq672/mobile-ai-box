@@ -60,6 +60,11 @@ fun ThermalMonitorCard(
     val percent by monitor.thermalPercent.collectAsStateWithLifecycle()
     val celsius by monitor.celsius.collectAsStateWithLifecycle()
     val cpuFreqKhz by monitor.cpuFreqKhz.collectAsStateWithLifecycle()
+    val cpuUsage by monitor.cpuUsage.collectAsStateWithLifecycle()
+    val gpuFreqKhz by monitor.gpuFreqKhz.collectAsStateWithLifecycle()
+    val gpuUsage by monitor.gpuUsage.collectAsStateWithLifecycle()
+    val memUsage by monitor.memUsage.collectAsStateWithLifecycle()
+    val batteryLevel by monitor.batteryLevel.collectAsStateWithLifecycle()
     val level by monitor.state.collectAsStateWithLifecycle()
     val history by monitor.history.collectAsStateWithLifecycle()
 
@@ -68,7 +73,7 @@ fun ThermalMonitorCard(
         tone = UnifiedCardTone.SURFACE_LOW,
         onClick = onClick
     ) {
-        // ============== 顶部：状态徽标 + 当前值 ==============
+        // ============== 顶部:状态徽标 + 当前值 ==============
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -126,9 +131,26 @@ fun ThermalMonitorCard(
             }
         }
 
-        Spacer(Modifier.height(DesignTokens.spacing12))
+        Spacer(Modifier.height(DesignTokens.spacing8))
 
-        // ============== 中部：历史曲线 ==============
+        // ============== 设备状态摘要行:CPU / GPU / 内存 / 电量 ==============
+        val summaryLine = buildString {
+            if (cpuUsage in 0..100) append("CPU $cpuUsage% ")
+            if (gpuUsage in 0..100) append("· GPU $gpuUsage% ")
+            if (memUsage in 0..100) append("· 内存 $memUsage% ")
+            if (batteryLevel in 0..100) append("· 电量 $batteryLevel%")
+        }.trim().removePrefix("· ").ifBlank { null }
+
+        if (summaryLine != null) {
+            Text(
+                text = summaryLine,
+                style = Type.bodySmall,
+                color = Colors.onSurfaceVariant
+            )
+            Spacer(Modifier.height(DesignTokens.spacing8))
+        }
+
+        // ============== 中部:历史曲线 ==============
         HistorySparkline(
             history = history,
             lineColor = stateColor(level),
@@ -137,9 +159,9 @@ fun ThermalMonitorCard(
                 .height(72.dp)
         )
 
-        Spacer(Modifier.height(DesignTokens.spacing12))
+        Spacer(Modifier.height(DesignTokens.spacing8))
 
-        // ============== 底部：后端建议 ==============
+        // ============== 底部:后端建议 ==============
         Text(
             text = recommendation(level),
             style = Type.bodySmall,
@@ -239,11 +261,11 @@ private fun stateColor(level: ThermalLevel): Color = when (level) {
 
 /** 状态对应中文名。 */
 fun stateLabel(level: ThermalLevel): String = when (level) {
-    ThermalLevel.UNKNOWN -> "散热状态 —"
-    ThermalLevel.COOL    -> "散热状态：凉"
-    ThermalLevel.WARM    -> "散热状态：温"
-    ThermalLevel.HOT     -> "散热状态：热"
-    ThermalLevel.CRITICAL -> "散热状态：极热"
+    ThermalLevel.UNKNOWN -> "设备状态 —"
+    ThermalLevel.COOL    -> "设备状态:凉"
+    ThermalLevel.WARM    -> "设备状态:温"
+    ThermalLevel.HOT     -> "设备状态:热"
+    ThermalLevel.CRITICAL -> "设备状态:极热"
 }
 
 /** 后端建议文案。 */

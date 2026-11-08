@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 class ModelsViewModel : ViewModel() {
@@ -65,7 +66,7 @@ class ModelsViewModel : ViewModel() {
         }
     }
 
-    /** 加载（激活）模型；同步展示 loading 和错误 */
+    /** 加载（激活）模型；同步展示 loading 和错误。设 90s 超时防止 native 卡死导致 UI 永久 loading */
     fun activate(id: Long) {
         viewModelScope.launch {
             if (_ui.value.loading) return@launch
@@ -76,16 +77,27 @@ class ModelsViewModel : ViewModel() {
             _ui.value = _ui.value.copy(loading = true, error = null)
             LogSystem.info("aibox.ui.models", "ModelsViewModel: activating ${m.name} (${m.filePath})")
             val config = settings.config.firstOrNull() ?: InferenceConfig()
-            engine.loadModel(m.filePath, config)
-                .onSuccess {
-                    settings.setLastModel(id)
-                    repo.touchUsed(id)
-                    LogSystem.info("aibox.ui.models", "ModelsViewModel: ${m.name} loaded")
-                }
-                .onFailure {
-                    LogSystem.error("aibox.ui.models", "ModelsViewModel: load failed", it)
-                    _ui.value = _ui.value.copy(error = "加载失败: ${it.message}")
-                }
+            try {
+                withTimeoutOrNull(90_000L) { engine.loadModel(m.filePath, config) }
+                    ?.onSuccess {
+                        settings.setLastModel(id)
+                        repo.touchUsed(id)
+                        LogSystem.info("aibox.ui.models", "ModelsViewModel: ${m.name} loaded")
+                    }
+                    ?.onFailure {
+                        LogSystem.error("aibox.ui.models", "ModelsViewModel: load failed", it)
+                        _ui.value = _ui.value.copy(error = "加载失败: ${it.message}")
+                    }
+                    ?: run {
+                        // 超时:加载超过 90s 未完成,尝试卸载已分配资源并报错
+                        LogSystem.error("aibox.ui.models", "ModelsViewModel: load timeout 90s, unloading")
+                        try { engine.unload() } catch (_: Throwable) {}
+                        _ui.value = _ui.value.copy(error = "加载超时(90s),模型可能过大或后端初始化失败,请尝试切到 CPU 后端或减小上下文")
+                    }
+            } catch (t: Throwable) {
+                LogSystem.error("aibox.ui.models", "ModelsViewModel: activate threw", t)
+                _ui.value = _ui.value.copy(error = "加载异常: ${t.message}")
+            }
             _ui.value = _ui.value.copy(loading = false)
         }
     }

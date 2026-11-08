@@ -410,9 +410,29 @@ fun AppNav() {
 /**
  * 翻译页占位:目前无 Translate 模块时显示。
  * 等 Translate 模块 APK 安装后,宿主扫描发现模块,本页面替换为真实 TranslateScreen。
+ *
+ * 改进:动态扫描已安装模块,告知用户"已安装 / 尚未安装"两种状态。
+ * (宿主尚未实现 TranslateScreen 真实集成,即使模块安装,也只能告知用户"已检测到")
  */
 @Composable
 private fun TranslatePlaceholderScreen(onBack: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val installedModule = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<com.aibox.domain.module.DiscoveredModule?>(null) }
+    val scanning = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        scope.launch {
+            scanning.value = true
+            try {
+                val modules = com.aibox.domain.module.ModuleDiscoveryService(ctx).discoverAll()
+                installedModule.value = modules.firstOrNull { it.type == com.aibox.domain.module.ModuleType.TRANSLATE_MODULE }
+            } finally {
+                scanning.value = false
+            }
+        }
+    }
+
     androidx.compose.material3.Scaffold(
         topBar = {
             androidx.compose.material3.TopAppBar(
@@ -422,6 +442,24 @@ private fun TranslatePlaceholderScreen(onBack: () -> Unit) {
                         androidx.compose.material3.Icon(
                             androidx.compose.material.icons.Icons.Filled.ArrowBack,
                             contentDescription = "返回"
+                        )
+                    }
+                },
+                actions = {
+                    androidx.compose.material3.IconButton(onClick = {
+                        scope.launch {
+                            scanning.value = true
+                            try {
+                                val modules = com.aibox.domain.module.ModuleDiscoveryService(ctx).discoverAll()
+                                installedModule.value = modules.firstOrNull { it.type == com.aibox.domain.module.ModuleType.TRANSLATE_MODULE }
+                            } finally {
+                                scanning.value = false
+                            }
+                        }
+                    }, enabled = !scanning.value) {
+                        androidx.compose.material3.Icon(
+                            androidx.compose.material.icons.Icons.Outlined.Refresh,
+                            contentDescription = "重新扫描"
                         )
                     }
                 }
@@ -444,15 +482,40 @@ private fun TranslatePlaceholderScreen(onBack: () -> Unit) {
                     tint = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.height(16.dp))
-                androidx.compose.material3.Text(
-                    "翻译模块尚未安装",
-                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium
-                )
-                androidx.compose.material3.Text(
-                    "请到「模块管理」或插件市场安装 Translate 模块 APK",
-                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                val module = installedModule.value
+                if (scanning.value) {
+                    androidx.compose.material3.Text(
+                        "正在扫描已安装模块…",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium
+                    )
+                } else if (module != null) {
+                    androidx.compose.material3.Text(
+                        "已检测到翻译模块: ${module.displayName}",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.primary
+                    )
+                    androidx.compose.material3.Text(
+                        "版本 ${module.version} · ${module.packageName}",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.height(8.dp))
+                    androidx.compose.material3.Text(
+                        "宿主集成开发中,目前仅检测到模块,尚未提供翻译 UI 入口",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    androidx.compose.material3.Text(
+                        "翻译模块尚未安装",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium
+                    )
+                    androidx.compose.material3.Text(
+                        "请到「模块管理」或插件市场安装 Translate 模块 APK",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -460,9 +523,29 @@ private fun TranslatePlaceholderScreen(onBack: () -> Unit) {
 
 /**
  * 图像生成页占位:目前无 ImageGen 模块时显示。
+ * 改进:动态扫描已安装模块,告知用户"已安装 / 尚未安装"两种状态。
  */
 @Composable
 private fun ImageGenPlaceholderScreen(onBack: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val installedModule = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<com.aibox.domain.module.DiscoveredModule?>(null) }
+    val scanning = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+
+    fun rescan() {
+        scope.launch {
+            scanning.value = true
+            try {
+                val modules = com.aibox.domain.module.ModuleDiscoveryService(ctx).discoverAll()
+                installedModule.value = modules.firstOrNull { it.type == com.aibox.domain.module.ModuleType.IMAGE_GEN_MODULE }
+            } finally {
+                scanning.value = false
+            }
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) { rescan() }
+
     androidx.compose.material3.Scaffold(
         topBar = {
             androidx.compose.material3.TopAppBar(
@@ -472,6 +555,14 @@ private fun ImageGenPlaceholderScreen(onBack: () -> Unit) {
                         androidx.compose.material3.Icon(
                             androidx.compose.material.icons.Icons.Filled.ArrowBack,
                             contentDescription = "返回"
+                        )
+                    }
+                },
+                actions = {
+                    androidx.compose.material3.IconButton(onClick = { rescan() }, enabled = !scanning.value) {
+                        androidx.compose.material3.Icon(
+                            androidx.compose.material.icons.Icons.Outlined.Refresh,
+                            contentDescription = "重新扫描"
                         )
                     }
                 }
@@ -494,15 +585,40 @@ private fun ImageGenPlaceholderScreen(onBack: () -> Unit) {
                     tint = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.height(16.dp))
-                androidx.compose.material3.Text(
-                    "图像生成模块尚未安装",
-                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium
-                )
-                androidx.compose.material3.Text(
-                    "请到「模块管理」或插件市场安装 ImageGen 模块 APK",
-                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                val module = installedModule.value
+                if (scanning.value) {
+                    androidx.compose.material3.Text(
+                        "正在扫描已安装模块…",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium
+                    )
+                } else if (module != null) {
+                    androidx.compose.material3.Text(
+                        "已检测到图像生成模块: ${module.displayName}",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.primary
+                    )
+                    androidx.compose.material3.Text(
+                        "版本 ${module.version} · ${module.packageName}",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.height(8.dp))
+                    androidx.compose.material3.Text(
+                        "宿主集成开发中,目前仅检测到模块,尚未提供图像生成 UI 入口",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    androidx.compose.material3.Text(
+                        "图像生成模块尚未安装",
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium
+                    )
+                    androidx.compose.material3.Text(
+                        "请到「模块管理」或插件市场安装 ImageGen 模块 APK",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }

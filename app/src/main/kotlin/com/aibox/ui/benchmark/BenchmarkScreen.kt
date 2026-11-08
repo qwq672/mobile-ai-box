@@ -403,7 +403,7 @@ private fun ResultCard(result: BenchmarkResult) {
                 )
                 if (result.failed) {
                     Text(
-                        text = "失败：${result.errorMessage ?: "未知"}",
+                        text = "失败:${result.errorMessage ?: "未知"}",
                         style = Type.bodySmall,
                         color = Colors.error
                     )
@@ -418,6 +418,27 @@ private fun ResultCard(result: BenchmarkResult) {
                         style = Type.labelSmall,
                         color = Colors.onSurfaceVariant
                     )
+                    // 新增:增强指标行
+                    val line2 = buildString {
+                        if (result.appPssMb > 0) append(" · PSS ${result.appPssMb}MB")
+                        if (result.appNativeMb > 0) append(" · Native ${result.appNativeMb}MB")
+                        if (result.memUsagePercent in 0..100) append(" · 内存占用 ${result.memUsagePercent}%")
+                        if (result.avgCpuUsage in 0..100) append(" · CPU ${result.avgCpuUsage}%")
+                        if (result.avgGpuUsage in 0..100) append(" · GPU ${result.avgGpuUsage}%")
+                        if (result.energyEfficiencyTokensPerJoule != null) {
+                            append(" · 能耗比 ${"%.2f".format(result.energyEfficiencyTokensPerJoule)} tokens/J")
+                        }
+                        if (result.energyMilliJoules != null && result.energyMilliJoules > 0) {
+                            append(" · 能耗 ${result.energyMilliJoules / 1000.0}J")
+                        }
+                    }
+                    if (line2.isNotBlank()) {
+                        Text(
+                            text = line2.removePrefix(" · "),
+                            style = Type.labelSmall,
+                            color = Colors.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }

@@ -64,6 +64,15 @@ fun ThermalMonitorScreen(
     val percent by monitor.thermalPercent.collectAsStateWithLifecycle()
     val celsius by monitor.celsius.collectAsStateWithLifecycle()
     val cpuFreqKhz by monitor.cpuFreqKhz.collectAsStateWithLifecycle()
+    val cpuUsage by monitor.cpuUsage.collectAsStateWithLifecycle()
+    val gpuFreqKhz by monitor.gpuFreqKhz.collectAsStateWithLifecycle()
+    val gpuUsage by monitor.gpuUsage.collectAsStateWithLifecycle()
+    val memUsage by monitor.memUsage.collectAsStateWithLifecycle()
+    val appPssMb by monitor.appPssMb.collectAsStateWithLifecycle()
+    val appNativeMb by monitor.appNativeMb.collectAsStateWithLifecycle()
+    val batteryLevel by monitor.batteryLevel.collectAsStateWithLifecycle()
+    val batteryCelsius by monitor.batteryCelsius.collectAsStateWithLifecycle()
+    val batteryStatus by monitor.batteryStatus.collectAsStateWithLifecycle()
     val level by monitor.state.collectAsStateWithLifecycle()
     val history by monitor.history.collectAsStateWithLifecycle()
 
@@ -75,7 +84,7 @@ fun ThermalMonitorScreen(
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
                     }
                 },
-                title = { Text("散热监控", style = Type.titleLarge) }
+                title = { Text("设备状态", style = Type.titleLarge) }
             )
         }
     ) { inner ->
@@ -88,7 +97,7 @@ fun ThermalMonitorScreen(
         ) {
             // ============== 当前状态 ==============
             item {
-                UnifiedSection(title = "当前状态", showTopDivider = false) {
+                UnifiedSection(title = "温度状态", showTopDivider = false) {
                     UnifiedCard(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -129,7 +138,56 @@ fun ThermalMonitorScreen(
                 }
             }
 
-            // ============== 历史 60 秒 ==============
+            // ============== CPU / GPU ==============
+            item {
+                UnifiedSection(title = "CPU / GPU") {
+                    UnifiedCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.spacing16),
+                        tone = UnifiedCardTone.SURFACE
+                    ) {
+                        DetailRow("CPU 主频", if (cpuFreqKhz > 0) formatFreq(cpuFreqKhz) else "未读到")
+                        DetailRow("CPU 利用率", if (cpuUsage in 0..100) "$cpuUsage%" else "未读到")
+                        DetailRow("GPU 主频", if (gpuFreqKhz > 0) formatFreq(gpuFreqKhz) else "未读到")
+                        DetailRow("GPU 利用率", if (gpuUsage in 0..100) "$gpuUsage%" else "未读到")
+                    }
+                }
+            }
+
+            // ============== 内存 ==============
+            item {
+                UnifiedSection(title = "内存") {
+                    UnifiedCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.spacing16),
+                        tone = UnifiedCardTone.SURFACE
+                    ) {
+                        DetailRow("系统内存使用率", if (memUsage in 0..100) "$memUsage%" else "未读到")
+                        DetailRow("当前 App PSS", if (appPssMb > 0) "$appPssMb MB" else "未读到")
+                        DetailRow("当前 App Native", if (appNativeMb > 0) "$appNativeMb MB" else "未读到")
+                    }
+                }
+            }
+
+            // ============== 电量 ==============
+            item {
+                UnifiedSection(title = "电量") {
+                    UnifiedCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.spacing16),
+                        tone = UnifiedCardTone.SURFACE
+                    ) {
+                        DetailRow("电量", if (batteryLevel in 0..100) "$batteryLevel%" else "未读到")
+                        DetailRow("电池温度", formatCelsius(batteryCelsius))
+                        DetailRow("电池状态", batteryStatus)
+                    }
+                }
+            }
+
+            // ============== 历史曲线 ==============
             item {
                 UnifiedSection(title = "历史 60 秒") {
                     UnifiedCard(
@@ -179,7 +237,7 @@ fun ThermalMonitorScreen(
 
             // ============== 后端建议 ==============
             item {
-                UnifiedSection(title = "后端建议") {
+                UnifiedSection(title = "推理建议") {
                     UnifiedCard(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -197,9 +255,9 @@ fun ThermalMonitorScreen(
                         if (level == ThermalLevel.HOT || level == ThermalLevel.CRITICAL) {
                             Spacer(Modifier.height(DesignTokens.spacing8))
                             Text(
-                                text = "推荐操作：\n" + (
+                                text = "推荐操作:\n" + (
                                     if (level == ThermalLevel.CRITICAL)
-                                        "1. 暂停当前推理任务\n2. 退出推理密集页面（基准测试 / 长对话）\n3. 让设备冷却 1-2 分钟"
+                                        "1. 暂停当前推理任务\n2. 退出推理密集页面(基准测试 / 长对话)\n3. 让设备冷却 1-2 分钟"
                                     else
                                         "1. 进入 推理优化 → 预置 → 省电模式\n2. 减少并发基准测试\n3. 必要时切到 CPU 后端 + 较小模型"
                                 ),
