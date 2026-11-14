@@ -9,6 +9,7 @@ import com.aibox.data.repo.SettingsRepository
 import com.aibox.domain.inference.InferenceConfig
 import com.aibox.domain.inference.InferenceConfigV2
 import com.aibox.domain.inference.InferenceEngine
+import com.aibox.domain.inference.LoadedModel
 import com.aibox.domain.inference.ModelFormatRouter
 import com.aibox.util.log.LogSystem
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -155,7 +156,7 @@ class ModelsViewModel : ViewModel() {
                 return
             }
             val v2Config = InferenceConfigV2(
-                taskType = TaskType.TEXT_GENERATION
+                taskType = com.aibox.domain.inference.TaskType.TEXT_GENERATION
             )
             val outcome = withTimeoutOrNull(90_000L) {
                 backend.loadModel(m.filePath, v2Config)
@@ -224,7 +225,7 @@ class ModelsViewModel : ViewModel() {
                 val text = (chunk.partial as? com.aibox.domain.inference.ModalityOutput.Text)?.content.orEmpty()
                 if (text.isNotEmpty()) onToken(text)
                 if (chunk.done) {
-                    onStop(chunk.stopReason ?: "stop")
+                    onStop("stop")
                 }
             }
         } catch (t: Throwable) {

@@ -243,7 +243,11 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     g_model = llama_model_load_from_file(path, mp);
     if (!g_model) {
         LOGE("llama_model_load_from_file failed: %s", path);
-        goto fail;
+        // 不能用 goto(后面有 std::string 局部变量,跨 scope 跳转会编译失败)
+        env->ReleaseStringUTFChars(jpath, path);
+        env->ReleaseStringUTFChars(jbackend, backend);
+        env->ReleaseStringUTFChars(jkvq, kvq);
+        return JNI_FALSE;
     }
 
     g_vocab = llama_model_get_vocab(g_model);
