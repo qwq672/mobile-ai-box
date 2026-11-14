@@ -50,6 +50,54 @@ class InferenceEngine(
     @Volatile private var effectiveBackend: BackendType = BackendType.CPU
 
     /**
+     * V2 路径状态镜像:当通过 V2(插件)加载模型时,V1 路径不变,
+     * 但 UI 需要知道"已经加载了某个模型"。
+     *
+     * 通过 [setV2Active] 设置,UI 订阅 [state] 时会看到 loaded=true + modelPath + backend=VULKAN 占位。
+     * 调用 [completionChat] 时若 V2 激活,会调 [v2CompletionDelegate] 而非 V1 backend。
+     */
+    @Volatile private var v2Active: Boolean = false
+    @Volatile private var v2ModelPath: String? = null
+    @Volatile private var v2BackendLabel: String = "v2-plugin"
+
+    /** V2 推理回调,由 ModelsViewModel 设置(通过 setV2Active)。 */
+    @Volatile private var v2CompletionDelegate: (suspend (List<NativeBridge.ChatMsg>, Boolean, (String) -> Unit, (String) -> Unit) -> Unit)? = null
+
+    /**
+     * 标记 V2 路径已激活/失活。由 ModelsViewModel.loadV2 调用。
+     * - activate=true: 设置 v2Active + v2ModelPath,让 state.loaded=true
+     * - activate=false: 清空,让 state.loaded=false
+     *
+     * @param delegate V2 推理回调,签名同 completionChat。null 表示仅激活状态(不推理)。
+     */
+    fun setV2Active(
+        activate: Boolean,
+        modelPath: String? = null,
+        backendLabel: String = "v2-plugin",
+        delegate: (suspend (List<NativeBridge.ChatMsg>, Boolean, (String) -> Unit, (String) -> Unit) -> Unit)? = null
+    ) {
+        if (activate) {
+            v2Active = true
+            v2ModelPath = modelPath
+            v2BackendLabel = backendLabel
+            v2CompletionDelegate = delegate
+            _state.value = _state.value.copy(
+                loaded = true,
+                modelPath = modelPath,
+                backend = effectiveBackend,  // 保留原值,UI 通过 v2BackendLabel 区分
+                config = _state.value.config,
+                error = null
+            )
+        } else {
+            v2Active = false
+            v2ModelPath = null
+            v2BackendLabel = "v2-plugin"
+            v2CompletionDelegate = null
+            _state.value = EngineState()
+        }
+    }
+
+    /**
      * 后端回退优先级链（从高到低）。
      * 用户选的 backend 放最前，后面按 NPU → Vulkan → OpenCL → CPU 排。
      * 加载失败时按顺序尝试下一个。
@@ -152,6 +200,25 @@ class InferenceEngine(
         onToken: (String) -> Unit,
         onStop: (String) -> Unit
     ) {
+        // V2 路径优先:若 v2Active,直接调 delegate
+        if (v2Active) {
+            val delegate = v2CompletionDelegate
+            if (delegate != null) {
+                withInferenceBoost {
+                    try {
+                        delegate(messages, thinkingMode, onToken, onStop)
+                    } catch (t: Throwable) {
+                        LogSystem.error("aibox.inference.engine", "V2 completionChat threw", t)
+                        onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+                    }
+                }
+                return
+            } else {
+                onStop("v2_active_but_no_delegate")
+                return
+            }
+        }
+        // V1 路径
         val backend = currentBackend ?: run {
             onStop("no_model"); return
         }

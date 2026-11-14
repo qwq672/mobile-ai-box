@@ -7,7 +7,9 @@ import com.aibox.AIBoxApp
 import com.aibox.data.model.ModelInfo
 import com.aibox.data.repo.SettingsRepository
 import com.aibox.domain.inference.InferenceConfig
+import com.aibox.domain.inference.InferenceConfigV2
 import com.aibox.domain.inference.InferenceEngine
+import com.aibox.domain.inference.ModelFormatRouter
 import com.aibox.util.log.LogSystem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +26,11 @@ class ModelsViewModel : ViewModel() {
     private val repo get() = container.modelRepository
     private val engine: InferenceEngine get() = container.inferenceEngine
     private val settings: SettingsRepository get() = container.settingsRepository
+
+    /** 当前激活的 V2 模型句柄(若走 V2 路径)。V1 路径下为 null。 */
+    @Volatile private var activeV2Handle: LoadedModel? = null
+    /** 当前激活的 V2 后端名(若走 V2 路径)。 */
+    @Volatile private var activeV2BackendName: String? = null
 
     data class UiState(
         val models: List<ModelInfo> = emptyList(),
@@ -66,7 +73,14 @@ class ModelsViewModel : ViewModel() {
         }
     }
 
-    /** 加载（激活）模型；同步展示 loading 和错误。设 90s 超时防止 native 卡死导致 UI 永久 loading */
+    /**
+     * 加载(激活)模型。
+     * 自动按模型格式路由:
+     *  - GGUF/.bin → V1 路径(engine.loadModel)
+     *  - .tflite/.litertlm → V2 路径(LiteRT 插件)
+     *  - .onnx/.mnn → V2 路径(对应插件)
+     * 设 90s 超时防止 native 卡死导致 UI 永久 loading。
+     */
     fun activate(id: Long) {
         viewModelScope.launch {
             if (_ui.value.loading) return@launch
@@ -76,24 +90,30 @@ class ModelsViewModel : ViewModel() {
             }
             _ui.value = _ui.value.copy(loading = true, error = null)
             LogSystem.info("aibox.ui.models", "ModelsViewModel: activating ${m.name} (${m.filePath})")
+
+            // 卸载上一个(V1 或 V2)
+            unloadCurrentSilently()
+
             val config = settings.config.firstOrNull() ?: InferenceConfig()
             try {
-                withTimeoutOrNull(90_000L) { engine.loadModel(m.filePath, config) }
-                    ?.onSuccess {
-                        settings.setLastModel(id)
-                        repo.touchUsed(id)
-                        LogSystem.info("aibox.ui.models", "ModelsViewModel: ${m.name} loaded")
+                val route = ModelFormatRouter.route(
+                    m.filePath,
+                    container.backendManager.listActive()
+                )
+                when (route) {
+                    is ModelFormatRouter.RouteResult.V1Path -> {
+                        LogSystem.info("aibox.ui.models", "ModelsVM: route to V1 (format=${route.format})")
+                        loadV1(m, config, id)
                     }
-                    ?.onFailure {
-                        LogSystem.error("aibox.ui.models", "ModelsViewModel: load failed", it)
-                        _ui.value = _ui.value.copy(error = "加载失败: ${it.message}")
+                    is ModelFormatRouter.RouteResult.V2Path -> {
+                        LogSystem.info("aibox.ui.models", "ModelsVM: route to V2 backend '${route.backendName}' (format=${route.format})")
+                        loadV2(m, route.backendName, id)
                     }
-                    ?: run {
-                        // 超时:加载超过 90s 未完成,尝试卸载已分配资源并报错
-                        LogSystem.error("aibox.ui.models", "ModelsViewModel: load timeout 90s, unloading")
-                        try { engine.unload() } catch (_: Throwable) {}
-                        _ui.value = _ui.value.copy(error = "加载超时(90s),模型可能过大或后端初始化失败,请尝试切到 CPU 后端或减小上下文")
+                    is ModelFormatRouter.RouteResult.NoBackend -> {
+                        LogSystem.error("aibox.ui.models", "ModelsVM: no backend for ${route.format}: ${route.reason}")
+                        _ui.value = _ui.value.copy(error = route.reason)
                     }
+                }
             } catch (t: Throwable) {
                 LogSystem.error("aibox.ui.models", "ModelsViewModel: activate threw", t)
                 _ui.value = _ui.value.copy(error = "加载异常: ${t.message}")
@@ -102,10 +122,147 @@ class ModelsViewModel : ViewModel() {
         }
     }
 
+    /** 走 V1 路径(llama.cpp 内置)加载模型。 */
+    private suspend fun loadV1(m: ModelInfo, config: InferenceConfig, id: Long) {
+        try {
+            withTimeoutOrNull(90_000L) { engine.loadModel(m.filePath, config) }
+                ?.onSuccess {
+                    settings.setLastModel(id)
+                    repo.touchUsed(id)
+                    LogSystem.info("aibox.ui.models", "ModelsVM: ${m.name} loaded via V1")
+                }
+                ?.onFailure {
+                    LogSystem.error("aibox.ui.models", "ModelsVM: V1 load failed", it)
+                    _ui.value = _ui.value.copy(error = "加载失败: ${it.message}")
+                }
+                ?: run {
+                    LogSystem.error("aibox.ui.models", "ModelsVM: V1 load timeout 90s")
+                    try { engine.unload() } catch (_: Throwable) {}
+                    _ui.value = _ui.value.copy(error = "加载超时(90s),模型可能过大或后端初始化失败,请尝试切到 CPU 后端或减小上下文")
+                }
+        } catch (t: Throwable) {
+            _ui.value = _ui.value.copy(error = "V1 加载异常: ${t.message}")
+        }
+    }
+
+    /** 走 V2 路径(插件后端)加载模型。 */
+    private suspend fun loadV2(m: ModelInfo, backendName: String, id: Long) {
+        try {
+            val bm = container.backendManager
+            val backend = bm.getBackend(backendName)
+            if (backend == null) {
+                _ui.value = _ui.value.copy(error = "后端 '$backendName' 不可用(可能插件未启用)")
+                return
+            }
+            val v2Config = InferenceConfigV2(
+                taskType = TaskType.TEXT_GENERATION
+            )
+            val outcome = withTimeoutOrNull(90_000L) {
+                backend.loadModel(m.filePath, v2Config)
+            } ?: run {
+                _ui.value = _ui.value.copy(error = "V2 加载超时(90s),插件可能初始化失败")
+                return
+            }
+            val loaded = outcome.getOrNull()
+            if (loaded == null) {
+                val reason = outcome.reasonOrNull() ?: "未知错误"
+                LogSystem.error("aibox.ui.models", "ModelsVM: V2 load failed: $reason")
+                _ui.value = _ui.value.copy(error = "插件加载失败: $reason")
+                return
+            }
+            // 注册到 BackendManager 让 EnergyOptimizer 能管
+            bm.trackLoaded(backendName, loaded)
+            activeV2Handle = loaded
+            activeV2BackendName = backendName
+            // 同步到 InferenceEngine 的 V2 状态,让 ChatViewModel 能感知 + 推理
+            engine.setV2Active(
+                activate = true,
+                modelPath = m.filePath,
+                backendLabel = backendName,
+                delegate = { messages, thinkingMode, onToken, onStop ->
+                    runCatchingV2(backend, loaded, messages, thinkingMode, onToken, onStop)
+                }
+            )
+            settings.setLastModel(id)
+            repo.touchUsed(id)
+            LogSystem.info("aibox.ui.models", "ModelsVM: ${m.name} loaded via V2 backend '$backendName'")
+        } catch (t: Throwable) {
+            _ui.value = _ui.value.copy(error = "V2 加载异常: ${t.message}")
+        }
+    }
+
+    /** V2 推理委托(用 V2 后端的 streamInfer 模拟 completionChat)。 */
+    private suspend fun runCatchingV2(
+        backend: com.aibox.domain.inference.InferenceBackendV2,
+        loaded: com.aibox.domain.inference.LoadedModel,
+        messages: List<com.aibox.infra.jni.NativeBridge.ChatMsg>,
+        thinkingMode: Boolean,
+        onToken: (String) -> Unit,
+        onStop: (String) -> Unit
+    ) {
+        try {
+            // 把 messages 拼成单条 prompt(简化,不调模型 chat template,由插件自己处理)
+            val prompt = buildString {
+                for (m in messages) {
+                    when (m.role) {
+                        "system" -> append("[System] ").append(m.content).append("\n")
+                        "user" -> append("[User] ").append(m.content).append("\n")
+                        "assistant" -> append("[Assistant] ").append(m.content).append("\n")
+                        else -> append(m.content).append("\n")
+                    }
+                }
+            }
+            val req = com.aibox.domain.inference.InferenceRequest(
+                taskId = java.util.UUID.randomUUID().toString(),
+                taskType = com.aibox.domain.inference.TaskType.TEXT_GENERATION,
+                modelId = loaded.id,
+                inputs = listOf(com.aibox.domain.inference.ModalityInput.Text(prompt)),
+                config = loaded.config,
+                stream = true
+            )
+            backend.streamInfer(req, loaded).collect { chunk ->
+                val text = (chunk.partial as? com.aibox.domain.inference.ModalityOutput.Text)?.content.orEmpty()
+                if (text.isNotEmpty()) onToken(text)
+                if (chunk.done) {
+                    onStop(chunk.stopReason ?: "stop")
+                }
+            }
+        } catch (t: Throwable) {
+            com.aibox.util.log.LogSystem.error("aibox.ui.models", "V2 inference threw", t)
+            onStop("exception: ${t.message ?: t.javaClass.simpleName}")
+        }
+    }
+
+    /** 静默卸载当前激活的模型(V1 或 V2),不抛错。 */
+    private suspend fun unloadCurrentSilently() {
+        // V2 卸载
+        val v2BackendName = activeV2BackendName
+        val v2Handle = activeV2Handle
+        if (v2BackendName != null && v2Handle != null) {
+            try {
+                val backend = container.backendManager.getBackend(v2BackendName)
+                backend?.unload(v2Handle)
+                container.backendManager.untrackLoaded(v2BackendName, v2Handle)
+            } catch (t: Throwable) {
+                LogSystem.warn("aibox.ui.models", "unloadCurrentSilently: V2 unload failed: ${t.message}")
+            }
+            activeV2Handle = null
+            activeV2BackendName = null
+            // 清空 InferenceEngine 的 V2 状态
+            engine.setV2Active(activate = false)
+        }
+        // V1 卸载
+        try {
+            if (engine.state.value.loaded) engine.unload()
+        } catch (t: Throwable) {
+            LogSystem.warn("aibox.ui.models", "unloadCurrentSilently: V1 unload failed: ${t.message}")
+        }
+    }
+
     /** 卸载当前模型 */
     fun unload() {
         viewModelScope.launch {
-            engine.unload()
+            unloadCurrentSilently()
             LogSystem.info("aibox.ui.models", "ModelsViewModel: unloaded current model")
             _ui.value = _ui.value.copy(activeId = null, error = null)
         }
@@ -113,8 +270,9 @@ class ModelsViewModel : ViewModel() {
 
     fun delete(m: ModelInfo) {
         viewModelScope.launch {
-            // 如果正在激活同一个模型，先卸载
-            if (engine.state.value.modelPath == m.filePath) engine.unload()
+            // 如果正在激活同一个模型,先卸载
+            val activePath = activeV2Handle?.modelPath ?: engine.state.value.modelPath
+            if (activePath == m.filePath) unloadCurrentSilently()
             LogSystem.info("aibox.ui.models", "ModelsViewModel: deleting ${m.name}")
             runCatching { repo.delete(m) }
                 .onFailure { LogSystem.error("aibox.ui.models", "delete failed", it) }

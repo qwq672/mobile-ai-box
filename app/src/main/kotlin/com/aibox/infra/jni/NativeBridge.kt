@@ -21,6 +21,16 @@ class NativeBridge {
     // -------- 后端可用性 --------
     external fun vulkanAvailable(): Boolean
     external fun npuAvailable(): Boolean
+    /**
+     * 探测 NPU 类型。
+     * 返回值:
+     *  - "qcom_htp":         高通 Hexagon HTP(libQnnHtp.so + libhexagon_nn_skel.so)
+     *  - "mediatek_apu":     联发科 APU(libneuron_adapter.so)
+     *  - "samsung_exynos":   三星 Exynos NPU(libeden_nn.so)
+     *  - "unknown":          找到 .so 但不识别类型
+     *  - "":                 无 NPU 或编译时未启用(POCKET_NPU 未定义)
+     */
+    external fun npuType(): String
     external fun openclAvailable(): Boolean
     external fun nativeVersion(): String
 

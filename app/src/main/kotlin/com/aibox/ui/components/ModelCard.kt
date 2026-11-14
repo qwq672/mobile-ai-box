@@ -90,6 +90,9 @@ fun ModelCard(
                     model.params?.let { TagChip(it, isActive) }
                     model.quant?.let { TagChip(it, isActive) }
                     TagChip(formatSize(model.sizeMb), isActive)
+                    // 新增:模型格式标签(从文件名推断,提示用户该模型走哪个后端)
+                    val fmtLabel = formatLabel(model.filePath)
+                    if (fmtLabel != null) TagChip(fmtLabel, isActive)
                 }
             }
 
@@ -153,3 +156,17 @@ private fun TagChip(text: String, isActive: Boolean = false) {
 
 private fun formatSize(mb: Long): String =
     if (mb >= 1024) "%.2f GB".format(mb / 1024.0) else "$mb MB"
+
+/** 从文件名推断模型格式,返回短标签(GGUF / TFLite / ONNX / MNN)。null = 默认 GGUF 不显示。 */
+private fun formatLabel(filePath: String): String? {
+    val lower = filePath.lowercase().trim()
+    return when {
+        lower.endsWith(".gguf")      -> null  // GGUF 是默认,不显示
+        lower.endsWith(".bin")       -> null
+        lower.endsWith(".tflite")    -> "TFLite"
+        lower.endsWith(".litertlm")  -> "LiteRT"
+        lower.endsWith(".onnx")      -> "ONNX"
+        lower.endsWith(".mnn")       -> "MNN"
+        else -> null
+    }
+}

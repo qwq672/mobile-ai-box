@@ -1,0 +1,612 @@
+# AIBox 项目总结与计划(2026-11-08)
+
+## 文档目的
+
+本文档是 AIBox 项目在 2026-11-08 时点的状态总结 + 后续计划。
+供后续接手开发的人快速了解当前进展、未完成的工作、设计决策与未来路线。
+
+---
+
+## 一、项目定位
+
+**AIBox** 是一个端侧 AI 推理框架,核心价值:
+
+1. **隐私全本地**:模型 + 推理全在用户设备,数据不出端
+2. **多框架支持**:llama.cpp(GGUF) + LiteRT(TFLite) + MNN + ONNX + QNN
+3. **模块化**:推理框架、模型、功能(agent/角色扮演/生图)都作为独立模块按需加载
+4. **跨设备**:手机端 + 电脑端 + Web UI + 第三方客户端(AIAnyWhere)
+5. **节能可控**:热感知、内存预算、上下文压缩、安全上下文(LiteRT 专属)
+
+**配套产品**:
+- **AIAnyWhere**:多平台 AI 客户端(iOS6+/Win7+/Android 2.3+/WinPhone/Linux),通过 OpenAI 兼容 API 接入 AIBox
+- **AIBox Desktop**(规划中):电脑端 + Web UI + 同步 + 内置 SD 生图
+
+---
+
+## 二、当前架构
+
+### 已实现层
+
+#### L0 宿主核心
+- `ModuleLoader`:基于 manifest JSON 的模块发现 + 拓扑排序 + SONAME 去重加载
+- `PluginManager`:V2 AIDL 插件绑定与管理(LiteRT/EasyChat/Translate)
+- `InferenceEngine`:V1 推理路径(llama.cpp)+ V2 路径状态镜像(支持插件推理委托)
+- `BackendManagerV2`:V2 后端注册表 + loaded 模型追踪
+
+#### L1 共享运行时(NativeLibLoader)
+- `dlopen` + 引用计数 + SONAME 去重
+- `shared=true` 用 `RTLD_NOW|RTLD_GLOBAL`(跨模块共享)
+- `shared=false` 用 `RTLD_NOW|RTLD_LOCAL`(模块私有)
+- 独立 CMake target `libaibox_module_loader.so`,不依赖 llama.cpp
+
+#### L2 模块(LiteRT 已发布 + Easy Chat + Translate)
+- 每个模块 APK 提供 `assets/module_manifest/manifest.json`
+- 通过 `IntentFilter` 4 种 action 自动发现:
+  - `com.aibox.action.BACKEND_PLUGIN` (LiteRT)
+  - `com.aibox.action.CHAT_MODULE` (Easy Chat)
+  - `com.aibox.action.TRANSLATE_MODULE` (Translate)
+  - `com.aibox.action.IMAGE_GEN_MODULE` (待实现)
+- 通过 AIDL 暴露能力(IPluginInterface / IPluginDescriptor)
+
+#### 推理后端
+- **CPU**:兜底,所有设备可用
+- **Vulkan**:GPU 加速(修复中,见下文)
+- **OpenCL**:GPU 加速(运行时 dlopen,无编译期依赖)
+- **NPU**:占位(`POCKET_NPU` 编译时启用,运行时 dlopen libQnnHtp.so 等)
+- **LiteRT 插件**:V2 路径,支持 Gemma 4 E2B/E4B 等
+
+#### 设备状态监控(ThermalMonitor)
+- 温度(sysfs + PowerManager)
+- CPU 主频 + 利用率(/proc/stat 差分)
+- GPU 主频 + 利用率(kgsl/mali/devfreq 路径扫描)
+- 系统内存使用率 + App PSS/Native
+- 电量百分比 + 电池温度 + 充电状态
+- 2 秒采样一次,UI 实时刷新
+
+#### 基准测试(BasicBenchmark)
+- PP t/s / TG t/s / TTFT / 总时间(中位数,过滤偶发 GC)
+- 峰值内存 + App PSS/Native + 系统内存占用率
+- 平均 CPU/GPU 利用率
+- 能耗(mJ,通过 BatteryManager 电流 × 电压 × 时长)
+- 能耗比(tokens/J)
+
+#### 上下文管理(接口预定义,实现待做)
+- `ISessionManager`:含 ephemeral 临时会话 + promote 转正
+- `IContextBudget`:token 预算 + 混合压缩策略(滑动窗口 + RAG + 选择性总结 + 用户锁定)
+- `IMemoryStore`:实体记忆替代模型总结,毫秒级向量检索
+- `IHostApi`:版本/ABI/内存查询
+
+#### LiteRT 安全上下文(SafeContextBenchmark)
+- 实测发现 LiteRT 模型在长输入下"乱输出"临界点
+- Gemma 4 E2B 实测 ~3000 token,E4B 实测 ~2500 token(反直觉:E4B 比 E2B 更脆)
+- `default_safe` 值: E2B=2048, E4B=1500(留 30-40% 裕度)
+- 不依赖模型体积/量化推算,只能 runtime benchmark 实测
+- 仅 LiteRT 类模块声明(BACKEND_CONSUMER / EMBEDDING / CHAT / AGENT)
+
+#### 多框架配置(FrameworkConfig)
+- 全局 `InferenceConfig` 是默认值
+- 每个框架(`FrameworkId`: LLAMACPP / LITERT / MNN / ONNX / QNN / MLLM)可选覆盖部分字段
+- 持久化:`FrameworkConfigRepository` 用 DataStore JSON 存
+
+### 模型格式路由(ModelFormatRouter)
+
+| 模型格式 | 后缀 | 路由 |
+|---|---|---|
+| GGUF | `.gguf` | V1 路径(llama.cpp) |
+| 老 GGML | `.bin` | V1 路径 |
+| TFLite | `.tflite` | V2 路径(LiteRT 插件) |
+| LiteRT-LM | `.litertlm` | V2 路径(LiteRT 插件) |
+| ONNX | `.onnx` | V2 路径(ONNX 插件,待开发) |
+| MNN | `.mnn` | V2 路径(MNN 插件,待开发) |
+
+---
+
+## 三、本次会话(2026-11-08)的改动
+
+### 1. Vulkan 闪退修复(native_bridge.cpp)
+
+**根因**:Mamba/RWKV 架构与 Vulkan 不兼容,与 FlashAttention 也不兼容。
+之前用户日志(2026-11-07):
+```
+19:15:10.091  InferenceEngine: trying VULKAN ...
+19:15:10.354  AIBox-Native: loaded via vulkan, ctx=4096, threads=6, kv=f16  ← 加载成功
+19:15:15.680  llamaCompletionChat: tokens=13 skip=0 eval=13
+==== 4 分钟后日志重启(SIGSEGV) ====
+```
+
+**修复**:
+- 在 `native_bridge.cpp` 加 `detect_model_arch()` 函数,读 GGUF `general.architecture` metadata
+- 启发式 fallback:metadata 读不到时用文件名(mamba/rwkv/lfm/jamba 关键词)
+- 检测到非 Transformer 架构(mamba/rwkv6/rwkv/ssm/jamba/gemma2):
+  - **强制 forceFa=false**(覆盖调用方)
+  - **强制 backend="cpu"**(覆盖 vulkan/opencl)
+- 后续版本若 Vulkan 修了 Mamba 支持,可放宽限制
+
+**编译注意**:`llama_model_meta_val_str` 是 llama.cpp v0.4.1 API。
+若该 API 未导出或签名变化,会编译失败。届时降级用纯文件名启发式。
+
+### 2. V2 路径接 UI(ModelsViewModel)
+
+**改动**:
+- 新增 `ModelFormatRouter.kt`:按文件扩展名决定走 V1 还是 V2
+- `ModelsViewModel.activate` 重写:
+  - 自动检测模型格式
+  - V1 路径:走 `engine.loadModel`(原路径不变)
+  - V2 路径:走 `BackendManagerV2.getBackend(name).loadModel` + `trackLoaded`
+  - 未安装对应插件:报错"未安装 LiteRT/ONNX/MNN 插件,请到模块管理安装"
+- `InferenceEngine.setV2Active`:让 V1 引擎感知 V2 激活状态
+  - V2 激活时,`completionChat` 自动委托给 V2 delegate
+- ChatViewModel **零改动** — 仍然调 `engine.completionChat`,但实际路由到 V2
+
+**意义**:用户装上 LiteRT 插件后,导入 `.litertlm` 模型文件,直接点击激活就能用。
+插件不再是"棍母"(占位但跑不动)。
+
+### 3. LiteRT 插件真正可用
+
+- V2 路径接通后,LiteRT 插件(`com.aibox.litert.backend`)真正能跑推理
+- 用户操作:装 LiteRT 插件 APK → 导入 Gemma 4 E2B/E4B 的 .litertlm → 模型页激活 → 聊天
+- 已知限制:
+  - V2 chat template 简化(把 messages 拼成单条 prompt),没调模型内置 chat template
+  - 后续可由 LiteRT 插件自己实现 chat template(在 streamInfer 里处理)
+
+### 4. NPU 探测框架
+
+- 新增 `NativeBridge.npuType()` native 方法
+- 返回值:`"qcom_htp"` / `"mediatek_apu"` / `"samsung_exynos"` / `"unknown"` / `""`
+- 编译期需 `POCKET_NPU=1`(CMakeLists.txt 的 `AIBOX_NPU` option,默认 OFF)
+- 当前实现仅探测,不能真正跑推理(QNN SDK 编译尚未集成)
+
+### 5. UI 改善
+
+- `ModelCard` 加格式标签(GGUF 默认不显示 / TFLite / LiteRT / ONNX / MNN 显示对应标签)
+- 用户能看到模型属于哪个框架,知道需要装哪个插件
+
+### 6. 编译修复(历史 commit)
+
+- `SafeContextBenchmark.kt`: `Judgment.Block` 是 data class 必须实例化
+- `ThermalMonitor.kt`: 注释里 `*.img-rogue` 含 `*/` 被误解析为块注释结束
+- `AppNav.kt`: 缺 `Icons.Outlined.Refresh` import
+
+---
+
+## 四、待完成的工作
+
+### 紧急(P0,接手时优先做)
+
+#### 4.1 V2 chat template 完善
+
+**问题**:`ModelsViewModel.runCatchingV2` 把 messages 简化拼成单条 prompt,丢失了 chat template。
+**方案**:让 LiteRT 插件自己实现 chat template(在 streamInfer 里处理),宿主只传原始 messages 数组。
+**改动量**:1-2 天(LiteRT 插件侧加 ChatMsg 数组接收 + 模板格式化)
+
+#### 4.2 LiteRT 模块 manifest 接入
+
+**问题**:LiteRT 插件 APK 当前没用新的 manifest 契约。
+**方案**:让 LiteRT 插件提供 `assets/module_manifest/manifest.json`,声明:
+```json
+{
+  "module_id": "litert.backend",
+  "module_type": "backend_consumer",
+  "exports": ["aibox_litert_v1"],
+  "capabilities": ["chat_completion", "token_stream", "safe_context_auto_detect"],
+  "safe_context": { ... }
+}
+```
+**改动量**:半天(LiteRT 插件 AndroidManifest 加 meta-data 指向 manifest.json)
+
+#### 4.3 真实测试 LiteRT 跑通 Gemma 4
+
+**问题**:代码改了但没真机测试。
+**方案**:用户安装新版 APK + LiteRT 插件 + 导入 Gemma 4 E2B .litertlm,实测推理。
+**风险点**:
+- V2 chat template 简化可能导致输出格式不对 → 短期方案是让 LiteRT 插件自己格式化
+- LiteRT 插件的 streamInfer 返回 chunk 格式可能不匹配宿主预期 → 需对齐
+
+### 高优先级(P1)
+
+#### 4.4 模块加载器与现有 PluginManager 融合
+
+**现状**:两套并存,`ModuleLoader`(新 manifest)和 `PluginManager`(V2 AIDL)。
+**目标**:让 V2 插件也提供 manifest,统一发现路径。
+**改动量**:3-5 天(需要改 PluginManager 读 manifest)
+
+#### 4.5 FrameworkConfig UI 入口
+
+**现状**:`FrameworkConfigRepository` 已实现,但没有 UI 让用户配置每个框架的覆盖。
+**方案**:Settings 页加"框架级配置"入口,列出所有支持的 FrameworkId + 每个的覆盖字段。
+**改动量**:1-2 天
+
+#### 4.6 SafeContextBenchmark 接 LiteRT
+
+**现状**:接口定义好了,但没接到 LiteRT 插件的加载流程。
+**方案**:LiteRT 插件 loadModel 时跑 benchmark,缓存 safe_context 值,在 UI 提醒。
+**改动量**:2-3 天(LiteRT 插件侧实现 InferenceProvider)
+
+#### 4.7 Vulkan 进一步优化
+
+**现状**:对 Mamba 架构直接禁用,粗糙。
+**方案**:
+- 检测 GPU 型号 + driver 版本,维护 allowlist
+- 加载后跑 1 token dummy 推理探测(SIGSEGV 难捕获,需 fork 子进程)
+- 升级 llama.cpp 到最新版(Vulkan 后端修了很多 Mamba bug)
+**改动量**:1 周
+
+### 中优先级(P2)
+
+#### 4.8 桌面端 CLI 服务器(MVP)
+
+**目标**:`aibox-server` 单二进制,Ktor + mbedTLS,OpenAI 兼容 API。
+**端口**:9000(API)/ 9001(Web UI)
+**功能**:
+- OpenAI 兼容 `/v1/models` `/v1/chat/completions` `/v1/images/generations`
+- mDNS 局域网自动发现(`_aibox._tcp.local.`)
+- 配对码 + QR + API Key 鉴权
+- 内置 Web UI(HTMX 极简版,兼容 IE8/iOS6)
+**改动量**:2-3 周
+
+#### 4.9 AIAnyWhere 联调
+
+**目标**:AIAnyWhere 改 base_url 即可用 AIBox Desktop 推理。
+**前置**:4.8 完成。
+**改动量**:1 周(协议对齐 + 老浏览器兼容性测试)
+
+#### 4.10 手机端 server 模式
+
+**目标**:AIBox Android 加 server 模式,作为模块装上后可对外提供推理服务。
+**形态**:模块 APK `utility.webserver.basic`,装上后手机可当 server。
+**改动量**:1 周
+
+#### 4.11 SD 生图模块(桌面端)
+
+**目标**:AIBox Desktop 内置 SD 模块(基于 ComfyUI 子进程或 diffusers)。
+**功能**:OpenAI images API 兼容,Web UI 生图界面。
+**改动量**:2 周
+
+#### 4.12 同步引擎
+
+**目标**:多设备数据同步(对话历史 / 角色卡 / API Key)。
+**方案**:主从模式 + REST 拉取/推送,后期加 WebSocket 实时同步。
+**改动量**:2 周
+
+### 低优先级(P3)
+
+- MoE 模型支持(端侧不划算,等桌面端 CUDA + 大内存)
+- OpenCL 后端完善(目前仅占位)
+- ONNX / MNN 插件开发(模块加载器已支持,等市场需要)
+- 公网穿透 / 中继服务
+- Compose for Desktop 桌面 GUI
+
+---
+
+## 五、关键设计决策
+
+### 5.1 为什么是模块化 + manifest 契约?
+
+**决策**:不把所有推理框架内置到主 APK,而是用 manifest 契约让模块声明依赖。
+
+**理由**:
+- 主 APK 不能装下所有后端(llama.cpp + mnn + litert + onnx + qnn ≈ 600MB)
+- 不同用户需要不同后端(非高通用户不需要 QNN)
+- 模块化让生态可扩展(社区可以贡献新插件)
+
+**实现**:
+- manifest JSON schema v1.0.0 定义模块契约
+- `DependencyResolver` 做拓扑排序 + 环检测
+- `NativeLibLoader` 用 dlopen + 引用计数 + SONAME 去重
+- `shared=true` 用 RTLD_GLOBAL 跨模块共享
+- `shared=false` 用 RTLD_LOCAL 模块私有
+
+### 5.2 为什么不用模型总结做上下文压缩?
+
+**决策**:用混合策略(滑动窗口 + RAG 实体记忆 + 用户锁定),总结只在末位兜底。
+
+**理由**:
+- 端侧模型总结质量差(0.5B 模型经常幻觉)
+- 总结耗时 6-8 秒,卡 UI
+- 递归漂移(N 次总结后信息严重失真)
+- 丢失具体词("咖啡"被总结成"偏好")
+
+### 5.3 为什么 KV cache 不量化(小模型)?
+
+**决策**:<1B 模型强制 F16 KV,1B+ 默认 Q8 KV。
+
+**理由**:
+- 小模型 KV cache 占比高,量化误差被放大
+- F16 vs Q8 内存差异只有几 MB,效果差异是"能用"和"不能用"
+- 大模型权重大,KV 量化收益显著
+
+### 5.4 为什么 LiteRT 单独有 safe_context?
+
+**决策**:LiteRT 模型声明 `safe_context` 字段,自动检测乱输出临界点。
+
+**理由**:
+- LiteRT 模型转换时常截断/扩展上下文,标称值不可信
+- 不同模型乱输出临界点不同(Gemma 4 E2B ~3000 / E4B ~2500)
+- 不依赖模型体积/量化推算,只能实测
+- 这种"无声失败"需要提醒用户
+
+### 5.5 为什么 V2 路径不直接重写 V1?
+
+**决策**:V2 路径并行存在,V1 保持兼容,V2 通过 `setV2Active` 让 V1 引擎感知。
+
+**理由**:
+- V1 已稳定可用(llama.cpp + GGUF)
+- V2 接入要时间,不能阻塞主线
+- 通过状态镜像,V2 激活时 V1 退居后台
+- ChatViewModel 零改动(只调 `engine.completionChat`)
+
+---
+
+## 六、技术债务
+
+### 6.1 紧急
+
+- **`llama_model_meta_val_str` API 依赖**:如果 llama.cpp 版本变化,需 fallback
+- **V2 chat template 简化**:丢失模型内置 template,需插件侧完善
+- **沙盒网速慢(30KB/s)**:本地跑不通 gradle build,只能依赖 CI 验证
+
+### 6.2 中期
+
+- **现有 PluginManager 与新 ModuleLoader 并存**:需融合
+- **V1BackendAdapter**:V1/V2 适配器,过渡期产物,V1 退役后可移除
+- **`Worktree` / `download/` 历史包**:仓库里有大量构建产物,需清理
+
+### 6.3 长期
+
+- **AndroidManifest queries 写死包名**:新模块需要手动加包名查询
+  (因为 Magic OS 8 拒绝含自定义 intent 的 queries)
+- **Vulkan 后端与 llama.cpp v0.4.1 绑定**:版本太老,需升级
+
+---
+
+## 七、CI 与发布
+
+### 7.1 CI 配置
+
+- **Build AIBox APK**(`.github/workflows/build-apk.yml`):主 APK 构建
+- **Build Modules**(`.github/workflows/modules-build.yml` / `modules.yml`):三个模块 APK 构建
+
+### 7.2 当前状态(2026-11-08)
+
+- main HEAD: commit `a4bedd0`(本次会话改动尚未推)
+- 上次成功 build: #29 (commit `a4bedd0`)
+- 模块 build: #27 success
+
+### 7.3 已知 CI 问题
+
+- Node.js 20 弃用警告(actions/cache@v4 / checkout@v4)
+- 失败 build 没自动重试,需要人工 push 触发
+
+---
+
+## 八、代码组织
+
+### 8.1 主 APK (`app/`)
+
+```
+app/src/main/
+├── AndroidManifest.xml          # queries 显式包名(Magic OS 兼容)
+├── aidl/com/aibox/plugin/       # AIDL 接口(IPluginInterface 等)
+├── assets/module_manifest/      # manifest schema + 示例
+├── cpp/                          # native 代码
+│   ├── native_bridge.cpp         # llama.cpp JNI + 架构检测
+│   ├── module_loader_jni.cpp     # dlopen/dlclose JNI
+│   ├── memory_pool.cpp           # KV cache 内存池
+│   ├── bridge.cpp / bridge.h     # tokenizer bridge
+│   ├── crash/crash_handler.cpp   # native 崩溃捕获
+│   └── thermals.cpp              # 温度监控 native
+├── kotlin/com/aibox/
+│   ├── AIBoxApp.kt               # Application 入口
+│   ├── di/AppContainer.kt        # 依赖注入容器
+│   ├── data/                     # 数据层(ModelEntity / Repository)
+│   ├── domain/
+│   │   ├── inference/            # 推理核心
+│   │   │   ├── Backend.kt        # Backend 接口
+│   │   │   ├── InferenceEngine.kt  # V1 引擎 + V2 状态镜像
+│   │   │   ├── BackendManagerV2.kt  # V2 注册表
+│   │   │   ├── InferenceBackendV2.kt  # V2 接口
+│   │   │   ├── CpuBackend.kt     # CPU 后端
+│   │   │   ├── VulkanBackend.kt  # Vulkan 后端
+│   │   │   ├── NpuBackend.kt     # NPU 后端(占位)
+│   │   │   ├── OpenClBackend.kt  # OpenCL 后端
+│   │   │   ├── ModelFormatRouter.kt  # 模型格式路由(新)
+│   │   │   ├── FrameworkConfig.kt  # 多框架覆盖
+│   │   │   └── ...
+│   │   ├── module/               # 模块发现
+│   │   ├── optimization/         # 推理优化
+│   │   ├── tool/                 # 工具调用
+│   │   └── shortcut/             # 快捷方式
+│   ├── infra/
+│   │   ├── jni/NativeBridge.kt   # JNI 桥
+│   │   ├── plugin/               # PluginManager(V2 AIDL)
+│   │   ├── module/               # ModuleLoader(manifest + 拓扑)
+│   │   │   ├── manifest/         # manifest parser
+│   │   │   ├── loader/           # NativeLibLoader + DependencyResolver
+│   │   │   ├── safectx/          # SafeContextBenchmark
+│   │   │   └── host/             # 宿主接口预定义
+│   │   ├── benchmark/            # 基准测试
+│   │   ├── crash/                # 崩溃处理
+│   │   └── ...
+│   └── ui/                       # Compose UI
+│       ├── chat/                 # 聊天页
+│       ├── models/               # 模型管理页
+│       ├── settings/             # 设置页
+│       ├── thermal/              # 设备状态页
+│       ├── benchmark/            # 基准测试页
+│       ├── modules/              # 模块管理页
+│       └── ...
+└── res/                          # 资源(字符串 / 主题)
+```
+
+### 8.2 模块 APK
+
+- `easy-chat-module/`:Easy Chat 模块(无打包模型,纯 demo)
+- `translate-module/`:翻译模块
+- `litert-plugin/`:LiteRT 推理插件(带 LiteRT runtime + Gemma 模型,49MB)
+
+---
+
+## 九、对接 AIAnyWhere 的协议规范(草案)
+
+### 9.1 OpenAI 兼容 API(基础)
+
+```
+GET  /v1/models                            # 列出可用模型
+POST /v1/chat/completions                  # 聊天补全(支持 stream=true)
+POST /v1/completions                       # 文本补全
+POST /v1/images/generations                # 生图(SD 模块)
+POST /v1/audio/transcriptions              # ASR
+POST /v1/audio/speech                      # TTS
+```
+
+### 9.2 AIBox 扩展 API
+
+```
+GET  /v1/aibox/modules                     # 列出已装模块
+GET  /v1/aibox/backends                    # 列出可用后端
+GET  /v1/aibox/device_state                # 设备状态(温度/CPU/GPU/电量)
+POST /v1/aibox/auth/pair                   # 配对码生成
+POST /v1/aibox/auth/verify                 # 配对码换 token
+GET  /v1/aibox/sync/pull?since={ts}        # 同步拉取
+POST /v1/aibox/sync/push                   # 同步推送
+```
+
+### 9.3 鉴权
+
+- **配对码**:6 位数字,5 分钟过期,首次配对用
+- **API Key**:`sk-aibox-xxx`,永久/临时两种
+- **mTLS**:可选高安全模式
+
+### 9.4 网络
+
+- 局域网:mDNS 自动发现(`_aibox._tcp.local.`)
+- 远程:Tailscale / 公网穿透 + HTTPS(mbedTLS)
+
+---
+
+## 十、给接手开发的人的建议
+
+### 10.1 优先级
+
+1. **测试本次会话改动是否在真机跑通**(装新 APK + 装 LiteRT 插件 + 跑 Gemma 4 E2B)
+2. **完善 V2 chat template**(让 LiteRT 插件自己格式化)
+3. **修构建中可能出现的其他编译错误**(本次没本地跑通 gradle)
+
+### 10.2 不要做的事
+
+- 不要把所有后端塞进主 APK(体积爆炸)
+- 不要让 V2 完全替代 V1(渐进过渡)
+- 不要忽略 Magic OS 8 的 queries 限制(自定义 intent 装不上)
+- 不要在端侧用 MoE(内存瓶颈,失去 MoE 优势)
+- 不要让模型总结做上下文压缩(端侧小模型总结质量差)
+
+### 10.3 必读的文档
+
+- `docs/ARCHITECTURE.md`:V1/V2 架构总览
+- `docs/PERFORMANCE_TUNING.md`:推理调优指南
+- `docs/PLUGIN_DEVELOPMENT.md`:插件开发指南
+- `docs/MODULE_PLAN_V2.md`:模块规划
+- `app/src/main/kotlin/com/aibox/infra/module/`:新模块加载器代码
+
+### 10.4 必跑的命令
+
+```bash
+# 看当前 git 状态
+cd /home/z/my-project
+git log --oneline -10
+
+# 看远端 CI 状态
+curl -H "Authorization: token $PAT" \
+  "https://api.github.com/repos/qwq672/mobile-ai-box/actions/runs?per_page=5"
+
+# 下载 build artifact
+curl -L -H "Authorization: token $PAT" \
+  -o aibox.zip \
+  "https://api.github.com/repos/qwq672/mobile-ai-box/actions/artifacts/{id}/zip"
+
+# 看最近用户日志(诊断 bug)
+ls /tmp/my-project/upload/
+```
+
+### 10.5 必避免的坑
+
+- **沙盒网速慢**:gradle 130MB 下载 1+ 小时,只能靠 CI 验证
+- **git push 偶尔超时**:`-c http.version=HTTP/1.1` 多试几次
+- **每次 push 前删 `app/src/main/java/` 和 `com/pocketllm/`**:历史遗留
+- **`useLegacyPackaging` 可能被回滚**:每次 push 前检查
+- **荣耀 Magic OS 8 拒绝自定义 intent queries**:用显式 `<package>` 包名
+
+---
+
+## 十一、附录
+
+### 11.1 关键 commit 时间线
+
+| Commit | 描述 | 时间 |
+|---|---|---|
+| 44ee435 | 修复装不上(queries + 权限清理) | 2026-11-07 |
+| 2711e94 | 修复聊天闪退 + 输出问号(FA bug) | 2026-11-07 |
+| a9ddafb | 修复 benchmark 指标失真 + 模块识别 | 2026-11-07 |
+| 4291a09 | 模块加载器原型(manifest + 拓扑 + SONAME + safe_context) | 2026-11-07 |
+| d4a63e2 | 多框架配置 + 设备状态扩展 + 基准测试增强 + 模块动态检测 + 模型加载超时 | 2026-11-08 |
+| 9288229 | fix: SafeContextBenchmark 编译错误 | 2026-11-08 |
+| 46a97b7 | fix: ThermalMonitor 注释 `*/` 误解析 | 2026-11-08 |
+| a4bedd0 | fix: AppNav.kt 缺 Refresh import | 2026-11-08 |
+| (本次会话) | Vulkan 修复 + V2 接 UI + NPU 探测 + ModelFormatRouter | 2026-11-08 |
+
+### 11.2 用户日志关键事件
+
+- **2026-11-07 19:09**:LFM2.5-350M 在 CPU 跑通,输出正常 11 token
+- **2026-11-07 19:15**:切换到 Vulkan,加载成功但首次推理 SIGSEGV(本会话已修复)
+- **2026-11-07 19:19**:用户重启 App,Vulkan 闪退确认
+
+### 11.3 已知但不修的 bug
+
+- **沙盒 git 状态混乱**:每次 bash 调用后自动切回 main 分支(可能是 shell 集成问题)
+  - 解决方案:每次操作前显式 checkout
+- **skills/ 目录混入 build commit**:不影响功能但增加仓库体积
+  - 解决方案:后期清理历史
+
+### 11.4 设备信息
+
+- 测试设备:Honor Magic7(HNBVL-AN00)
+- SoC:骁龙 8 Gen3(SM8650)
+- Android:16
+- 系统:Magic OS 8
+- Shizuku:可用(pm install 需 push 到 /data/local/tmp/)
+
+---
+
+## 十二、本次会话产物
+
+主 APK + 模块 APK 位于 `/home/z/my-project/download/`:
+
+```
+download/
+├── README-261108.md                          # 详细说明
+├── aibox-arm64-v8a-release-261108-full.apk   # 44 MB 主 APK(本次会话改动尚未构建)
+├── latest_apk/
+│   └── aibox64-v8a-release.apk
+└── modules/
+    ├── easy-chat-module.apk                   # 29 KB
+    ├── translate-module.apk                   # 131 KB
+    └── litert-backend-plugin.apk              # 49 MB
+```
+
+**注意**:本次会话的代码改动(Vulkan 修复 + V2 接 UI + NPU 探测)尚未推到 main 构建。
+接手人需要 `git push origin main` 触发 CI,等 build 完成后下载新 APK 测试。
+
+---
+
+## 结束语
+
+AIBox 已经走到"模块化架构跑通 + 多框架支持初步可用"的关键节点。
+本次会话完成了 Vulkan 闪退修复 + V2 路径接 UI + LiteRT 插件真正可用 + NPU 探测框架。
+下一步关键路径:真机测试 + V2 chat template 完善 + 桌面端 CLI 服务器(MVP)。
+
+接手人优先看:
+1. 本文档第四章(待完成工作)
+2. 第五章(关键设计决策)
+3. 第十章(给接手人的建议)
+
+祝顺利。

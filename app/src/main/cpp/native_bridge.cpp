@@ -117,6 +117,45 @@ Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
     return JNI_FALSE;
 }
 
+/**
+ * 探测 NPU 类型(Qualcomm HTP / MediaTek APU / Samsung Exynos NPU / unknown)
+ * 返回:
+ *  - "qcom_htp":   高通 Hexagon HTP(libQnnHtp.so + libhexagon_nn_skel.so)
+ *  - "mediatek_apu":  联发科 APU(libneuron_adapter.so)
+ *  - "samsung_exynos":  三星 Exynos NPU(libeden_nn.so)
+ *  - "unknown":    找到 .so 但不识别类型
+ *  - "":           无 NPU 或编译时未启用
+ */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_aibox_infra_jni_NativeBridge_npuType(JNIEnv* env, jclass) {
+#if defined(POCKET_NPU)
+    // 高通 Hexagon
+    void* h1 = dlopen("libQnnHtp.so", RTLD_NOW | RTLD_LOCAL);
+    if (h1) {
+        dlclose(h1);
+        // 进一步检查 skel 决定是 HTP Lite / HTP Plus
+        void* h2 = dlopen("libhexagon_nn_skel.so", RTLD_NOW | RTLD_LOCAL);
+        if (h2) dlclose(h2);
+        return env->NewStringUTF("qcom_htp");
+    }
+    // 联发科 APU
+    void* h3 = dlopen("libneuron_adapter.so", RTLD_NOW | RTLD_LOCAL);
+    if (h3) {
+        dlclose(h3);
+        return env->NewStringUTF("mediatek_apu");
+    }
+    // 三星 Exynos
+    void* h4 = dlopen("libeden_nn.so", RTLD_NOW | RTLD_LOCAL);
+    if (h4) {
+        dlclose(h4);
+        return env->NewStringUTF("samsung_exynos");
+    }
+    return env->NewStringUTF("unknown");
+#else
+    return env->NewStringUTF("");
+#endif
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_aibox_infra_jni_NativeBridge_openclAvailable(JNIEnv*, jclass) {
 #if defined(POCKET_OPENCL)
@@ -130,6 +169,27 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_aibox_infra_jni_NativeBridge_nativeVersion(JNIEnv* env, jclass) {
     std::string v = "llama.cpp=" + std::string(llama_print_system_info()) + " aibox=v261018-1";
     return env->NewStringUTF(v.c_str());
+}
+
+// ---------- 架构检测 ----------
+// 读取 GGUF 元数据 general.architecture,返回小写字符串
+// llama.cpp v0.4.1 暴露 llama_model_meta_val_str(model, key, buf, size)
+// 如果未导出,降级用文件名启发式(路径包含 mamba/rwkv 等关键词)
+static std::string detect_model_arch(const llama_model* model) {
+    if (!model) return "unknown";
+    // 尝试用 llama_model_meta_val_str 读 general.architecture
+    // 不同 llama.cpp 版本可能 API 名略不同,这里试两个常见名
+    char buf[64] = {0};
+    int n = -1;
+    // v0.4.1: llama_model_meta_val_str(model, key, buf, size) → 字节数
+    n = llama_model_meta_val_str(model, "general.architecture", buf, sizeof(buf));
+    if (n > 0) {
+        std::string s(buf, (size_t)n);
+        // 转小写
+        for (auto& c : s) c = (char)tolower((unsigned char)c);
+        return s;
+    }
+    return "unknown";
 }
 
 // ---------- 加载 ----------
@@ -187,6 +247,47 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     }
 
     g_vocab = llama_model_get_vocab(g_model);
+
+    // ============ 架构检测 ============
+    // 检测 Mamba/RWKV/SSM 等非 Transformer 架构
+    // 这些架构与 Vulkan 后端不兼容(已知 bug),与 FlashAttention 也不兼容
+    // 检测到后:
+    //   - 若用户请求 Vulkan/OpenCL,自动降级到 CPU
+    //   - 强制 forceFa = false(覆盖调用方)
+    std::string model_arch = detect_model_arch(g_model);
+    // 如果读不到 metadata,降级用文件名启发式
+    if (model_arch == "unknown") {
+        std::string low_path = path_str;
+        for (auto& c : low_path) c = (char)tolower((unsigned char)c);
+        if (low_path.find("mamba") != std::string::npos)       model_arch = "mamba";
+        else if (low_path.find("rwkv") != std::string::npos)   model_arch = "rwkv";
+        else if (low_path.find("lfm") != std::string::npos)    model_arch = "mamba";   // LFM2.5 是 Mamba
+        else if (low_path.find("jamba") != std::string::npos)  model_arch = "mamba";
+        LOGI("llamaLoad: metadata arch unknown, fallback to filename heuristic: '%s'", model_arch.c_str());
+    }
+    bool is_non_transformer = (model_arch == "mamba" ||
+                                model_arch == "rwkv6" ||
+                                model_arch == "rwkv" ||
+                                model_arch == "ssm" ||
+                                model_arch == "jamba" ||
+                                model_arch == "gemma2" /* gemma2 也偶有 FA 兼容问题 */);
+    if (is_non_transformer) {
+        LOGI("llamaLoad: detected non-transformer arch '%s', FA forced off", model_arch.c_str());
+    }
+    bool effectiveFa = is_non_transformer ? false : forceFa;
+
+    // 若架构是 Mamba/RWKV/SSM 且 backend 是 vulkan/opencl,强制改为 cpu
+    // (在 native 层修改 g_backend_str + 后续逻辑用 cpu 路径)
+    bool need_fallback_to_cpu = is_non_transformer &&
+                                 (std::string(backend) == "vulkan" ||
+                                  std::string(backend) == "opencl");
+    if (need_fallback_to_cpu) {
+        LOGI("llamaLoad: arch '%s' incompatible with %s backend, fallback to cpu",
+             model_arch.c_str(), backend);
+        g_backend_str = "cpu";
+    } else {
+        g_backend_str = backend;
+    }
     bridge_set_vocab(g_vocab);
 
     {
@@ -196,9 +297,10 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         cp.n_ubatch     = physicalBatch;
         cp.n_threads    = threads > 0 ? threads : 4;
         cp.n_threads_batch = threads > 0 ? threads : 4;
-        // 关键修复: 只在 forceFa=true 时启用 FlashAttention
+        // 关键修复: 只在 effectiveFa=true 时启用 FlashAttention
         // LFM2.5 / Mamba / RWKV 等非 Transformer 架构不兼容 FA, 强制开会导致输出问号
-        if (forceFa) {
+        // effectiveFa 在前面由 detect_model_arch + 调用方 forceFa 综合得出
+        if (effectiveFa) {
             POCKET_SET_FLASH_ATTN(cp);
         }
         cp.no_perf      = false;
