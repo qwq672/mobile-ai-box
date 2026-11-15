@@ -46,7 +46,8 @@ import com.aibox.plugin.IStreamCallback
  */
 class PluginBackendAdapter(
     private val pluginInterface: IPluginInterface,
-    private val descriptor: IPluginDescriptor,
+    /** 可能为 null：插件 Binder 只实现运行时接口时，能力/设置改用空实现兜底。 */
+    private val descriptor: IPluginDescriptor?,
     private val pluginInfo: PluginInfo
 ) : InferenceBackendV2 {
 
@@ -62,19 +63,12 @@ class PluginBackendAdapter(
     override fun describeCapabilities(): BackendCapabilities =
         ParcelableConverters.run {
             try {
-                descriptor.describeCapabilities().toDomain()
-            } catch (e: RemoteException) {
-                // 描述符读取失败，返回"空能力" BackendCapabilities，让 BackendManager 不路由到此插件
-                BackendCapabilities(
-                    supportedTasks = emptySet(),
-                    supportedInputModalities = emptySet(),
-                    supportedOutputModalities = emptySet(),
-                    maxContextLength = 0,
-                    maxImageResolution = null,
-                    supportedModelFormats = emptyList(),
-                    supportedQuantizations = emptyList(),
-                    features = emptySet()
-                )
+                descriptor?.describeCapabilities()?.toDomain()
+                    ?: EMPTY_CAPABILITIES
+            } catch (e: Throwable) {
+                // 描述符读取失败（含接口不匹配导致的错误 transaction），
+                // 返回"空能力"而不是让异常冒到加载流程。
+                EMPTY_CAPABILITIES
             }
         }
 
@@ -225,5 +219,18 @@ class PluginBackendAdapter(
                 e
             )
         }
+    }
+
+    private companion object {
+        val EMPTY_CAPABILITIES = BackendCapabilities(
+            supportedTasks = emptySet(),
+            supportedInputModalities = emptySet(),
+            supportedOutputModalities = emptySet(),
+            maxContextLength = 0,
+            maxImageResolution = null,
+            supportedModelFormats = emptyList(),
+            supportedQuantizations = emptyList(),
+            features = emptySet()
+        )
     }
 }

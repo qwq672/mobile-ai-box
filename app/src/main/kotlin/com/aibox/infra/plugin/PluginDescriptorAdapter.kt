@@ -28,7 +28,8 @@ import com.aibox.domain.inference.TaskType
  * @property pluginInfo 宿主侧 domain PluginInfo（与 descriptor.getPluginInfo() 一致，缓存一份避免重复 IPC）。
  */
 class PluginDescriptorAdapter(
-    private val descriptor: com.aibox.plugin.IPluginDescriptor,
+    /** 可能为 null：部分插件（如 LiteRT）的 Binder 只实现 IPluginInterface。 */
+    private val descriptor: com.aibox.plugin.IPluginDescriptor?,
     private val pluginInfo: PluginInfo
 ) : BackendDescriptor {
 
@@ -43,32 +44,24 @@ class PluginDescriptorAdapter(
     override fun describeCapabilities(): BackendCapabilities =
         ParcelableConverters.run {
             try {
-                descriptor.describeCapabilities().toDomain()
-            } catch (e: RemoteException) {
-                BackendCapabilities(
-                    supportedTasks = emptySet(),
-                    supportedInputModalities = emptySet(),
-                    supportedOutputModalities = emptySet(),
-                    maxContextLength = 0,
-                    maxImageResolution = null,
-                    supportedModelFormats = emptyList(),
-                    supportedQuantizations = emptyList(),
-                    features = emptySet()
-                )
+                descriptor?.describeCapabilities()?.toDomain()
+                    ?: EMPTY_CAPABILITIES
+            } catch (e: Throwable) {
+                EMPTY_CAPABILITIES
             }
         }
 
     override fun getSettingsSchema(): List<SettingField> = try {
-        descriptor.settingsSchema
+        descriptor?.settingsSchema
             ?.mapNotNull { runCatching { ParcelableConverters.run { it.toDomain() } }.getOrNull() }
             ?: emptyList()
-    } catch (e: RemoteException) {
+    } catch (e: Throwable) {
         emptyList()
     }
 
     override fun getDefaultSettings(): Map<String, Any> = try {
         val schema = getSettingsSchema()
-        val rawStrMap = descriptor.defaultSettings ?: emptyMap()
+        val rawStrMap = descriptor?.defaultSettings ?: emptyMap()
         // 按 schema 把 String 还原为原始类型；schema 没覆盖的兜底为 String
         rawStrMap.mapValues { (key, strValue) ->
             val field = schema.firstOrNull { it.key == key }
@@ -85,8 +78,21 @@ class PluginDescriptorAdapter(
                 strValue?.toBooleanStrictOrNull() ?: strValue?.toIntOrNull() ?: strValue
             }
         }
-    } catch (e: RemoteException) {
+    } catch (e: Throwable) {
         emptyMap()
+    }
+
+    private companion object {
+        val EMPTY_CAPABILITIES = BackendCapabilities(
+            supportedTasks = emptySet(),
+            supportedInputModalities = emptySet(),
+            supportedOutputModalities = emptySet(),
+            maxContextLength = 0,
+            maxImageResolution = null,
+            supportedModelFormats = emptyList(),
+            supportedQuantizations = emptyList(),
+            features = emptySet()
+        )
     }
 
     /**

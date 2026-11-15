@@ -100,7 +100,63 @@ class PluginManager(
             LogSystem.warn(logTag, "discoverPlugins queryIntentServices failed: ${e.message}", e)
             return emptyList()
         }
-        return resolved.mapNotNull { resolve -> resolveInfoToPluginInfo(resolve) }
+        val merged = resolved.mapNotNull { resolve -> resolveInfoToPluginInfo(resolve) }.toMutableList()
+        // 兜底：部分 ROM（荣耀/部分定制系统）会把 queryIntentServices 的结果过滤掉，
+        // 即使宿主已在 <queries> 中声明了包名。这里对已知后端包直接做 getPackageInfo 探测，
+        // 避免「插件明明装了却始终提示未安装」。
+        for (pkg in KNOWN_BACKEND_PACKAGES) {
+            if (merged.any { it.packageName == pkg }) continue
+            probeKnownBackendPackage(pkg)?.let {
+                merged.add(it)
+                LogSystem.info(logTag, "discoverPlugins: fallback found installed plugin $pkg")
+            }
+        }
+        return merged
+    }
+
+    /**
+     * 按包名直接确认后端插件是否安装（不依赖 Intent 查询结果）。
+     * 仅接受确实声明了 BACKEND_PLUGIN 服务的包。
+     */
+    private fun probeKnownBackendPackage(packageName: String): PluginInfo? {
+        return try {
+            val pm = context.packageManager
+            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(
+                        (PackageManager.GET_SERVICES or PackageManager.GET_META_DATA).toLong()
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(
+                    packageName,
+                    PackageManager.GET_SERVICES or PackageManager.GET_META_DATA
+                )
+            }
+            val service = pkgInfo.services?.firstOrNull { s ->
+                s.exported && (
+                    s.metaData?.containsKey(META_DESCRIPTOR_CLASS) == true ||
+                        s.name?.contains("PluginService") == true
+                    )
+            } ?: return null
+            val app = pkgInfo.applicationInfo
+            PluginInfo(
+                packageName = packageName,
+                descriptorClass = service.name ?: "",
+                version = pkgInfo.versionName ?: "",
+                displayName = runCatching { app?.loadLabel(pm)?.toString() }
+                    .getOrDefault(packageName),
+                sizeBytes = runCatching { java.io.File(app?.sourceDir ?: "").length() }
+                    .getOrDefault(0L)
+            )
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        } catch (e: Throwable) {
+            LogSystem.warn(logTag, "probeKnownBackendPackage($packageName) failed: ${e.message}", e)
+            null
+        }
     }
 
     /**
@@ -184,20 +240,36 @@ class PluginManager(
             ?: return Outcome.Failure(bindResult.reasonOrNull() ?: "Bind service failed")
 
         // 4. 取 descriptor + interface
-        val descriptor = com.aibox.plugin.IPluginDescriptor.Stub.asInterface(bind.binder)
+        // 注意：部分插件（如当前 LiteRT 插件）的 Binder 只实现 IPluginInterface，
+        // 描述符由独立类提供。两个 AIDL 的方法序号会冲突，把运行时 Binder 硬转成
+        // IPluginDescriptor 会调到 loadModel / streamInfer 等错误方法，所以先用
+        // interfaceDescriptor 确认它到底实现了哪个接口。
+        val binderInterface = runCatching { bind.binder.interfaceDescriptor }.getOrNull()
+        val descriptor = if (binderInterface == null ||
+            binderInterface.contains("IPluginDescriptor", ignoreCase = true)
+        ) {
+            com.aibox.plugin.IPluginDescriptor.Stub.asInterface(bind.binder)
+        } else {
+            LogSystem.info(
+                logTag,
+                "Plugin $packageName binder implements only '$binderInterface'; descriptor unavailable"
+            )
+            null
+        }
         val iface = com.aibox.plugin.IPluginInterface.Stub.asInterface(bind.binder)
-        if (descriptor == null || iface == null) {
+        if (iface == null) {
             try { context.unbindService(bind.connection) } catch (_: Throwable) {}
-            val reason = "Plugin binder does not implement both IPluginDescriptor and IPluginInterface"
-            LogSystem.warn(logTag, "$reason (descriptor=${descriptor != null}, iface=${iface != null})")
+            val reason = "Plugin binder does not implement IPluginInterface"
+            LogSystem.warn(logTag, reason)
             return Outcome.Failure(reason)
         }
 
-        // 5. 取 PluginInfo（优先用 AIDL getPluginInfo，兜底用 discoverPlugins 解析）
+        // 5. 取 PluginInfo。IPluginInterface 自带 getPluginInfo，优先用它；
+        //    descriptor 若存在再兜底，最后才退回包解析结果。
         val parcelInfo = try {
-            descriptor.pluginInfo
-        } catch (e: RemoteException) {
-            LogSystem.warn(logTag, "Failed to get pluginInfo from descriptor: ${e.message}", e)
+            iface.pluginInfo ?: descriptor?.pluginInfo
+        } catch (e: Throwable) {
+            LogSystem.warn(logTag, "Failed to get pluginInfo: ${e.message}", e)
             null
         }
         val pluginInfo = if (parcelInfo != null) {
@@ -532,6 +604,19 @@ class PluginManager(
         /** 插件 Service 的 intent action（插件 manifest 中声明此 action）。 */
         const val ACTION_BACKEND_PLUGIN = "com.aibox.action.BACKEND_PLUGIN"
 
+        /** 插件 Service 上声明描述符类名的 meta-data key。 */
+        const val META_DESCRIPTOR_CLASS = "aibox.descriptor_class"
+
+        /**
+         * 已知后端插件包名。用于 queryIntentServices 被 ROM 过滤时的兜底探测。
+         * 未安装的包 getPackageInfo 会抛 NameNotFoundException，直接忽略。
+         */
+        private val KNOWN_BACKEND_PACKAGES = listOf(
+            "com.aibox.litert.backend",
+            "com.aibox.onnx.backend",
+            "com.aibox.mnn.backend"
+        )
+
         /** 绑定超时时间（毫秒）；插件 Service 启动慢或 ANR 时避免无限等待。 */
         const val BIND_TIMEOUT_MS = 10_000L
     }
@@ -549,5 +634,6 @@ data class PluginHandle(
     val info: PluginInfo,
     val connection: ServiceConnection,
     val pluginInterface: com.aibox.plugin.IPluginInterface,
-    val descriptor: com.aibox.plugin.IPluginDescriptor
+    /** 描述符接口；文本描述符缺失的插件（Binder 只暴露运行时接口）为 null。 */
+    val descriptor: com.aibox.plugin.IPluginDescriptor?
 )
