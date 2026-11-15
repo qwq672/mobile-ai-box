@@ -20,6 +20,22 @@ data class ModelInfo(
     val isFavorite: Boolean = false
 )
 
+/**
+ * 一条消息附件（为多模态本地 / 云端模型准备）。
+ *
+ * - [kind] = "image"：图片，[uri] 指向应用私有目录里的文件（abs path）或 content:// URI
+ * - [kind] = "text"：文本类文件，正文已抽到 [text]
+ */
+@Serializable
+data class ChatAttachment(
+    val kind: String,
+    val uri: String = "",
+    val name: String = "",
+    val mime: String = "",
+    val text: String = "",
+    val sizeBytes: Long = 0L
+)
+
 /** 一条聊天消息 */
 @Serializable
 data class ChatMessage(
@@ -28,7 +44,8 @@ data class ChatMessage(
     val role: String,   // user / assistant / system
     val content: String,
     val ts: Long = System.currentTimeMillis(),
-    val tokensPerSecond: Float = 0f
+    val tokensPerSecond: Float = 0f,
+    val attachments: List<ChatAttachment> = emptyList()
 )
 
 /** 一次会话 */

@@ -16,9 +16,15 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
-    <!-- 注: 不再声明 CALL_PHONE / SEND_SMS / RECORD_AUDIO / READ_MEDIA_*
-         (pocket-llm 没有这些, 实验 A 极简化)
-         源码里的 PhoneControlTool / SpeechRecognizer 等工具运行时会降级或抛异常, 但不影响编译 -->
+    <!-- 多模态 / 语音相关运行时权限（在设置 → 权限 中按需申请） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- 注: 不再声明 CALL_PHONE / SEND_SMS 等敏感权限
+         对应工具运行时会降级或抛异常, 但不影响编译 -->
 
     <!-- 模块可见性 (Android 11+ 包可见性要求):
          之前用 <queries><intent> 声明 4 个自定义 action, 但荣耀 Magic OS 8 拒绝安装含

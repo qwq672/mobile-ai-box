@@ -88,8 +88,16 @@ class NativeBridge {
         stopCallback: StringCallback
     )
 
-    /** 一条 chat 消息（给 llamaCompletionChat 用） */
-    data class ChatMsg(val role: String, val content: String)
+    /**
+     * 一条 chat 消息（给 llamaCompletionChat 用）。
+     *
+     * [images] 为图片本地路径 / URI 列表，仅云端多模态使用；本地 C++ 端只读 role/content。
+     */
+    data class ChatMsg(
+        val role: String,
+        val content: String,
+        val images: List<String> = emptyList()
+    )
 
     external fun llamaInterrupt()
 

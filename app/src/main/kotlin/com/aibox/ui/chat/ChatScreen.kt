@@ -1,11 +1,15 @@
 package com.aibox.ui.chat
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.InfiniteRepeatableSpec
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -45,6 +49,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
@@ -53,6 +58,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
@@ -87,6 +93,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -98,10 +105,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.data.model.ChatMessage
+import com.aibox.data.model.ChatAttachment
 import com.aibox.ui.shortcut.ShortcutEditorLauncher
+import com.aibox.ui.theme.LocalCornerScale
 import com.aibox.ui.tool.ToolConfirmDialog
 import com.aibox.ui.tool.ToolInvocationBubble
 import kotlinx.coroutines.launch
@@ -167,6 +177,42 @@ fun ChatScreen(
     var clearOpen by remember { mutableStateOf(false) }
     var sheetOpen by remember { mutableStateOf(false) }
 
+    // 进入页面时内容渐显（导航 → 聊天）
+    var contentVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { contentVisible = true }
+    val contentAlpha by animateFloatAsState(
+        targetValue = if (contentVisible) 1f else 0f,
+        animationSpec = tween(280),
+        label = "chatFade"
+    )
+
+    // 相册 / 文件选择（系统 Photo Picker 与 SAF，无需存储权限）
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) vm.addImageAttachment(uri) }
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) vm.addFileAttachment(uri) }
+
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        Toast.makeText(
+            context,
+            if (granted) "麦克风已授权（语音输入即将上线）" else "麦克风权限被拒绝",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+    val requestMic: () -> Unit = {
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
+            == android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            Toast.makeText(context, "语音输入开发中", Toast.LENGTH_SHORT).show()
+        } else {
+            micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -202,7 +248,7 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    ThermalPill(percent = ui.thermalPercent)
+                    ThinkingPill(level = ui.thinkingLevel, onChange = vm::setThinkingLevel)
                     IconButton(onClick = onOpenSearch) {
                         Icon(Icons.Outlined.Search, contentDescription = "搜索")
                     }
@@ -257,81 +303,6 @@ fun ChatScreen(
                                     clearOpen = true
                                 }
                             )
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "工具自检（开发用）",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                },
-                                enabled = false,
-                                onClick = {}
-                            )
-                            DropdownMenuItem(
-                                text = { Text("datetime") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("datetime", emptyMap())
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("calculator") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("calculator", mapOf("expression" to "1 + 2 * 3"))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("nonexistent_tool（失败路径）", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("nonexistent_tool", emptyMap())
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("file_read（高级，需启用）") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("file_read", mapOf("path" to "/proc/cpuinfo", "max_length" to 2000))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("phone_control（高级，需启用）") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool(
-                                        "phone_control",
-                                        mapOf("action" to "copy_clipboard", "target" to "Hello from AIBox")
-                                    )
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("device_info_advanced（高级）") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("device_info_advanced", emptyMap())
-                                }
-                            )
                         }
                     }
                 }
@@ -343,6 +314,7 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
+                .alpha(contentAlpha)
         ) {
             when {
                 !ui.hasModel -> {
@@ -423,7 +395,8 @@ fun ChatScreen(
                     tokensPerSecond = ui.tokensPerSecond,
                     contextUsed = ui.contextUsed,
                     contextMax = ui.contextMax,
-                    backendName = ui.backendName
+                    backendName = ui.backendName,
+                    thermalPercent = ui.thermalPercent
                 )
             }
 
@@ -431,9 +404,12 @@ fun ChatScreen(
             Composer(
                 streaming = ui.streaming,
                 enabled = ui.hasModel,
+                attachments = ui.pendingAttachments,
+                onRemoveAttachment = vm::removePendingAttachment,
                 onSend = { txt -> vm.send(txt); keyboard?.hide() },
                 onStop = { vm.stop() },
-                onOpenPlus = { sheetOpen = true }
+                onOpenPlus = { sheetOpen = true },
+                onMic = requestMic
             )
         }
     }
@@ -448,21 +424,36 @@ fun ChatScreen(
                     .navigationBarsPadding()
                     .padding(bottom = 16.dp)
             ) {
+                Text(
+                    "添加到当前消息",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                )
                 SheetAction(
                     icon = Icons.Outlined.Image,
                     title = "照片",
-                    subtitle = "从相册选择图片（附件能力开发中）"
+                    subtitle = "从相册选择图片，发给多模态模型"
                 ) {
                     sheetOpen = false
-                    Toast.makeText(context, "附件功能开发中", Toast.LENGTH_SHORT).show()
+                    photoPicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
                 }
                 SheetAction(
                     icon = Icons.Outlined.AttachFile,
                     title = "文件",
-                    subtitle = "导入文本 / PDF（附件能力开发中）"
+                    subtitle = "导入 txt / md / json / csv / 代码等文本文件"
                 ) {
                     sheetOpen = false
-                    Toast.makeText(context, "附件功能开发中", Toast.LENGTH_SHORT).show()
+                    filePicker.launch(
+                        arrayOf(
+                            "text/*",
+                            "application/json",
+                            "application/xml",
+                            "application/octet-stream"
+                        )
+                    )
                 }
             }
         }
@@ -594,13 +585,82 @@ private fun ThermalPill(percent: Int) {
     }
 }
 
+/**
+ * 顶栏的思考档位胶囊：点击切换 关 / 低 / 中 / 高。
+ * 该设置同时作用于本地模型（/think 与提示词）和云端模型（reasoning 参数）。
+ */
+@Composable
+private fun ThinkingPill(level: String, onChange: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val label = when (level) {
+        "off" -> "思考关"
+        "low" -> "思考·低"
+        "medium" -> "思考·中"
+        "high" -> "思考·高"
+        else -> "思考"
+    }
+    val active = level != "off"
+    Box {
+        Surface(
+            shape = CircleShape,
+            color = if (active) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.clickable { open = true }
+        ) {
+            Row(
+                Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Psychology,
+                    contentDescription = "思考强度",
+                    modifier = Modifier.size(14.dp),
+                    tint = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            listOf("off" to "关闭", "low" to "低", "medium" to "中", "high" to "高").forEach { (id, name) ->
+                DropdownMenuItem(
+                    text = { Text("思考 · $name") },
+                    leadingIcon = {
+                        if (level == id) {
+                            Icon(
+                                Icons.Outlined.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        } else {
+                            Spacer(Modifier.size(18.dp))
+                        }
+                    },
+                    onClick = {
+                        open = false
+                        onChange(id)
+                    }
+                )
+            }
+        }
+    }
+}
+
 /** 生成中的运行状态胶囊：贴在手感区上方，不占常驻空间。 */
 @Composable
 private fun StatusPill(
     tokensPerSecond: Float,
     contextUsed: Int,
     contextMax: Int,
-    backendName: String
+    backendName: String,
+    thermalPercent: Int = -1
 ) {
     Row(
         Modifier
@@ -637,6 +697,15 @@ private fun StatusPill(
                         "${formatCtx(contextUsed)}/${formatCtx(contextMax)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (thermalPercent >= 0) {
+                    Dot()
+                    Text(
+                        "$thermalPercent°",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (thermalPercent >= 85) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -825,6 +894,9 @@ private fun MessageItem(
 ) {
     val isUser = m.role == "user"
     var menuOpen by remember { mutableStateOf(false) }
+    val scale = LocalCornerScale.current
+    val bubbleRadius = (18 * scale).toInt().dp
+    val tailRadius = (5 * scale).toInt().coerceAtLeast(2).dp
 
     val longPress = Modifier.combinedClickable(
         onClick = {},
@@ -842,18 +914,28 @@ private fun MessageItem(
                 ) {
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp),
+                        shape = RoundedCornerShape(
+                            topStart = bubbleRadius, topEnd = bubbleRadius,
+                            bottomEnd = tailRadius, bottomStart = bubbleRadius
+                        ),
                         modifier = Modifier
                             .widthIn(max = 340.dp)
                             .then(longPress)
                     ) {
-                        Text(
-                            m.content,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            style = MaterialTheme.typography.bodyMedium,
-                            lineHeight = 22.sp
-                        )
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                            MessageAttachments(
+                                m.attachments,
+                                Modifier.padding(bottom = if (m.content.isBlank()) 0.dp else 8.dp)
+                            )
+                            if (m.content.isNotBlank()) {
+                                Text(
+                                    m.content,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    lineHeight = 22.sp
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -865,14 +947,12 @@ private fun MessageItem(
                         .fillMaxWidth()
                         .then(longPress)
                 ) {
-                    Text(
-                        m.content,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(if (animate) Modifier.animateContentSize(animationSpec = tween(120)) else Modifier),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.bodyLarge,
-                        lineHeight = 24.sp
+                    MarkdownText(
+                        text = m.content,
+                        modifier = if (animate) {
+                            Modifier.animateContentSize(animationSpec = tween(120))
+                        } else Modifier,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -882,18 +962,20 @@ private fun MessageItem(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 6.dp),
+                        shape = RoundedCornerShape(
+                            topStart = bubbleRadius, topEnd = bubbleRadius,
+                            bottomEnd = bubbleRadius, bottomStart = tailRadius
+                        ),
                         modifier = Modifier
                             .widthIn(max = 340.dp)
                             .then(longPress)
                     ) {
-                        Text(
-                            m.content,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.bodyMedium,
-                            lineHeight = 22.sp
-                        )
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                            MarkdownText(
+                                text = m.content,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }
@@ -973,36 +1055,44 @@ private fun MiniAction(icon: ImageVector, label: String, onClick: () -> Unit) {
 private fun Composer(
     streaming: Boolean,
     enabled: Boolean,
+    attachments: List<ChatAttachment>,
+    onRemoveAttachment: (Int) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onOpenPlus: () -> Unit,
+    onMic: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var input by rememberSaveable { mutableStateOf("") }
-    val context = LocalContext.current
-    val canSend = enabled && input.isNotBlank() && !streaming
+    val canSend = enabled && (input.isNotBlank() || attachments.isNotEmpty()) && !streaming
     val doSend: () -> Unit = {
         if (canSend) {
             onSend(input.trim())
             input = ""
         }
     }
+    val shapeRadius = (26 * LocalCornerScale.current).toInt().coerceAtLeast(10)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
             .navigationBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 14.dp)
     ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(shapeRadius.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 4.dp
     ) {
         Column(Modifier.padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 10.dp)) {
+            PendingAttachmentBar(
+                attachments = attachments,
+                onRemove = onRemoveAttachment,
+                modifier = Modifier.padding(end = 6.dp)
+            )
             BasicTextField(
                 value = input,
                 onValueChange = { input = it },
@@ -1021,7 +1111,7 @@ private fun Composer(
                     Box {
                         if (input.isEmpty()) {
                             Text(
-                                if (enabled) "发消息或按住说话" else "请先加载模型",
+                                if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
@@ -1053,9 +1143,7 @@ private fun Composer(
                     Modifier
                         .size(34.dp)
                         .clip(CircleShape)
-                        .clickable(enabled = enabled) {
-                            Toast.makeText(context, "语音输入开发中", Toast.LENGTH_SHORT).show()
-                        },
+                        .clickable(enabled = enabled, onClick = onMic),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(

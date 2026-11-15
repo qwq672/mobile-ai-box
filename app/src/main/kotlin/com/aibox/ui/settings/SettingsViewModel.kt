@@ -29,6 +29,11 @@ class SettingsViewModel : ViewModel() {
         val loggingEnabled: Boolean = true,
         val logFilePath: String? = null,
         val thinkingMode: Boolean = true,
+        // 思考档位："off" / "low" / "medium" / "high"
+        val thinkingLevel: String = "medium",
+        // 外观：自定义主色（"dynamic" 或 #RRGGBB）与全局圆角倍率
+        val accentColor: String = "dynamic",
+        val cornerScale: Float = 1f,
         // 消息呈现：true = 文档流（助手无气泡），false = 双方气泡
         val chatDocStyle: Boolean = true,
         // 设备状态采样周期（ms），设置页可切 1s/2s/5s
@@ -74,6 +79,21 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.thinkingMode.collectLatest {
                 _ui.value = _ui.value.copy(thinkingMode = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.thinkingLevel.collectLatest {
+                _ui.value = _ui.value.copy(thinkingLevel = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.accentColor.collectLatest {
+                _ui.value = _ui.value.copy(accentColor = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.cornerScale.collectLatest {
+                _ui.value = _ui.value.copy(cornerScale = it)
             }
         }
         viewModelScope.launch {
@@ -174,6 +194,18 @@ class SettingsViewModel : ViewModel() {
 
     fun onThinkingModeChange(on: Boolean) {
         viewModelScope.launch { container.settingsRepository.setThinkingMode(on) }
+    }
+
+    fun onThinkingLevelChange(level: String) {
+        viewModelScope.launch { container.settingsRepository.setThinkingLevel(level) }
+    }
+
+    fun onAccentColorChange(spec: String) {
+        viewModelScope.launch { container.settingsRepository.setAccentColor(spec) }
+    }
+
+    fun onCornerScaleChange(scale: Float) {
+        viewModelScope.launch { container.settingsRepository.setCornerScale(scale) }
     }
 
     fun onChatDocStyleChange(on: Boolean) {

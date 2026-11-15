@@ -40,7 +40,13 @@ class SettingsRepository(private val context: Context) {
         val DYNAMIC_COLOR   = booleanPreferencesKey("dynamic_color")
         val DARK_THEME      = stringPreferencesKey("dark_theme") // "system" / "light" / "dark"
         val LOGGING_ENABLED = booleanPreferencesKey("logging_enabled")
-        // 思考模式开关（默认 true）
+        // 自定义主色（"dynamic" = 跟随系统壁纸；其余为 #RRGGBB）
+        val ACCENT_COLOR    = stringPreferencesKey("accent_color")
+        // 全局圆角倍率（0.5 = 更方正，1.0 = 默认，1.6 = 更圆润）
+        val CORNER_SCALE    = stringPreferencesKey("corner_scale")
+        // 思考强度："off" / "low" / "medium" / "high"
+        val THINKING_LEVEL  = stringPreferencesKey("thinking_level")
+        // 思考模式开关（旧字段，保留兼容：thinking_level 非 off 时视为 true）
         val THINKING_MODE   = booleanPreferencesKey("thinking_mode")
         // B3 WebSearchTool：第三方搜索引擎 API key（用户在 Settings 配；空表示未配）
         val TAVILY_API_KEY  = stringPreferencesKey("tavily_api_key")
@@ -75,7 +81,18 @@ class SettingsRepository(private val context: Context) {
     val downloadSource: Flow<String> = context.dataStore.data.map { it[Keys.DOWNLOAD_SOURCE] ?: "hf_mirror" }
     val language: Flow<String> = context.dataStore.data.map { it[Keys.LANGUAGE] ?: "zh" }
     val lastModelId: Flow<Long> = context.dataStore.data.map { (it[Keys.LAST_MODEL_ID] ?: -1L).toLong() }
-    val thinkingMode: Flow<Boolean> = context.dataStore.data.map { it[Keys.THINKING_MODE] ?: true }
+    /** 思考强度："off" / "low" / "medium" / "high"。旧数据回退到 thinking_mode 开关。 */
+    val thinkingLevel: Flow<String> = context.dataStore.data.map { p ->
+        p[Keys.THINKING_LEVEL] ?: if (p[Keys.THINKING_MODE] == false) "off" else "medium"
+    }
+    val thinkingMode: Flow<Boolean> = thinkingLevel.map { it != "off" }
+
+    /** 自定义主色："dynamic" 表示跟随系统壁纸，其余为 #RRGGBB。 */
+    val accentColor: Flow<String> = context.dataStore.data.map { it[Keys.ACCENT_COLOR] ?: "dynamic" }
+    /** 全局圆角倍率（0.5 ~ 1.6），默认 1.0。 */
+    val cornerScale: Flow<Float> = context.dataStore.data.map {
+        (it[Keys.CORNER_SCALE] ?: "1.0").toFloatOrNull()?.coerceIn(0.5f, 1.6f) ?: 1.0f
+    }
 
     /** 聊天消息呈现：true = 文档流（助手无气泡），false = 双方气泡 */
     val chatDocStyle: Flow<Boolean> = context.dataStore.data.map { it[Keys.CHAT_DOC_STYLE] ?: true }
@@ -143,7 +160,23 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.LOGGING_ENABLED] = on }
 
     suspend fun setThinkingMode(on: Boolean) =
-        context.dataStore.edit { it[Keys.THINKING_MODE] = on }
+        context.dataStore.edit {
+            it[Keys.THINKING_MODE] = on
+            it[Keys.THINKING_LEVEL] = if (on) "medium" else "off"
+        }
+
+    /** 设置思考档位："off" / "low" / "medium" / "high"。 */
+    suspend fun setThinkingLevel(level: String) =
+        context.dataStore.edit {
+            it[Keys.THINKING_LEVEL] = level
+            it[Keys.THINKING_MODE] = level != "off"
+        }
+
+    suspend fun setAccentColor(hexOrDynamic: String) =
+        context.dataStore.edit { it[Keys.ACCENT_COLOR] = hexOrDynamic }
+
+    suspend fun setCornerScale(scale: Float) =
+        context.dataStore.edit { it[Keys.CORNER_SCALE] = scale.coerceIn(0.5f, 1.6f).toString() }
 
     suspend fun setChatDocStyle(on: Boolean) =
         context.dataStore.edit { it[Keys.CHAT_DOC_STYLE] = on }

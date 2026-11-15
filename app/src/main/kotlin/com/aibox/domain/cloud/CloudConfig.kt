@@ -29,12 +29,14 @@ data class CloudConfig(
     }
 }
 
-/** 云端对话消息（内部使用，比 ChatMsg 多带 tool_calls / tool_call_id）。 */
+/** 云端对话消息（内部使用，比 ChatMsg 多带 tool_calls / tool_call_id / 多模态图片）。 */
 data class CloudMsg(
     val role: String,
     val content: String,
     val toolCalls: List<CloudToolCall> = emptyList(),
-    val toolCallId: String? = null
+    val toolCallId: String? = null,
+    /** data URL（data:image/png;base64,...）列表，供多模态模型使用。 */
+    val images: List<String> = emptyList()
 )
 
 /** 模型返回的一次工具调用。 */

@@ -1,5 +1,6 @@
 package com.aibox.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -35,7 +36,10 @@ data class MessageEntity(
     val role: String,
     val content: String,
     val ts: Long,
-    val tokensPerSecond: Float
+    val tokensPerSecond: Float,
+    /** 附件 JSON（[com.aibox.data.model.ChatAttachment] 列表），空串表示无附件。 */
+    @ColumnInfo(defaultValue = "")
+    val attachmentsJson: String = ""
 )
 
 /**

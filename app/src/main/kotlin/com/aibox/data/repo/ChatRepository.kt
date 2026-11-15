@@ -7,6 +7,8 @@ import com.aibox.data.db.SessionEntity
 import com.aibox.data.model.ChatMessage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 /**
  * 聊天会话仓库：管理历史话题 + 消息持久化。
@@ -114,11 +116,22 @@ data class SearchResult(
 )
 
 // ---- mapping ----
+private val attachmentJson = kotlinx.serialization.json.Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
+
 private fun MessageEntity.toChatMessage() = ChatMessage(
     id = id, sessionId = sessionId, role = role, content = content,
-    ts = ts, tokensPerSecond = tokensPerSecond
+    ts = ts, tokensPerSecond = tokensPerSecond,
+    attachments = if (attachmentsJson.isBlank()) emptyList()
+    else runCatching {
+        attachmentJson.decodeFromString<List<com.aibox.data.model.ChatAttachment>>(attachmentsJson)
+    }.getOrDefault(emptyList())
 )
 private fun ChatMessage.toEntity(sid: Long) = MessageEntity(
     id = id, sessionId = sid, role = role, content = content,
-    ts = ts, tokensPerSecond = tokensPerSecond
+    ts = ts, tokensPerSecond = tokensPerSecond,
+    attachmentsJson = if (attachments.isEmpty()) ""
+    else attachmentJson.encodeToString(attachments)
 )

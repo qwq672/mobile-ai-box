@@ -292,7 +292,14 @@ fun AppNav() {
                         }
                     )
                 }
-                composable(Dest.Chat.route) { backStackEntry ->
+                composable(
+                    Dest.Chat.route,
+                    // 聊天页用纯渐显，避免横向滑动 + 页面自身渐显叠加造成"闪"
+                    enterTransition = { fadeIn(tween(280)) },
+                    exitTransition = { fadeOut(tween(180)) },
+                    popEnterTransition = { fadeIn(tween(240)) },
+                    popExitTransition = { fadeOut(tween(180)) }
+                ) { backStackEntry ->
                     val sid = backStackEntry.savedStateHandle
                         .get<Long>("sessionId") ?: 0L
                     ChatScreen(

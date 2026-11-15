@@ -55,7 +55,8 @@ class OpenAiCompatibleClient {
         config: CloudConfig,
         messages: List<CloudMsg>,
         tools: List<ToolFunctionSchema>,
-        onToken: (String) -> Unit
+        onToken: (String) -> Unit,
+        reasoningEffort: String? = null
     ): Result<CloudTurn> = withContext(Dispatchers.IO) {
         runCatching {
             val url = config.baseUrl.trimEnd('/') + "/chat/completions"
@@ -64,6 +65,8 @@ class OpenAiCompatibleClient {
                 put("stream", true)
                 put("temperature", config.temperature.toDouble())
                 if (config.maxTokens > 0) put("max_tokens", config.maxTokens)
+                val effort = normalizeEffort(config.model, reasoningEffort)
+                if (effort != null) put("reasoning_effort", effort)
                 putJsonArray("messages") {
                     messages.forEach { m -> add(msgToJson(m)) }
                 }
@@ -169,7 +172,25 @@ class OpenAiCompatibleClient {
 
     private fun msgToJson(m: CloudMsg) = buildJsonObject {
         put("role", m.role)
-        put("content", m.content)
+        if (m.images.isEmpty()) {
+            put("content", m.content)
+        } else {
+            // 多模态：content 为 parts 数组，文本 + 图片 data URL
+            putJsonArray("content") {
+                if (m.content.isNotBlank()) {
+                    addJsonObject {
+                        put("type", "text")
+                        put("text", m.content)
+                    }
+                }
+                m.images.forEach { dataUrl ->
+                    addJsonObject {
+                        put("type", "image_url")
+                        putJsonObject("image_url") { put("url", dataUrl) }
+                    }
+                }
+            }
+        }
         if (m.toolCallId != null) put("tool_call_id", m.toolCallId)
         if (m.toolCalls.isNotEmpty()) {
             putJsonArray("tool_calls") {
@@ -185,6 +206,20 @@ class OpenAiCompatibleClient {
                 }
             }
         }
+    }
+
+    /**
+     * 只对明确支持 reasoning_effort 的模型下发该参数，避免第三方网关因未知字段报 400。
+     * off → null；medium → null（服务端默认即中等）。
+     */
+    private fun normalizeEffort(model: String, effort: String?): String? {
+        val e = effort?.lowercase() ?: return null
+        if (e != "off" && e != "low" && e != "high") return null
+        val m = model.lowercase()
+        val capable = m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") ||
+            m.contains("gpt-5") || m.contains("reason")
+        if (!capable) return null
+        return if (e == "off") "minimal" else e
     }
 
     private class ToolCallAccumulator {

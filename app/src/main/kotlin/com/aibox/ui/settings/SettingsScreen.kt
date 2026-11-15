@@ -1,8 +1,17 @@
 package com.aibox.ui.settings
 
 import android.widget.Toast
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -12,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Bolt
@@ -22,6 +32,7 @@ import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FormatAlignLeft
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Palette
@@ -51,11 +62,16 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -142,6 +158,75 @@ fun SettingsScreen(
                                     ) { Text(label) }
                                 }
                             }
+                        }
+                        HorizontalDivider()
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(
+                                "主色调",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                if (ui.dynamicColor) "动态取色已开启，主色调将在关闭动态取色后生效"
+                                else "选一个喜欢的强调色，界面会按它推导整套配色",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.size(10.dp))
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val presets = listOf(
+                                    "dynamic" to null,
+                                    "默认" to "#6750A4",
+                                    "蓝" to "#3D6DE0",
+                                    "青" to "#00897B",
+                                    "绿" to "#2E7D32",
+                                    "橙" to "#F57C00",
+                                    "玫红" to "#D81B60"
+                                )
+                                presets.forEach { (label, hex) ->
+                                    val selected = ui.accentColor == (hex ?: "dynamic")
+                                    val swatchColor = if (hex == null) MaterialTheme.colorScheme.surfaceContainerHighest
+                                    else Color(android.graphics.Color.parseColor(hex))
+                                    Box(
+                                        Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .background(swatchColor)
+                                            .border(
+                                                width = if (selected) 2.dp else 1.dp,
+                                                color = if (selected) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.outlineVariant,
+                                                shape = CircleShape
+                                            )
+                                            .clickable { vm.onAccentColorChange(hex ?: "dynamic") },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (hex == null) {
+                                            Icon(
+                                                Icons.Outlined.Palette,
+                                                contentDescription = "跟随系统",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            SliderWithLabel(
+                                title = "圆角大小",
+                                value = ui.cornerScale,
+                                valueRange = 0.5f..1.6f,
+                                valueText = "%.1fx".format(ui.cornerScale),
+                                onValueChange = vm::onCornerScaleChange
+                            )
+                            HelpText("统一调整气泡、卡片、输入框的圆角；0.5x 更方正，1.6x 更圆润。")
                         }
                     }
                 }
@@ -514,15 +599,43 @@ fun SettingsScreen(
                             shape = MaterialTheme.shapes.small
                         )
                         HorizontalDivider()
-                        ListItem(
-                            headlineContent = { Text("思考模式") },
-                            supportingContent = { Text(
-                                "开启后默认让模型进入思考模式（Qwen3 /think 标志）。" +
-                                "支持的模型会先输出思考过程再回答。" +
-                                "关闭则用 /no_think 标志强制不思考，更快但质量略降。") },
-                            trailingContent = { Switch(checked = ui.thinkingMode, onCheckedChange = vm::onThinkingModeChange) },
-                            leadingContent = { Icon(Icons.Outlined.Psychology, contentDescription = null, modifier = Modifier.size(24.dp)) }
-                        )
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Outlined.Psychology,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(Modifier.size(12.dp))
+                                Text(
+                                    "思考强度",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Spacer(Modifier.size(4.dp))
+                            Text(
+                                "关闭思考更快；低/中/高会让模型在回答前先推理（本地 /think 与云端 reasoning 参数同时生效）。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                val opts = listOf(
+                                    "off" to "关闭",
+                                    "low" to "低",
+                                    "medium" to "中",
+                                    "high" to "高"
+                                )
+                                opts.forEachIndexed { i, (id, label) ->
+                                    SegmentedButton(
+                                        selected = ui.thinkingLevel == id,
+                                        onClick = { vm.onThinkingLevelChange(id) },
+                                        shape = SegmentedButtonDefaults.itemShape(i, opts.size)
+                                    ) { Text(label) }
+                                }
+                            }
+                        }
                         HorizontalDivider()
                         ListItem(
                             headlineContent = { Text("文档流消息样式") },
@@ -592,6 +705,12 @@ fun SettingsScreen(
                         }
                     }
                 }
+            }
+
+            /* ============== 权限 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Lock, title = "权限")
+                PermissionCard()
             }
 
             /* ============== 日志 ============== */
@@ -816,6 +935,96 @@ private fun KvQuantSelector(selected: String, onSelect: (String) -> Unit) {
                 onClick = { onSelect(id) },
                 shape = SegmentedButtonDefaults.itemShape(i, opts.size)
             ) { Text(label) }
+        }
+    }
+}
+
+/* ---------------- 运行时权限 ---------------- */
+
+private data class PermissionItem(val permission: String, val title: String, val desc: String)
+
+/**
+ * 权限面板：列出聊天 / 多模态会用到的运行时权限，展示授权状态并支持按需申请。
+ *
+ * 相册走系统 Photo Picker 时不需要存储权限，但部分 ROM 仍会走 READ_MEDIA_IMAGES，
+ * 所以这里也一并列出，便于用户提前授权。
+ */
+@Composable
+private fun PermissionCard() {
+    val context = LocalContext.current
+    val items = remember {
+        buildList {
+            add(PermissionItem(Manifest.permission.RECORD_AUDIO, "麦克风", "语音输入 / 语音对话"))
+            add(PermissionItem(Manifest.permission.CAMERA, "相机", "拍照后直接发送给模型"))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(PermissionItem(Manifest.permission.POST_NOTIFICATIONS, "通知", "生成完成 / 下载完成的提醒"))
+                add(PermissionItem(Manifest.permission.READ_MEDIA_IMAGES, "图片", "从相册选择图片作为输入"))
+            }
+        }
+    }
+    var granted by remember { mutableStateOf(setOf<String>()) }
+
+    fun refresh() {
+        granted = items.map { it.permission }
+            .filter { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+            .toSet()
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { refresh() }
+
+    LaunchedEffect(Unit) { refresh() }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(Modifier.padding(vertical = 8.dp)) {
+            items.forEach { item ->
+                val ok = item.permission in granted
+                ListItem(
+                    leadingContent = {
+                        Icon(
+                            if (ok) Icons.Outlined.Lock else Icons.Outlined.Warning,
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                            tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    headlineContent = { Text(item.title) },
+                    supportingContent = { Text(item.desc) },
+                    trailingContent = {
+                        Text(
+                            if (ok) "已授权" else "去授权",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                        )
+                    },
+                    modifier = Modifier.clickable(enabled = !ok) {
+                        launcher.launch(arrayOf(item.permission))
+                    }
+                )
+                HorizontalDivider()
+            }
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        val missing = items.map { it.permission }.filterNot { it in granted }
+                        if (missing.isEmpty()) {
+                            Toast.makeText(context, "全部权限已授权", Toast.LENGTH_SHORT).show()
+                        } else {
+                            launcher.launch(missing.toTypedArray())
+                        }
+                    }
+                ) {
+                    Text("申请缺失权限")
+                }
+            }
         }
     }
 }

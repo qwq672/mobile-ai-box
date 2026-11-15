@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibox.AIBoxApp
+import com.aibox.data.attach.AttachmentStore
+import com.aibox.data.model.ChatAttachment
 import com.aibox.data.model.ChatMessage
 import com.aibox.data.repo.ChatRepository
 import com.aibox.data.repo.SettingsRepository
@@ -62,6 +64,10 @@ class ChatViewModel : ViewModel() {
         val sessionTitle: String = "",
         /** 消息呈现：true = 文档流（助手无气泡），false = 双方气泡 */
         val docStyle: Boolean = true,
+        /** 待发送附件（图片 / 文件），发送后清空 */
+        val pendingAttachments: List<ChatAttachment> = emptyList(),
+        /** 思考档位："off" / "low" / "medium" / "high" */
+        val thinkingLevel: String = "medium",
         // B6 工具调用 UI: 活跃工具调用列表 + 当前待确认（若有）
         val toolInvocations: List<ToolInvocation> = emptyList(),
         val pendingToolConfirmation: PendingToolConfirmation? = null
@@ -79,6 +85,11 @@ class ChatViewModel : ViewModel() {
         }
         viewModelScope.launch {
             settings.thinkingMode.collectLatest { thinkingMode = it }
+        }
+        viewModelScope.launch {
+            settings.thinkingLevel.collectLatest { level ->
+                _ui.value = _ui.value.copy(thinkingLevel = level)
+            }
         }
         viewModelScope.launch {
             settings.chatDocStyle.collectLatest { on ->
@@ -148,7 +159,8 @@ class ChatViewModel : ViewModel() {
 
     fun send(text: String) {
         if (_ui.value.streaming) return
-        if (text.isBlank()) return
+        val attachments = _ui.value.pendingAttachments
+        if (text.isBlank() && attachments.isEmpty()) return
         if (!_ui.value.hasModel) {
             _ui.value = _ui.value.copy(errorMessage = "尚未加载模型，请先到「模型」页加载")
             return
@@ -158,25 +170,26 @@ class ChatViewModel : ViewModel() {
         if (sid == 0L) {
             viewModelScope.launch {
                 val modelPath = engine.state.value.modelPath
-                val title = text.take(20).ifBlank { "新话题" }
+                val title = text.take(20).ifBlank { attachments.firstOrNull()?.name ?: "新话题" }
                 sid = chatRepo.createSession(title, modelPath)
                 _ui.value = _ui.value.copy(sessionId = sid, sessionTitle = title)
-                continueSend(text, sid)
+                continueSend(text, sid, attachments)
             }
         } else {
-            continueSend(text, sid)
+            continueSend(text, sid, attachments)
         }
     }
 
-    private fun continueSend(text: String, sid: Long) {
-        val msg = ChatMessage(role = "user", content = text, sessionId = sid)
+    private fun continueSend(text: String, sid: Long, attachments: List<ChatAttachment> = emptyList()) {
+        val msg = ChatMessage(role = "user", content = text, sessionId = sid, attachments = attachments)
         _ui.value = _ui.value.copy(
             messages = _ui.value.messages + msg,
             streaming = true,
             currentStream = "",
-            errorMessage = null
+            errorMessage = null,
+            pendingAttachments = emptyList()
         )
-        LogSystem.info("aibox.ui.chat", "ChatViewModel: send ${text.length} chars (sid=$sid)")
+        LogSystem.info("aibox.ui.chat", "ChatViewModel: send ${text.length} chars, ${attachments.size} attachments (sid=$sid)")
 
         viewModelScope.launch {
             runCatching { chatRepo.addMessage(sid, msg) }
@@ -440,18 +453,84 @@ class ChatViewModel : ViewModel() {
 
     /**
      * 把对话历史转换成 NativeBridge.ChatMsg 数组给 native 端用模型内置 chat template 格式化。
-     * - 如果 systemPrompt 非空，加一条 system message
-     * - 然后 user/assistant 消息按顺序加入
-     * - thinkingMode 由 native 端在 system message 末尾追加 /think 标志
+     * - systemPrompt 非空时作为 system message；思考开启时即使为空也补一条，
+     *   以便 native 端在 system message 末尾追加 /think 标志
+     * - 文本附件正文拼进 user content；图片通过 [NativeBridge.ChatMsg.images] 交给云端多模态
+     * - 思考档位 low / high 追加提示词，作为本地与云端的通用兜底
      */
     private fun buildChatMessages(msgs: List<ChatMessage>): List<NativeBridge.ChatMsg> {
         val list = mutableListOf<NativeBridge.ChatMsg>()
-        if (systemPrompt.isNotBlank()) {
-            list.add(NativeBridge.ChatMsg(role = "system", content = systemPrompt.trim()))
+        val levelHint = when (_ui.value.thinkingLevel) {
+            "low" -> "请先做简短思考（1~3 句）再给出结论，保持简洁。"
+            "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
+            else -> ""
+        }
+        val sys = listOf(systemPrompt.trim(), levelHint)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        if (sys.isNotBlank() || _ui.value.thinkingLevel != "off") {
+            // native 端只在 system message 非空时追加 /think 或 /no_think，
+            // 所以关闭思考时也要给一条占位 system，确保 /no_think 能注入。
+            list.add(NativeBridge.ChatMsg(role = "system", content = sys.ifBlank { " " }))
         }
         for (m in msgs) {
-            list.add(NativeBridge.ChatMsg(role = m.role, content = m.content))
+            val textParts = m.attachments.filter { it.kind == "text" && it.text.isNotBlank() }
+            val images = m.attachments.filter { it.kind == "image" }.map { it.uri }
+            val content = if (textParts.isEmpty() && images.isEmpty()) m.content else buildString {
+                append(m.content)
+                textParts.forEach { a ->
+                    if (isNotEmpty()) append("\n\n")
+                    append("[附件：${a.name}]\n")
+                    append(a.text)
+                }
+                if (images.isNotEmpty()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append("[用户附带了 ${images.size} 张图片]")
+                }
+            }
+            list.add(NativeBridge.ChatMsg(role = m.role, content = content, images = images))
         }
         return list
+    }
+
+    // ---------------- 附件 ----------------
+
+    fun addImageAttachment(uri: android.net.Uri) {
+        viewModelScope.launch {
+            when (val r = AttachmentStore.importImage(AIBoxApp.instance, uri)) {
+                is AttachmentStore.Result.Ok ->
+                    _ui.value = _ui.value.copy(pendingAttachments = _ui.value.pendingAttachments + r.attachment)
+                is AttachmentStore.Result.Error ->
+                    _ui.value = _ui.value.copy(errorMessage = r.message)
+            }
+        }
+    }
+
+    fun addFileAttachment(uri: android.net.Uri) {
+        viewModelScope.launch {
+            when (val r = AttachmentStore.importFile(AIBoxApp.instance, uri)) {
+                is AttachmentStore.Result.Ok ->
+                    _ui.value = _ui.value.copy(pendingAttachments = _ui.value.pendingAttachments + r.attachment)
+                is AttachmentStore.Result.Error ->
+                    _ui.value = _ui.value.copy(errorMessage = r.message)
+            }
+        }
+    }
+
+    fun removePendingAttachment(index: Int) {
+        val list = _ui.value.pendingAttachments.toMutableList()
+        if (index in list.indices) {
+            list.removeAt(index)
+            _ui.value = _ui.value.copy(pendingAttachments = list)
+        }
+    }
+
+    fun clearPendingAttachments() {
+        _ui.value = _ui.value.copy(pendingAttachments = emptyList())
+    }
+
+    /** 快捷切换思考档位（顶栏菜单里用）。 */
+    fun setThinkingLevel(level: String) {
+        viewModelScope.launch { settings.setThinkingLevel(level) }
     }
 }

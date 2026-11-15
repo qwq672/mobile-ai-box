@@ -15,7 +15,9 @@ import com.aibox.domain.tool.ToolRegistry
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -76,6 +78,7 @@ class CloudChatService(
             onStop("cloud_not_configured")
             return
         }
+        val thinkingLevel = runCatching { settings.thinkingLevel.first() }.getOrDefault("medium")
 
         val tools = runCatching { toolRegistry.getActiveToolsForLLM() }
             .onFailure { LogSystem.warn(TAG, "读取工具列表失败: ${it.message}") }
@@ -85,14 +88,19 @@ class CloudChatService(
             deviceInfo = deviceInfo()
         )
 
-        val history = messages.map { CloudMsg(it.role, it.content) }.toMutableList()
+        // 附件：图片转 data URL（多模态），文本附件已在 Kotlin 侧拼进 content
+        val history = withContext(Dispatchers.IO) {
+            messages.map { CloudMsg(it.role, it.content, images = it.images.mapNotNull(::toDataUrl)) }
+        }.toMutableList()
+        applyThinkingHint(history, thinkingLevel)
         var rounds = 0
 
         while (rounds < MAX_TOOL_ROUNDS) {
-            val turn = client.chat(config, history, tools, onToken).getOrElse { e ->
-                onStop("cloud_error: ${e.message ?: e.javaClass.simpleName}")
-                return
-            }
+            val turn = client.chat(config, history, tools, onToken, reasoningEffort = thinkingLevel)
+                .getOrElse { e ->
+                    onStop("cloud_error: ${e.message ?: e.javaClass.simpleName}")
+                    return
+                }
 
             if (turn.toolCalls.isEmpty()) {
                 onStop("eos")
@@ -117,6 +125,55 @@ class CloudChatService(
 
         LogSystem.warn(TAG, "达到工具调用轮次上限 $MAX_TOOL_ROUNDS，强制结束")
         onStop("max_tool_rounds")
+    }
+
+    // ---------- 思考档位 & 多模态 ----------
+
+    /**
+     * 把思考强度写进 system message，作为跨 provider 通用的兜底
+     * （reasoning_effort 只对部分模型下发）。
+     */
+    private fun applyThinkingHint(history: MutableList<CloudMsg>, level: String) {
+        val hint = when (level) {
+            "off" -> "请直接给出答案，不要展示推理过程。"
+            "low" -> "请先做简短思考（1~3 句）再给出结论，保持简洁。"
+            "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
+            else -> null
+        }
+        if (hint == null) return
+        val idx = history.indexOfFirst { it.role == "system" }
+        if (idx >= 0) {
+            history[idx] = history[idx].copy(
+                content = history[idx].content.trimEnd() + "\n\n" + hint
+            )
+        } else {
+            history.add(0, CloudMsg(role = "system", content = hint))
+        }
+    }
+
+    /** 本地文件 / content URI → data URL；已是 data:/http(s) 直接返回。 */
+    private fun toDataUrl(pathOrUri: String): String? {
+        if (pathOrUri.isBlank()) return null
+        if (pathOrUri.startsWith("data:") || pathOrUri.startsWith("http")) return pathOrUri
+        val bytes = runCatching {
+            val file = java.io.File(pathOrUri)
+            if (file.exists()) {
+                if (file.length() > MAX_IMAGE_BYTES) return null
+                file.readBytes()
+            } else {
+                val uri = android.net.Uri.parse(pathOrUri)
+                appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }
+        }.getOrNull() ?: return null
+        if (bytes.isEmpty() || bytes.size > MAX_IMAGE_BYTES) return null
+        val mime = when {
+            pathOrUri.endsWith(".png", true) -> "image/png"
+            pathOrUri.endsWith(".webp", true) -> "image/webp"
+            pathOrUri.endsWith(".gif", true) -> "image/gif"
+            else -> "image/jpeg"
+        }
+        val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        return "data:$mime;base64,$b64"
     }
 
     // ---------- 参数 & 设备信息 ----------
@@ -169,5 +226,6 @@ class CloudChatService(
     private companion object {
         const val TAG = "aibox.cloud"
         const val MAX_TOOL_ROUNDS = 4
+        const val MAX_IMAGE_BYTES = 16 * 1024 * 1024
     }
 }
