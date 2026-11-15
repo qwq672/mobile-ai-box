@@ -162,7 +162,7 @@ fun BenchmarkScreen(
             // ===== Section 3: 测试矩阵（SettingsListRenderer） =====
             item {
                 UnifiedSection(title = "测试矩阵") {
-                    val fields = buildMatrixSettings()
+                    val fields = buildMatrixSettings(ui.preciseCurrentConfig)
                     val currentValues = buildCurrentValues(ui)
                     SettingsListRenderer(
                         fields = fields,
@@ -197,7 +197,11 @@ fun BenchmarkScreen(
                             )
                             if (!ui.running) {
                                 Text(
-                                    text = "按上方矩阵执行 ${describeMatrix(ui.matrix)}",
+                                    text = if (ui.preciseCurrentConfig) {
+                                        "以当前配置精准测试（PP=512 · TG=128 · 至少 5 次）"
+                                    } else {
+                                        "按上方矩阵执行 ${describeMatrix(ui.matrix)}"
+                                    },
                                     style = Type.bodySmall,
                                     color = Colors.onPrimaryContainer
                                 )
@@ -528,7 +532,7 @@ private fun MetricCard(title: String, lines: List<String>) {
  *
  * 字段 key 与 [handleSettingChange] 的 dispatch 表一一对应。
  */
-private fun buildMatrixSettings(): List<SettingField> = listOf(
+private fun buildMatrixSettings(precise: Boolean): List<SettingField> = listOf(
     SettingField(
         key = "benchmark.group.matrix",
         type = FieldType.GROUP,
@@ -536,11 +540,19 @@ private fun buildMatrixSettings(): List<SettingField> = listOf(
         defaultValue = ""
     ),
     SettingField(
+        key = "benchmark.preciseCurrentConfig",
+        type = FieldType.SWITCH,
+        title = "以当前配置进行精准测试",
+        description = "读取「设置 → 推理」里的线程 / KV 量化 / 上下文 / batch，只跑一组中型负载并至少重复 5 次；开启后忽略下方矩阵与覆盖项",
+        defaultValue = false
+    ),
+    SettingField(
         key = "benchmark.matrix",
         type = FieldType.DROPDOWN,
         title = "测试矩阵",
         description = "BASIC：3 档负载 · THREAD_SCAN：1/2/4/6 线程 · KV_QUANT_SCAN：F16/Q8_0/Q4_0 · COMPARISON：跨后端对比 · COLD_START / MULTI_TURN / SMOOTHNESS：高级场景",
         defaultValue = "BASIC",
+        enabled = !precise,
         options = listOf(
             SettingOption("BASIC", "基础三档（PP=64/512/1024）"),
             SettingOption("THREAD_SCAN", "线程扫描（1/2/4/6）"),
@@ -579,6 +591,7 @@ private fun buildMatrixSettings(): List<SettingField> = listOf(
         title = "线程覆盖",
         description = "覆盖 config.threads；Auto = 由后端按大核数自动决定",
         defaultValue = "auto",
+        enabled = !precise,
         options = listOf(
             SettingOption("auto", "Auto（后端决定）"),
             SettingOption("1", "1 线程"),
@@ -593,6 +606,7 @@ private fun buildMatrixSettings(): List<SettingField> = listOf(
         title = "KV 量化覆盖",
         description = "覆盖 config.kvQuant；默认 = 不覆盖（按基线配置）",
         defaultValue = "default",
+        enabled = !precise,
         options = listOf(
             SettingOption("default", "默认（按基线）"),
             SettingOption("F16", "F16（最高精度）"),
@@ -608,6 +622,7 @@ private fun buildMatrixSettings(): List<SettingField> = listOf(
  * key 必须与 [buildMatrixSettings] 中字段的 key 完全一致。
  */
 private fun buildCurrentValues(ui: BenchmarkViewModel.UiState): Map<String, Any> = mapOf(
+    "benchmark.preciseCurrentConfig" to ui.preciseCurrentConfig,
     "benchmark.matrix" to ui.matrix.name,
     "benchmark.repCount" to ui.repCount.toFloat(),
     "benchmark.warmup" to ui.warmup.toFloat(),
@@ -620,6 +635,7 @@ private fun buildCurrentValues(ui: BenchmarkViewModel.UiState): Map<String, Any>
  */
 private fun handleSettingChange(key: String, value: Any, vm: BenchmarkViewModel) {
     when (key) {
+        "benchmark.preciseCurrentConfig" -> vm.setPreciseCurrentConfig(value as? Boolean ?: false)
         "benchmark.matrix" -> {
             val m = runCatching { BenchmarkViewModel.Matrix.valueOf(value.toString()) }.getOrNull()
             if (m != null) vm.selectMatrix(m)

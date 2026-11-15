@@ -269,6 +269,16 @@ class AppContainer(context: Context) {
                 }
             }
         }
+        // 把已安装的后端插件（LiteRT / ONNX / MNN…）绑定起来。
+        // 模块页只负责发现，不在这里自动绑定的话，用户装了插件仍会被告知「未安装」。
+        appScope.launch {
+            runCatching { pluginManager.syncInstalledBackendPlugins() }
+                .onFailure {
+                    com.aibox.util.log.LogSystem.warn(
+                        "aibox.di", "syncInstalledBackendPlugins failed: ${it.message}", it
+                    )
+                }
+        }
     }
 
     /**

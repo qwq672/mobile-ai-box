@@ -79,7 +79,7 @@ object ModelFormatRouter {
                 val name = availableBackends.firstOrNull { it.contains("litert", ignoreCase = true) }
                 if (name != null) RouteResult.V2Path(format, name)
                 else RouteResult.NoBackend(format, FrameworkId.LITERT,
-                    "未安装 LiteRT 推理插件,请到「模块管理」安装 com.aibox.litert.backend")
+                    "LiteRT 插件未就绪：可能尚未安装，或已安装但绑定失败（查看日志中的 auto-enable 记录）")
             }
             FrameworkId.ONNX -> {
                 val name = availableBackends.firstOrNull { it.contains("onnx", ignoreCase = true) }

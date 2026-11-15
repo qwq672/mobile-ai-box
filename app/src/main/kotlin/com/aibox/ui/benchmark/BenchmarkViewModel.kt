@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -70,6 +71,8 @@ class BenchmarkViewModel : ViewModel() {
         val matrix: Matrix = Matrix.BASIC,
         val repCount: Int = 3,
         val warmup: Int = 1,
+        /** 以「设置 → 推理」里的当前配置跑单组负载，并提高重复次数，不扫描矩阵。 */
+        val preciseCurrentConfig: Boolean = false,
         val threadsOverride: Int? = null,
         val kvQuantOverride: QuantType? = null,
         val running: Boolean = false,
@@ -99,9 +102,13 @@ class BenchmarkViewModel : ViewModel() {
                 _ui.value = _ui.value.copy(models = list)
             }
         }
-        // 一次性加载已注册后端列表
+        // 先同步一次已安装插件，否则 LiteRT/ONNX 后端不会出现在基准列表中
         viewModelScope.launch {
-            val list = container.backendManager.listBackends()
+            val list = withContext(Dispatchers.IO) {
+                runCatching { container.pluginManager.syncInstalledBackendPlugins() }
+                    .onFailure { LogSystem.warn("aibox.ui.benchmark", "sync plugins failed: ${it.message}", it) }
+                container.backendManager.listBackends()
+            }
             _ui.value = _ui.value.copy(backends = list)
             // 默认全选
             if (_ui.value.selectedBackendNames.isEmpty() && list.isNotEmpty()) {
@@ -145,6 +152,10 @@ class BenchmarkViewModel : ViewModel() {
 
     fun setWarmup(value: Int) {
         _ui.value = _ui.value.copy(warmup = value.coerceIn(0, 5))
+    }
+
+    fun setPreciseCurrentConfig(value: Boolean) {
+        _ui.value = _ui.value.copy(preciseCurrentConfig = value)
     }
 
     fun setThreadsOverride(value: Int?) {
@@ -197,7 +208,9 @@ class BenchmarkViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                when (_ui.value.matrix) {
+                if (_ui.value.preciseCurrentConfig) {
+                    runBasicMatrix(modelPath)
+                } else when (_ui.value.matrix) {
                     Matrix.BASIC, Matrix.THREAD_SCAN, Matrix.KV_QUANT_SCAN -> runBasicMatrix(modelPath)
                     Matrix.COMPARISON -> runComparison(modelPath)
                     Matrix.COLD_START -> runColdStart(modelPath)
@@ -217,11 +230,20 @@ class BenchmarkViewModel : ViewModel() {
     /** 跑基础矩阵（BASIC / THREAD_SCAN / KV_QUANT_SCAN），对每个选中后端跑一组 spec。 */
     private suspend fun runBasicMatrix(modelPath: String) {
         val backends = _ui.value.selectedBackendNames
-        val baseConfig = buildConfig()
-        val repCount = _ui.value.repCount
-        val warmup = _ui.value.warmup
+        val precise = _ui.value.preciseCurrentConfig
+        val baseConfig = if (precise) currentSettingsConfig() else buildConfig()
+        val repCount = if (precise) maxOf(_ui.value.repCount, 5) else _ui.value.repCount
+        val warmup = if (precise) maxOf(_ui.value.warmup, 1) else _ui.value.warmup
 
-        val specs: List<BenchmarkSpec> = when (_ui.value.matrix) {
+        val specs: List<BenchmarkSpec> = if (precise) {
+            // 精准模式：完全按用户当前的推理配置跑一组中等负载，多次重复取中位数
+            listOf(
+                BenchmarkSpec(
+                    modelPath, baseConfig.copy(maxTokens = 128),
+                    ppSize = 512, tgSize = 128, repCount = repCount, warmup = warmup
+                )
+            )
+        } else when (_ui.value.matrix) {
             Matrix.BASIC -> listOf(
                 BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 32),  ppSize = 64,   tgSize = 32,  repCount = repCount, warmup = warmup),
                 BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 128), ppSize = 512,  tgSize = 128, repCount = repCount, warmup = warmup),
@@ -393,6 +415,27 @@ class BenchmarkViewModel : ViewModel() {
         return base.copy(
             threads = _ui.value.threadsOverride ?: base.threads,
             kvQuant = _ui.value.kvQuantOverride ?: base.kvQuant
+        )
+    }
+
+    /**
+     * 读取「设置 → 推理」当前生效的配置，供精准测试使用。
+     * 线程 0（自动）转成 null，与后端约定一致。
+     */
+    private suspend fun currentSettingsConfig(): InferenceConfigV2 {
+        val cfg = withContext(Dispatchers.IO) {
+            container.settingsRepository.config.firstOrNull()
+        } ?: com.aibox.domain.inference.InferenceConfig()
+        val kv = when (cfg.kvQuant.lowercase()) {
+            "f16" -> QuantType.F16
+            "q4_0" -> QuantType.Q4_0
+            else -> QuantType.Q8_0
+        }
+        return buildConfig().copy(
+            threads = cfg.cpuThreads.takeIf { it > 0 },
+            batchSize = cfg.physicalBatch,
+            contextLength = cfg.contextLength,
+            kvQuant = kv
         )
     }
 

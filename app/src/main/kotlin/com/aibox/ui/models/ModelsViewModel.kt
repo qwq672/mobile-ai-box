@@ -101,6 +101,12 @@ class ModelsViewModel : ViewModel() {
             unloadCurrentSilently()
 
             val config = settings.config.firstOrNull() ?: InferenceConfig()
+            // 插件可能刚安装，或启动时的后台同步还没跑完；加载前再同步一次，
+            // 避免「已安装 LiteRT 插件却提示未安装」。
+            withContext(Dispatchers.IO) {
+                runCatching { container.pluginManager.syncInstalledBackendPlugins() }
+                    .onFailure { LogSystem.warn("aibox.ui.models", "sync plugins failed: ${it.message}", it) }
+            }
             try {
                 val route = ModelFormatRouter.route(
                     m.filePath,

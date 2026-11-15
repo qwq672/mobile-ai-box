@@ -394,6 +394,32 @@ class PluginManager(
     /** 列出当前已启用（已绑定）的插件包名。 */
     fun listActive(): List<String> = synchronized(plugins) { plugins.keys.toList() }
 
+    /**
+     * 发现并自动绑定所有已安装的后端插件（应用启动 / 加载模型前调用）。
+     *
+     * 模块页目前只做「发现」，没有单独的启用入口；如果这里不自动绑定，
+     * 用户装了 LiteRT 插件，加载 .litertlm 模型仍会提示「未安装」。
+     * 失败的包会打日志，便于区分「真没装」和「装了但绑定失败」。
+     */
+    fun syncInstalledBackendPlugins(): List<String> {
+        val discovered = discoverPlugins()
+        LogSystem.info(
+            logTag,
+            "syncInstalledBackendPlugins: discovered=${discovered.map { it.packageName }} active=${listActive()}"
+        )
+        for (info in discovered) {
+            if (isActive(info.packageName)) continue
+            when (val r = enablePlugin(info.packageName)) {
+                is Outcome.Success -> LogSystem.info(logTag, "auto-enabled plugin: ${info.packageName}")
+                is Outcome.Failure -> LogSystem.warn(
+                    logTag,
+                    "auto-enable plugin failed: ${info.packageName}: ${r.reason}"
+                )
+            }
+        }
+        return listActive()
+    }
+
     /** 查询某插件是否已启用（在 plugins map 中）。 */
     fun isActive(packageName: String): Boolean = synchronized(plugins) { plugins.containsKey(packageName) }
 
