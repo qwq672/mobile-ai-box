@@ -8,7 +8,7 @@ import com.aibox.domain.inference.InferenceConfigV2
 import com.aibox.domain.inference.InferenceRequest
 import com.aibox.domain.inference.LoadedModel
 import com.aibox.domain.inference.ModalityInput
-import com.aibox.domain.inference.ModelFormat
+import com.aibox.domain.inference.ModelFormatRouter.ModelFormat
 import com.aibox.domain.inference.OptimizationFlags
 import com.aibox.domain.inference.TaskType
 import com.aibox.util.log.LogSystem

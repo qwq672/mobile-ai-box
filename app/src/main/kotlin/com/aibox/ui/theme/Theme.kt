@@ -129,7 +129,7 @@ private fun schemeFromSeed(seed: Color, dark: Boolean): ColorScheme {
     )
 
     val base = if (dark) DarkColors else LightColors
-    if (dark) return base.copy(
+    return if (dark) base.copy(
         primary = tone(h, s.coerceAtMost(0.72f), 0.78f),
         onPrimary = tone(h, s, 0.16f),
         primaryContainer = tone(h, s * 0.7f, 0.28f),
