@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Casino
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
@@ -521,6 +522,64 @@ fun SettingsScreen(
                             trailingContent = { Switch(checked = ui.thinkingMode, onCheckedChange = vm::onThinkingModeChange) },
                             leadingContent = { Icon(Icons.Outlined.Psychology, contentDescription = null, modifier = Modifier.size(24.dp)) }
                         )
+                    }
+                }
+            }
+
+            /* ============== 云端模型 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Cloud, title = "云端模型")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SwitchRow(
+                            title = "使用云端模型",
+                            subtitle = "OpenAI 兼容协议，支持 DeepSeek / OpenAI / Moonshot / Ollama / vLLM",
+                            checked = ui.cloudEnabled,
+                            onCheckedChange = vm::onCloudEnabledChange
+                        )
+                        if (ui.cloudEnabled) {
+                            HorizontalDivider()
+                            OutlinedTextField(
+                                value = ui.cloudBaseUrl,
+                                onValueChange = vm::onCloudBaseUrlChange,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("Base URL") },
+                                placeholder = { Text("https://api.deepseek.com/v1") },
+                                singleLine = true,
+                                shape = MaterialTheme.shapes.small
+                            )
+                            OutlinedTextField(
+                                value = ui.cloudModel,
+                                onValueChange = vm::onCloudModelChange,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("模型名") },
+                                placeholder = { Text("deepseek-chat") },
+                                singleLine = true,
+                                shape = MaterialTheme.shapes.small
+                            )
+                            OutlinedTextField(
+                                value = ui.cloudApiKey,
+                                onValueChange = vm::onCloudApiKeyChange,
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("API Key") },
+                                placeholder = { Text("sk-...") },
+                                singleLine = true,
+                                shape = MaterialTheme.shapes.small
+                            )
+                            Text(
+                                "开启后聊天优先走云端，并用已启用的工具做 function calling；" +
+                                    "关闭则回到本地模型。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

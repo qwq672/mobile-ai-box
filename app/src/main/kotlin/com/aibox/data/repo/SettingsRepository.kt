@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.aibox.domain.cloud.CloudConfig
 import com.aibox.domain.inference.BackendType
 import com.aibox.domain.inference.InferenceConfig
 import kotlinx.coroutines.flow.Flow
@@ -44,6 +45,11 @@ class SettingsRepository(private val context: Context) {
         // B3 WebSearchTool：第三方搜索引擎 API key（用户在 Settings 配；空表示未配）
         val TAVILY_API_KEY  = stringPreferencesKey("tavily_api_key")
         val EXA_API_KEY     = stringPreferencesKey("exa_api_key")
+        // 云端模型（OpenAI 兼容协议）
+        val CLOUD_ENABLED   = booleanPreferencesKey("cloud_enabled")
+        val CLOUD_BASE_URL  = stringPreferencesKey("cloud_base_url")
+        val CLOUD_API_KEY   = stringPreferencesKey("cloud_api_key")
+        val CLOUD_MODEL     = stringPreferencesKey("cloud_model")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -75,6 +81,25 @@ class SettingsRepository(private val context: Context) {
     val darkTheme: Flow<String> = context.dataStore.data.map { it[Keys.DARK_THEME] ?: "system" }
     /** 日志开关 */
     val loggingEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.LOGGING_ENABLED] ?: true }
+
+    /** 云端模型配置（OpenAI 兼容：OpenAI / DeepSeek / Moonshot / Ollama / vLLM）。 */
+    val cloudConfig: Flow<CloudConfig> = context.dataStore.data.map { p ->
+        CloudConfig(
+            enabled = p[Keys.CLOUD_ENABLED] ?: false,
+            baseUrl = p[Keys.CLOUD_BASE_URL] ?: CloudConfig.DEFAULT_BASE_URL,
+            apiKey = p[Keys.CLOUD_API_KEY] ?: "",
+            model = p[Keys.CLOUD_MODEL] ?: CloudConfig.DEFAULT_MODEL
+        )
+    }
+
+    suspend fun saveCloud(c: CloudConfig) {
+        context.dataStore.edit { p ->
+            p[Keys.CLOUD_ENABLED] = c.enabled
+            p[Keys.CLOUD_BASE_URL] = c.baseUrl
+            p[Keys.CLOUD_API_KEY] = c.apiKey
+            p[Keys.CLOUD_MODEL] = c.model
+        }
+    }
 
     suspend fun save(c: InferenceConfig) {
         context.dataStore.edit { p ->

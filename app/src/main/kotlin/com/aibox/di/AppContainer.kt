@@ -5,6 +5,8 @@ import com.aibox.BuildConfig
 import com.aibox.data.repo.ChatRepository
 import com.aibox.data.repo.ModelRepository
 import com.aibox.data.repo.SettingsRepository
+import com.aibox.domain.cloud.CloudChatService
+import com.aibox.domain.cloud.OpenAiCompatibleClient
 import com.aibox.domain.audio.AudioProviderRegistry
 import com.aibox.domain.audio.SystemAsrProvider
 import com.aibox.domain.audio.SystemTtsProvider
@@ -32,6 +34,8 @@ import com.aibox.util.CpuInfo
 import com.aibox.util.ThermalMonitor
 import com.aibox.util.log.LogLevel
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 /**
  * 手写 DI 容器（不引入 Koin/Dagger 减小体积）。
@@ -232,6 +236,40 @@ class AppContainer(context: Context) {
      * - [ToolExecutor.executeMultiple] 并行执行多个 LLM function call（OpenAI / Anthropic 支持）
      */
     val toolExecutor: ToolExecutor = ToolExecutor(toolRegistry)
+
+    /**
+     * 云端对话服务（OpenAI 兼容协议）。
+     *
+     * 工具层就绪后创建，并注入 [inferenceEngine]：开启云端后
+     * `engine.completionChat` 自动走云端 + tool-calling 循环，
+     * ChatViewModel / 会话层无需任何改动。
+     */
+    val cloudChatService: CloudChatService = CloudChatService(
+        settings = settingsRepository,
+        client = OpenAiCompatibleClient(),
+        toolRegistry = toolRegistry,
+        toolExecutor = toolExecutor,
+        appContext = appContext
+    ).also { inferenceEngine.attachCloudService(it) }
+
+    /**
+     * 应用级后台作用域（仅用于少量启动恢复任务）。
+     */
+    private val appScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default
+    )
+
+    init {
+        // 云端开关是持久化的，引擎里的运行态不是：启动时恢复一次，
+        // 否则重启后设置页显示"已开启"，实际聊天却仍走本地。
+        appScope.launch {
+            runCatching {
+                if (settingsRepository.cloudConfig.first().enabled) {
+                    inferenceEngine.setCloudEnabled(true)
+                }
+            }
+        }
+    }
 
     /**
      * 工具注册引导（B1 工具调用抽象层 + B2-B5 基础工具 + C1-C5 高级工具）：在 App 启动后调用

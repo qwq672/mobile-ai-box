@@ -45,6 +45,7 @@
         android:supportsRtl="true"
         android:largeHeap="true"
         android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.AIBox"
         android:localeConfig="@xml/locales_config"
         tools:targetApi="34">

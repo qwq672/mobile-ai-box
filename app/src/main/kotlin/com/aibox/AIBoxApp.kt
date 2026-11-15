@@ -134,6 +134,19 @@ class AIBoxApp : Application(), Configuration.Provider {
         }
     }
 
+    /**
+     * 系统内存紧张时中断推理，避免继续吃内存被 OOM kill。
+     *
+     * 端侧加载大模型时，进程被杀往往不会有任何 Java 异常，
+     * 所以这里提前收手，比事后看「闪退」可控。
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (this::container.isInitialized) {
+            runCatching { container.inferenceEngine.onTrimMemory(level) }
+        }
+    }
+
     companion object {
         @Volatile lateinit var instance: AIBoxApp
             private set

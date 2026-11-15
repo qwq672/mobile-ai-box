@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class SettingsViewModel : ViewModel() {
@@ -35,7 +36,12 @@ class SettingsViewModel : ViewModel() {
         // 可用后端
         val vulkanAvailable: Boolean = false,
         val npuAvailable: Boolean = false,
-        val openclAvailable: Boolean = false
+        val openclAvailable: Boolean = false,
+        // 云端模型（OpenAI 兼容）
+        val cloudEnabled: Boolean = false,
+        val cloudBaseUrl: String = com.aibox.domain.cloud.CloudConfig.DEFAULT_BASE_URL,
+        val cloudModel: String = com.aibox.domain.cloud.CloudConfig.DEFAULT_MODEL,
+        val cloudApiKey: String = ""
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -66,6 +72,16 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.thinkingMode.collectLatest {
                 _ui.value = _ui.value.copy(thinkingMode = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.cloudConfig.collectLatest { c ->
+                _ui.value = _ui.value.copy(
+                    cloudEnabled = c.enabled,
+                    cloudBaseUrl = c.baseUrl,
+                    cloudModel = c.model,
+                    cloudApiKey = c.apiKey
+                )
             }
         }
         viewModelScope.launch {
@@ -118,6 +134,28 @@ class SettingsViewModel : ViewModel() {
     fun onDynamicColorChange(on: Boolean) {
         viewModelScope.launch { container.settingsRepository.setDynamicColor(on) }
     }
+
+    // ---------- 云端模型 ----------
+
+    private fun editCloud(transform: (com.aibox.domain.cloud.CloudConfig) -> com.aibox.domain.cloud.CloudConfig) {
+        viewModelScope.launch {
+            val c = container.settingsRepository.cloudConfig.first()
+            container.settingsRepository.saveCloud(transform(c))
+        }
+    }
+
+    fun onCloudEnabledChange(on: Boolean) {
+        viewModelScope.launch {
+            val c = container.settingsRepository.cloudConfig.first()
+            container.settingsRepository.saveCloud(c.copy(enabled = on))
+            // 同步到推理引擎：打开后聊天直接走云端，关闭回到本地
+            container.inferenceEngine.setCloudEnabled(on)
+        }
+    }
+
+    fun onCloudBaseUrlChange(v: String) = editCloud { it.copy(baseUrl = v.trim()) }
+    fun onCloudModelChange(v: String) = editCloud { it.copy(model = v.trim()) }
+    fun onCloudApiKeyChange(v: String) = editCloud { it.copy(apiKey = v.trim()) }
 
     fun onDarkThemeChange(mode: String) {
         viewModelScope.launch { container.settingsRepository.setDarkTheme(mode) }

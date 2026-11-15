@@ -46,6 +46,37 @@ class InferenceEngine(
     private val thermalGovernor = ThermalGovernor(thermalMonitor)
     private val gpuGuard = GpuGuard(appContext)
 
+    /** 云端对话服务，由 AppContainer 在工具层就绪后注入。 */
+    @Volatile private var cloudService: com.aibox.domain.cloud.CloudChatService? = null
+
+    /** AppContainer 完成工具注册后调用，把云端能力接到引擎上。 */
+    fun attachCloudService(service: com.aibox.domain.cloud.CloudChatService) {
+        cloudService = service
+    }
+
+    /**
+     * 开启/关闭云端模型。
+     *
+     * 开启后 [completionChat] 会优先走云端，本地模型的状态保持不变；
+     * 关闭后回到本地模型（或未加载状态）。
+     */
+    fun setCloudEnabled(on: Boolean) {
+        val svc = cloudService ?: return
+        svc.setEnabled(on)
+        if (on) {
+            _state.value = _state.value.copy(
+                loaded = true,
+                modelPath = "cloud",
+                error = null
+            )
+        } else if (currentBackend == null && !v2Active) {
+            _state.value = EngineState()
+        }
+    }
+
+    /** 当前是否是云端模式（用于 UI 展示模型名/后端标签）。 */
+    fun isCloudActive(): Boolean = cloudService?.enabled == true
+
     @Volatile private var currentBackend: Backend? = null
     @Volatile private var currentModelPath: String? = null
     @Volatile private var effectiveBackend: BackendType = BackendType.CPU
@@ -122,6 +153,11 @@ class InferenceEngine(
                 val chain = fallbackChain(config.backend)
                 LogSystem.info("aibox.inference.engine", "InferenceEngine: loadModel ${modelPath.substringAfterLast('/')} chain=$chain")
 
+                // 加载前内存预检：放不下就直接给可读原因，而不是等系统 OOM kill
+                MemoryGuard.canLoad(appContext, modelPath).getOrElse { e ->
+                    error(e.message ?: "内存不足")
+                }
+
                 var lastError: String? = null
                 var loadedBackend: Backend? = null
                 var loadedType: BackendType = BackendType.CPU
@@ -166,6 +202,13 @@ class InferenceEngine(
 
                 if (loadedBackend == null) {
                     error("所有后端加载失败：$lastError")
+                }
+
+                // 加载后复核：整体内存已经贴着上限的话，继续推理必然被 OOM kill，
+                // 不如立刻卸载并明确告诉用户怎么调。
+                MemoryGuard.postLoadProblem(appContext)?.let { problem ->
+                    runCatching { loadedBackend?.close() }
+                    error(problem)
                 }
 
                 currentBackend = loadedBackend
@@ -213,6 +256,20 @@ class InferenceEngine(
         onToken: (String) -> Unit,
         onStop: (String) -> Unit
     ) {
+        // 云端模式优先：工具循环在 CloudChatService 内完成，本地后端完全不动
+        val cloud = cloudService
+        if (cloud != null && cloud.enabled) {
+            withInferenceBoost {
+                try {
+                    cloud.chat(messages, onToken, onStop)
+                } catch (t: Throwable) {
+                    LogSystem.error("aibox.inference.engine", "cloud completionChat threw", t)
+                    onStop("cloud_error: ${t.message ?: t.javaClass.simpleName}")
+                }
+            }
+            return
+        }
+
         // V2 路径优先:若 v2Active,直接调 delegate
         if (v2Active) {
             val delegate = v2CompletionDelegate
@@ -285,7 +342,24 @@ class InferenceEngine(
     }
 
     fun interrupt() {
+        cloudService?.cancel()
         currentBackend?.interrupt()
+    }
+
+    /**
+     * 系统内存紧张回调（由 Application.onTrimMemory 转发）。
+     *
+     * - RUNNING_LOW 及以上：中断正在生成的请求，避免继续吃内存被直接杀进程
+     * - RUNNING_CRITICAL：额外释放内存池缓存
+     */
+    fun onTrimMemory(level: Int) {
+        LogSystem.warn("aibox.memory", "onTrimMemory(level=$level)")
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            interrupt()
+        }
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            runCatching { memoryOptimizer.releaseAll() }
+        }
     }
 
     /**
@@ -295,6 +369,7 @@ class InferenceEngine(
      * 如果调用方在 Main 线程（ModelsViewModel.activate 就是），整个 UI 会僵住。
      */
     suspend fun unload() = withContext(Dispatchers.IO) {
+        cloudService?.setEnabled(false)
         mutex.withLock {
             currentBackend?.close()
             currentBackend = null
