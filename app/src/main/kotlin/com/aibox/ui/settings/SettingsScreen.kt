@@ -232,10 +232,85 @@ fun SettingsScreen(
             /* ============== 设备状态（A2 ThermalMonitorCard + 综合状态） ============== */
             item {
                 SectionHeader(icon = Icons.Outlined.Thermostat, title = "设备状态")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        Text(
+                            "状态刷新频率",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            val opts = listOf(1000 to "1 秒", 2000 to "2 秒", 5000 to "5 秒")
+                            opts.forEachIndexed { i, (ms, label) ->
+                                SegmentedButton(
+                                    selected = ui.thermalIntervalMs == ms,
+                                    onClick = { vm.onThermalIntervalChange(ms) },
+                                    shape = SegmentedButtonDefaults.itemShape(i, opts.size)
+                                ) { Text(label) }
+                            }
+                        }
+                        Spacer(Modifier.size(6.dp))
+                        HelpText("频率越高越实时，但读取 /sys 也更耗电。后台时系统会自动降频。")
+                    }
+                }
+                Spacer(Modifier.size(12.dp))
                 com.aibox.ui.thermal.ThermalMonitorCard(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = onOpenThermal
                 )
+            }
+
+            /* ============== 诊断 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Info, title = "诊断")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DiagnosticRow("SoC", ui.socName.ifBlank { "未知" })
+                        DiagnosticRow("大核数", ui.bigCores.toString())
+                        DiagnosticRow("原生库", ui.nativeVersion.ifBlank { "未加载" })
+                        DiagnosticRow(
+                            "后端可用",
+                            buildString {
+                                append("Vulkan ")
+                                append(if (ui.vulkanAvailable) "✓" else "✗")
+                                append(" · NPU ")
+                                append(if (ui.npuAvailable) "✓" else "✗")
+                                append(" · OpenCL ")
+                                append(if (ui.openclAvailable) "✓" else "✗")
+                            }
+                        )
+                        if (ui.lastNativeError.isNotBlank()) {
+                            Text(
+                                "最近一次原生错误",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                ui.lastNativeError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        OutlinedButton(onClick = { vm.refreshDiagnostics() }) {
+                            Text("刷新诊断信息")
+                        }
+                    }
+                }
             }
 
             /* ============== 工具调用（B7 工具设置面板入口） ============== */
@@ -590,6 +665,28 @@ private fun HelpText(text: String) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+}
+
+/** 诊断区的一行：左侧标签 + 右侧值（值可能很长，允许换行）。 */
+@Composable
+private fun DiagnosticRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1.6f)
+        )
+    }
 }
 
 /* ---------------- Backend Selector ---------------- */

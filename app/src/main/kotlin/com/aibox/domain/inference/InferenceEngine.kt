@@ -92,7 +92,12 @@ class InferenceEngine(
                             error("后端 $type isAvailable()=false")
                         }
                         val ok = backend.load(modelPath, tuned)
-                        if (!ok) error("load() returned false")
+                        if (!ok) {
+                            // 原生层的真实失败原因（Vulkan 设备初始化异常等）在这里带出来，
+                            // 否则用户只看到「闪退」而没有任何线索
+                            val nativeErr = runCatching { nativeBridge.nativeLastError() }.getOrDefault("")
+                            error("load() returned false" + if (nativeErr.isNotBlank()) ": $nativeErr" else "")
+                        }
                         loadedBackend = backend
                         loadedType = type
                         LogSystem.info("aibox.inference.engine", "InferenceEngine: $type load OK")
