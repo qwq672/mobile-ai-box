@@ -102,6 +102,65 @@ static MemoryPool g_pool;
 // 后端字符串（仅供日志）
 static std::string g_backend_str = "cpu";
 
+// APK 的 nativeLibraryDir。ggml 的默认搜索路径是 /system/bin 和 cwd（Android 上
+// 分别是 /system/bin 和 /），找不到 app 自带的 libggml-*.so；所以由 Kotlin 侧
+// 显式传进来，按需加载对应后端。
+static std::string g_native_lib_dir;
+
+// 按完整路径加载 ggml 后端 .so，并打印结果。
+static ggml_backend_reg_t load_backend_lib(const char* name) {
+    if (g_native_lib_dir.empty()) {
+        LOGI("load_backend_lib(%s): nativeLibraryDir 未设置", name);
+        return nullptr;
+    }
+    std::string path = g_native_lib_dir + "/libggml-" + name + ".so";
+    if (access(path.c_str(), F_OK) != 0) {
+        LOGI("load_backend_lib(%s): 不存在 %s", name, path.c_str());
+        return nullptr;
+    }
+    ggml_backend_reg_t reg = ggml_backend_load(path.c_str());
+    LOGI("load_backend_lib(%s): %s -> %s", name, path.c_str(), reg ? "ok" : "failed");
+    return reg;
+}
+
+// 遍历当前注册的 backend / device，排查"后端没被加载"时最有用的一条日志。
+static void dump_backends(const char* tag) {
+    const size_t n_reg  = ggml_backend_reg_count();
+    const size_t n_dev  = ggml_backend_dev_count();
+    LOGI("%s: ggml regs=%zu devices=%zu", tag, n_reg, n_dev);
+    for (size_t i = 0; i < n_reg; ++i) {
+        ggml_backend_reg_t r = ggml_backend_reg_get(i);
+        LOGI("  reg[%zu]=%s", i, r ? ggml_backend_reg_name(r) : "(null)");
+    }
+    for (size_t i = 0; i < n_dev; ++i) {
+        ggml_backend_dev_t d = ggml_backend_dev_get(i);
+        if (!d) continue;
+        ggml_backend_reg_t r = ggml_backend_dev_backend_reg(d);
+        LOGI("  dev[%zu]=%s type=%d reg=%s desc=%s", i,
+             ggml_backend_dev_name(d), (int) ggml_backend_dev_type(d),
+             r ? ggml_backend_reg_name(r) : "?",
+             ggml_backend_dev_description(d));
+    }
+}
+
+static bool device_present(const char* needle) {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t d = ggml_backend_dev_get(i);
+        if (!d) continue;
+        ggml_backend_reg_t r = ggml_backend_dev_backend_reg(d);
+        const char* rn = r ? ggml_backend_reg_name(r) : nullptr;
+        const char* dn = ggml_backend_dev_name(d);
+        if ((rn && strstr(rn, needle)) || (dn && strstr(dn, needle))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool htp_device_present() {
+    return device_present("HTP") || device_present("Hexagon");
+}
+
 // 最近一次加载失败的原始原因（C++ 异常文本），供 Kotlin 侧展示到「诊断」里。
 // llama.cpp 在 Vulkan 设备初始化失败、KV 量化与 FA 冲突等场景下会 throw，
 // 这些异常如果跨过 JNI 边界就会直接 abort（表现为闪退），所以必须就地捕获。
@@ -131,9 +190,8 @@ Java_com_aibox_infra_jni_NativeBridge_vulkanAvailable(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
 #if defined(POCKET_NPU)
-    // ggml-hexagon 直接走 FastRPC 与 CDSP 通信，不依赖 libQnnHtp.so。
-    // 只要设备暴露了 FastRPC 节点，就认为 HTP 通道存在；skel 是否齐全由
-    // Kotlin 侧 HexagonAssets 再检查一次。
+    // FastRPC 节点存在只是必要条件；真正的判据是 ggml 里有没有注册出 HTP 设备。
+    // 之前只看 /dev 节点，导致「NPU 可用」但实际回退到 Vulkan/CPU，最后在推理时崩溃。
     static const char* kFastRpcNodes[] = {
         "/dev/fastrpc-cdsp",
         "/dev/fastrpc-cdsp-secure",
@@ -142,11 +200,26 @@ Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
         "/dev/adsprpc-smd",
         "/dev/adsprpc-smd-secure",
     };
+    bool has_node = false;
     for (const char* node : kFastRpcNodes) {
-        if (access(node, F_OK) == 0) return JNI_TRUE;
+        if (access(node, F_OK) == 0) { has_node = true; break; }
     }
-#endif
+    if (!has_node) {
+        LOGI("npuAvailable: 没有 FastRPC 节点");
+        return JNI_FALSE;
+    }
+    // hexagon 后端默认没有被静态注册（只随 APK 以 .so 形式存在），
+    // 需要显式按路径 dlopen 一次，设备列表里才会出现 HTP。
+    if (!htp_device_present()) {
+        load_backend_lib("hexagon");
+    }
+    const bool ok = htp_device_present();
+    LOGI("npuAvailable: fastrpc=1 htp=%d", ok ? 1 : 0);
+    if (!ok) dump_backends("npuAvailable");
+    return ok ? JNI_TRUE : JNI_FALSE;
+#else
     return JNI_FALSE;
+#endif
 }
 
 /**
@@ -199,10 +272,27 @@ Java_com_aibox_infra_jni_NativeBridge_nativeVersion(JNIEnv* env, jclass) {
 }
 
 /**
+ * APK 的 nativeLibraryDir（`applicationInfo.nativeLibraryDir`）。
+ *
+ * ggml 默认只在可执行文件目录与 cwd 里找 `libggml-*.so`，Android 上分别是
+ * /system/bin 和 /，永远找不到 APK 自带的 backend。由 Kotlin 侧在启动时传入，
+ * 后端加载时按 `dir/libggml-<name>.so` 精确 dlopen。
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_com_aibox_infra_jni_NativeBridge_setBackendSearchPath(JNIEnv* env, jclass, jstring jdir) {
+    if (!jdir) return;
+    const char* dir = env->GetStringUTFChars(jdir, nullptr);
+    if (!dir) return;
+    g_native_lib_dir = dir;
+    LOGI("setBackendSearchPath: %s", dir);
+    env->ReleaseStringUTFChars(jdir, dir);
+}
+
+/**
  * 设置高通 HTP skel 的搜索路径（ADSP_LIBRARY_PATH）。
  *
  * ggml-hexagon 的 FastRPC 层通过该环境变量在 DSP 侧查找
- * `libggml-htp-vXX.so`；必须在 llama_backend_init 之前调用。
+ * `libggml-htp-vXX.so`；必须在加载 hexagon backend 之前调用。
  * 只有 AIBOX_NPU 构建才会真正用到，普通构建调用也无副作用。
  */
 extern "C" JNIEXPORT void JNICALL
@@ -294,6 +384,15 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     g_ctx_used.store(0);
 
     llama_backend_init();
+
+    // llama.cpp 的默认后端搜索路径在 Android 上不包含 APK 的 nativeLibraryDir，
+    // 所以 libggml-hexagon / libggml-vulkan 不会被自动注册。按用户选择显式加载一次。
+    if (g_backend_str == "npu" && !htp_device_present()) {
+        load_backend_lib("hexagon");
+    } else if (g_backend_str == "vulkan" && !device_present("Vulkan")) {
+        load_backend_lib("vulkan");
+    }
+    dump_backends("llamaLoad:init");
     set_last_error("");
 
     // ---- 参数合法性校正 ----
@@ -359,8 +458,17 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
                  ggml_backend_dev_name(s_selected[0]),
                  ggml_backend_dev_description(s_selected[0]));
         } else {
-            LOGI("llamaLoad: backend=%s 没有匹配的 %s 设备，使用默认设备列表",
-                 backend, want_dev);
+            LOGE("llamaLoad: backend=%s 没有匹配的 %s 设备", backend, want_dev);
+            if (g_backend_str == "npu") {
+                // 不能再"假装加载成功"：之前会用默认设备（Vulkan/CPU）跑，
+                // 界面显示 NPU，实际在别的后端上崩掉。
+                set_last_error("HTP 设备未注册：hexagon 后端没有产生 HTP 设备，"
+                               "请检查 skel 架构、ADSP_LIBRARY_PATH 与 FastRPC 权限");
+                env->ReleaseStringUTFChars(jpath, path);
+                env->ReleaseStringUTFChars(jbackend, backend);
+                env->ReleaseStringUTFChars(jkvq, kvq);
+                return JNI_FALSE;
+            }
         }
     }
 

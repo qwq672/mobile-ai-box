@@ -21,6 +21,8 @@ class NativeBridge {
     // -------- 后端可用性 --------
     external fun vulkanAvailable(): Boolean
     external fun npuAvailable(): Boolean
+    /** APK 的 nativeLibraryDir，供 ggml 按路径加载 libggml-*.so */
+    external fun setBackendSearchPath(dir: String)
     /**
      * 探测 NPU 类型。
      * 返回值:

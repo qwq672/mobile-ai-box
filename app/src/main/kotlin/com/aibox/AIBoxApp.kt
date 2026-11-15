@@ -48,6 +48,11 @@ class AIBoxApp : Application(), Configuration.Provider {
         instance = this
         container = AppContainer(this)
 
+        // ggml 默认只在 /system/bin 和 cwd 找 libggml-*.so，Android 上永远找不到
+        // APK 自带的 backend；把 nativeLibraryDir 传给 native 侧按路径加载。
+        runCatching { container.nativeBridge.setBackendSearchPath(applicationInfo.nativeLibraryDir) }
+            .onFailure { LogSystem.warn(TAG, "setBackendSearchPath failed: ${it.message}") }
+
         // ===================================================
         // Phase 4: 初始化 WorkManager
         // ===================================================
