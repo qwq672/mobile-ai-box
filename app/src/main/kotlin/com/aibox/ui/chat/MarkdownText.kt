@@ -509,29 +509,47 @@ private fun MdTable(block: MdBlock.Table) {
 
 /* ---------------- 思考内容折叠 ---------------- */
 
-/** 把思考标记从正文里切出来；两种标记都支持。 */
+/** 把思考标记从正文里切出来；支持云端注释标记和本地模型的 <think> /  Thinking。 */
 fun splitThinking(raw: String): Pair<String?, String> {
-    val open = when {
-        raw.startsWith("<!--think-->") -> "<!--think-->"
-        raw.startsWith(" thinking") || raw.startsWith("Thinking Process:") -> null
-        else -> return null to raw
-    }
-    if (open == null) {
-        // 本地模型的原生思考块（Qwen3 输出  thinking…<｜end▁of▁thinking｜>）
-        val begin = raw.indexOf(" thinking")
-        if (begin < 0) return null to raw
-        val end = raw.indexOf("<｜end▁of▁thinking｜>", begin)
+    val t = raw.trimStart()
+    // 1. 云端 / 注入的注释标记
+    if (t.startsWith("<!--think-->")) {
+        val end = t.indexOf("<!--/think-->")
         return if (end < 0) {
-            raw.substring(begin + 7).trim() to ""
+            t.removePrefix("<!--think-->").trim() to ""
         } else {
-            raw.substring(begin + 7, end).trim() to raw.substring(end + 8).trim()
+            t.substring("<!--think-->".length, end).trim() to
+                t.substring(end + "<!--/think-->".length).trim()
         }
     }
-    val end = raw.indexOf("<!--/think-->")
+    // 2. 本地模型的原生思考块：
+    //    Qwen3.5 → <think>…</think>；Qwen3 →  Thinking…<｜end▁of▁thinking｜>
+    if (t.startsWith("</think>")) {
+        return null to t.removePrefix("</think>").trimStart()
+    }
+    val opening = when {
+        t.startsWith("<think>") -> "<think>"
+        t.startsWith(" Thinking") -> " Thinking"
+        t.startsWith("Thinking Process:") -> "Thinking Process:"
+        else -> return null to raw
+    }
+    val rest = t.substring(opening.length)
+    val closeMarks = listOf("</think>", "<｜end▁of▁thinking｜>", "<|end_of_thinking|>", "<|/think|>")
+    var end = -1
+    var markLen = 0
+    for (m in closeMarks) {
+        val i = rest.indexOf(m)
+        if (i >= 0 && (end < 0 || i < end)) {
+            end = i
+            markLen = m.length
+        }
+    }
+    // 只有英文前缀、又找不到结束标记时，别把整篇正文都当思考，原样展示
+    if (end < 0 && opening == "Thinking Process:") return null to raw
     return if (end < 0) {
-        raw.removePrefix(open).trim() to ""
+        rest.trim() to ""
     } else {
-        raw.substring(open.length, end).trim() to raw.substring(end + "<!--/think-->".length).trim()
+        rest.substring(0, end).trim() to rest.substring(end + markLen).trim()
     }
 }
 

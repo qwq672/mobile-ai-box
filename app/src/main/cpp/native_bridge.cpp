@@ -945,8 +945,6 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     strings.reserve(n_msg);
 
     bool thinkingMode = (jThinkingMode == JNI_TRUE);
-    // 只在关闭思考时注入标记；开启时依赖模板默认行为，不注入 /think。
-    const std::string think_flag = "/no_think";
 
     for (jsize i = 0; i < n_msg; i++) {
         jobject msg = env->GetObjectArrayElement(jMessages, i);
@@ -976,28 +974,15 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     // 2. 拿模型内置 chat template（同时用它判断是否支持思考开关）
     const char* tmpl = llama_model_chat_template(g_model, nullptr);
 
-    // 只有模板本身带思考逻辑（Qwen3 的 enable_thinking / no_think）时才注入标记。
-    // LFM / Llama / Bonsai 等没有思考模式的模型，注入 /no_think 只会污染用户输入。
+    // 只有模板本身带思考逻辑（Qwen3 / Qwen3.5 的 enable_thinking、<think>）时才做硬开关。
+    // LFM / Llama / Bonsai 等没有思考模式的模型，预填 </think> 只会污染 prompt。
     const bool template_supports_thinking =
         tmpl && (strstr(tmpl, "no_think") != nullptr ||
                  strstr(tmpl, "enable_thinking") != nullptr ||
                  strstr(tmpl, "think") != nullptr);
 
-    // 关闭思考时把 /no_think 追加到最后一条 user message（与 Qwen3 官方用法一致）；
-    // 开启思考时不注入 /think：思考模型默认就是开启，注入反而污染 prompt。
-    if (!thinkingMode && template_supports_thinking && !strings.empty()) {
-        int target = -1;
-        for (int i = (int) strings.size() - 1; i >= 0; --i) {
-            if (strings[i].first == "user") { target = i; break; }
-        }
-        if (target < 0) target = (int) strings.size() - 1;
-        std::string& c = strings[target].second;
-        if (c.find(think_flag) == std::string::npos) {
-            if (!c.empty() && c.back() != '\n') c += "\n";
-            c += think_flag;
-        }
-    }
-
+    // 关闭思考时不往用户消息里塞 /no_think（Qwen3.5 会把它当普通文本，而且不生效），
+    // 改成在 assistant 起始后预填 </think>（等价于 enable_thinking=false 的硬开关）。
     for (auto& p : strings) {
         chat.push_back({p.first.c_str(), p.second.c_str()});
     }
@@ -1039,6 +1024,19 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
         }
     }
     std::string sp(buf.data(), needed);
+
+    // 思考关：assistant 起始后预填空的思考块，让模型直接回答。
+    // （llama_chat_apply_template 不走 Jinja，无法传 enable_thinking，只能用预填实现硬开关）
+    if (!thinkingMode && template_supports_thinking) {
+        const std::string tail = sp.size() > 24 ? sp.substr(sp.size() - 24) : sp;
+        const bool already_closed = tail.find("</think>") != std::string::npos ||
+                                    tail.find("") != std::string::npos;
+        if (!already_closed) {
+            if (!sp.empty() && sp.back() != '\n') sp += "\n";
+            sp += "</think>\n\n";
+            LOGI("llamaCompletionChat: thinking off, prefilled </think>");
+        }
+    }
     LOGI("llamaCompletionChat: formatted prompt_len=%zu", sp.size());
 
     // 4. 锁 + 增量 eval + 生成（复用 llamaCompletion 逻辑）
