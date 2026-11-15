@@ -220,7 +220,7 @@ fun SettingsScreen(
                             Spacer(Modifier.size(10.dp))
                             // 自定义色相：拖动后按该色相重建整套主题（不只换主色）
                             var hue by remember(ui.accentColor) {
-                                androidx.compose.runtime.mutableFloatStateOf(
+                                mutableStateOf(
                                     hueOfHex(ui.accentColor).takeIf { it >= 0f } ?: 210f
                                 )
                             }
