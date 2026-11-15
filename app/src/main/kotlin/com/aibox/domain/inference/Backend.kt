@@ -5,13 +5,13 @@ package com.aibox.domain.inference
  *
  * - CPU：兜底，所有设备可用，自动线程数。
  * - VULKAN：GPU 通用计算，兼容性最好。
- * - NPU：ggml-hexagen，高通/联发科 NPU。
+ * - NPU：ggml-hexagon，高通 Hexagon HTP。
  * - OPENCL：旧 GPU fallback。
  */
 enum class BackendType(val id: String, val displayNameZh: String, val displayNameEn: String) {
     CPU    ("cpu",     "CPU",          "CPU"),
     VULKAN ("vulkan",  "Vulkan (GPU)", "Vulkan (GPU)"),
-    NPU    ("npu",     "NPU (HexaGen)", "NPU (HexaGen)"),
+    NPU    ("npu",     "NPU (Hexagon)", "NPU (Hexagon)"),
     OPENCL ("opencl",  "OpenCL (GPU)", "OpenCL (GPU)");
 
     companion object {

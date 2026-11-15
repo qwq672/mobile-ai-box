@@ -427,7 +427,11 @@ class InferenceEngine(
     private fun isBackendAvailable(type: BackendType): Boolean = when (type) {
         BackendType.CPU    -> true
         BackendType.VULKAN -> runCatching { nativeBridge.vulkanAvailable() }.getOrDefault(false)
-        BackendType.NPU    -> runCatching { nativeBridge.npuAvailable() }.getOrDefault(false)
+        BackendType.NPU    -> runCatching {
+            // FastRPC 存在还不够，APK 里必须带对应 DSP arch 的 HTP skel
+            val hasSkel = appContext?.assets?.list("hexagon")?.any { it.endsWith(".so") } == true
+            hasSkel && nativeBridge.npuAvailable()
+        }.getOrDefault(false)
         BackendType.OPENCL -> runCatching { nativeBridge.openclAvailable() }.getOrDefault(false)
     }
 }

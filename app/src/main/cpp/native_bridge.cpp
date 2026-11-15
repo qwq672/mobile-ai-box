@@ -13,8 +13,10 @@
 #include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
+#include <unistd.h>
 #include <cstdarg>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <memory>
@@ -23,6 +25,7 @@
 #include <exception>
 
 #include "llama.h"
+#include "ggml-backend.h"
 #include "memory_pool.h"
 #include "bridge.h"
 
@@ -128,12 +131,20 @@ Java_com_aibox_infra_jni_NativeBridge_vulkanAvailable(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
 #if defined(POCKET_NPU)
-    void* h1 = dlopen("libQnnHtp.so",          RTLD_NOW | RTLD_LOCAL);
-    void* h2 = dlopen("libhexagon_nn_skel.so", RTLD_NOW | RTLD_LOCAL);
-    void* h3 = dlopen("libneuron_adapter.so",  RTLD_NOW | RTLD_LOCAL);
-    if (h1) { dlclose(h1); return JNI_TRUE; }
-    if (h2) { dlclose(h2); return JNI_TRUE; }
-    if (h3) { dlclose(h3); return JNI_TRUE; }
+    // ggml-hexagon 直接走 FastRPC 与 CDSP 通信，不依赖 libQnnHtp.so。
+    // 只要设备暴露了 FastRPC 节点，就认为 HTP 通道存在；skel 是否齐全由
+    // Kotlin 侧 HexagonAssets 再检查一次。
+    static const char* kFastRpcNodes[] = {
+        "/dev/fastrpc-cdsp",
+        "/dev/fastrpc-cdsp-secure",
+        "/dev/fastrpc-sdsp",
+        "/dev/fastrpc-adsp",
+        "/dev/adsprpc-smd",
+        "/dev/adsprpc-smd-secure",
+    };
+    for (const char* node : kFastRpcNodes) {
+        if (access(node, F_OK) == 0) return JNI_TRUE;
+    }
 #endif
     return JNI_FALSE;
 }
@@ -141,7 +152,7 @@ Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
 /**
  * 探测 NPU 类型(Qualcomm HTP / MediaTek APU / Samsung Exynos NPU / unknown)
  * 返回:
- *  - "qcom_htp":   高通 Hexagon HTP(libQnnHtp.so + libhexagon_nn_skel.so)
+ *  - "qcom_htp":   高通 Hexagon HTP(ggml-hexagon 走 FastRPC)
  *  - "mediatek_apu":  联发科 APU(libneuron_adapter.so)
  *  - "samsung_exynos":  三星 Exynos NPU(libeden_nn.so)
  *  - "unknown":    找到 .so 但不识别类型
@@ -150,13 +161,8 @@ Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_aibox_infra_jni_NativeBridge_npuType(JNIEnv* env, jclass) {
 #if defined(POCKET_NPU)
-    // 高通 Hexagon
-    void* h1 = dlopen("libQnnHtp.so", RTLD_NOW | RTLD_LOCAL);
-    if (h1) {
-        dlclose(h1);
-        // 进一步检查 skel 决定是 HTP Lite / HTP Plus
-        void* h2 = dlopen("libhexagon_nn_skel.so", RTLD_NOW | RTLD_LOCAL);
-        if (h2) dlclose(h2);
+    // 高通 Hexagon：ggml-hexagon 不需要 QNN 的 libQnnHtp.so，只要 FastRPC 通道在
+    if (Java_com_aibox_infra_jni_NativeBridge_npuAvailable(env, nullptr) == JNI_TRUE) {
         return env->NewStringUTF("qcom_htp");
     }
     // 联发科 APU
@@ -195,8 +201,8 @@ Java_com_aibox_infra_jni_NativeBridge_nativeVersion(JNIEnv* env, jclass) {
 /**
  * 设置高通 HTP skel 的搜索路径（ADSP_LIBRARY_PATH）。
  *
- * Hexagon 后端在 dlopen libQnnHtp.so / libhexagon_nn_skel.so 时由 DSP RPC 层
- * 通过该环境变量找 skel；必须在 backend init 之前调用。
+ * ggml-hexagon 的 FastRPC 层通过该环境变量在 DSP 侧查找
+ * `libggml-htp-vXX.so`；必须在 llama_backend_init 之前调用。
  * 只有 AIBOX_NPU 构建才会真正用到，普通构建调用也无副作用。
  */
 extern "C" JNIEXPORT void JNICALL
@@ -323,6 +329,40 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
 
     llama_model_params mp = llama_model_default_params();
     mp.n_gpu_layers = n_gpu_layers;
+
+    // Hexagon 和 Vulkan 在 ggml 里都注册为 GPU 类型。如果不显式指定设备，
+    // llama.cpp 会把所有 GPU 设备都纳入默认列表，模型可能被拆到 NPU 上
+    // （或反过来选错设备）。按用户选择的后端强制只用一个设备。
+    static ggml_backend_dev_t s_selected[2] = { nullptr, nullptr };
+    s_selected[0] = nullptr;
+    const char* want_dev = nullptr;
+    if (g_backend_str == "npu")         want_dev = "HTP";
+    else if (g_backend_str == "vulkan") want_dev = "Vulkan";
+    else if (g_backend_str == "opencl") want_dev = "OpenCL";
+
+    if (want_dev != nullptr) {
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            ggml_backend_dev_t d = ggml_backend_dev_get(i);
+            if (d == nullptr) continue;
+            ggml_backend_reg_t r = ggml_backend_dev_backend_reg(d);
+            const char* reg_name = r ? ggml_backend_reg_name(r) : nullptr;
+            const char* dev_name = ggml_backend_dev_name(d);
+            if ((reg_name && strstr(reg_name, want_dev)) ||
+                (dev_name && strstr(dev_name, want_dev))) {
+                s_selected[0] = d;
+                break;
+            }
+        }
+        if (s_selected[0] != nullptr) {
+            mp.devices = s_selected;
+            LOGI("llamaLoad: backend=%s -> device %s (%s)", backend,
+                 ggml_backend_dev_name(s_selected[0]),
+                 ggml_backend_dev_description(s_selected[0]));
+        } else {
+            LOGI("llamaLoad: backend=%s 没有匹配的 %s 设备，使用默认设备列表",
+                 backend, want_dev);
+        }
+    }
 
     try {
         g_model = llama_model_load_from_file(path, mp);

@@ -135,7 +135,10 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             val b = container.nativeBridge
             val v = runCatching { b.vulkanAvailable() }.getOrDefault(false)
-            val n = runCatching { b.npuAvailable() }.getOrDefault(false)
+            val hasSkel = runCatching {
+                AIBoxApp.instance.assets.list("hexagon")?.any { it.endsWith(".so") } == true
+            }.getOrDefault(false)
+            val n = hasSkel && runCatching { b.npuAvailable() }.getOrDefault(false)
             val o = runCatching { b.openclAvailable() }.getOrDefault(false)
             LogSystem.info("aibox.ui.settings", "SettingsVM backend probe: vulkan=$v npu=$n opencl=$o native=${_ui.value.nativeVersion}")
             _ui.value = _ui.value.copy(

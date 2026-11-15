@@ -7,9 +7,9 @@ import java.io.File
 /**
  * Hexagon（高通 HTP）运行时资产部署。
  *
- * `AIBOX_NPU=ON` 构建会把 QNN/Hexagon SDK 产出的 skel 打进 `assets/hexagon/`。
- * DSP 侧不能直接读 APK，所以启动前要解压到应用私有目录，并把该目录写进
- * `ADSP_LIBRARY_PATH`，否则 `dlopen(libQnnHtp.so)` 之后找不到 skel 会直接失败。
+ * `AIBOX_NPU=ON` 构建会把 Hexagon SDK 产出的 `libggml-htp-vXX.so` 打进
+ * `assets/hexagon/`。DSP 侧不能直接读 APK，所以启动前要解压到应用私有目录，
+ * 并把该目录写进 `ADSP_LIBRARY_PATH`，否则 FastRPC 找不到对应 arch 的 skel。
  *
  * 普通构建（AIBOX_NPU=OFF）assets 为空，这里会直接跳过，不影响任何现有流程。
  */
