@@ -10,6 +10,8 @@ import com.aibox.AIBoxApp
 import com.aibox.data.attach.AttachmentStore
 import com.aibox.data.model.ChatAttachment
 import com.aibox.data.model.ChatMessage
+import com.aibox.data.model.MsgPart
+import com.aibox.data.model.ToolHit
 import com.aibox.data.repo.ChatRepository
 import com.aibox.data.repo.SettingsRepository
 import com.aibox.domain.inference.InferenceEngine
@@ -17,7 +19,9 @@ import com.aibox.domain.shortcut.PresetConfig
 import com.aibox.domain.shortcut.Shortcut
 import com.aibox.domain.shortcut.ShortcutTargetType
 import com.aibox.domain.tool.DeviceInfo
+import com.aibox.domain.tool.builtin.SearchResultItem
 import com.aibox.infra.jni.NativeBridge
+import com.aibox.util.outcome.Outcome
 import com.aibox.ui.tool.PendingToolConfirmation
 import com.aibox.ui.tool.ToolInvocation
 import com.aibox.ui.tool.ToolInvocationViewModel
@@ -66,6 +70,8 @@ class ChatViewModel : ViewModel() {
         val messages: List<ChatMessage> = emptyList(),
         val streaming: Boolean = false,
         val currentStream: String = "",
+        /** 流式过程中的结构化时间线（思考 / 工具 / 正文交错）。 */
+        val streamParts: List<MsgPart> = emptyList(),
         val backendName: String = "CPU",
         val tokensPerSecond: Float = 0f,
         val thermalPercent: Int = 0,
@@ -207,6 +213,7 @@ class ChatViewModel : ViewModel() {
             messages = _ui.value.messages + msg,
             streaming = true,
             currentStream = "",
+            streamParts = emptyList(),
             errorMessage = null,
             pendingAttachments = emptyList()
         )
@@ -214,60 +221,159 @@ class ChatViewModel : ViewModel() {
 
         viewModelScope.launch {
             runCatching { chatRepo.addMessage(sid, msg) }
+                .onSuccess { newId -> setPersistedId(msg.ts, msg.role, newId) }
                 .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist user msg failed", it) }
         }
 
         viewModelScope.launch {
-            val collected = StringBuilder()
-            // 本轮 tps 本地计时: 避免 engine.stats 轮询延迟读到旧值 (首轮 tps=0 的根因)
-            var firstTokMs = 0L
-            var tokCount = 0
-            try {
-                // 构造 messages 数组，用模型内置 chat template
-                val messages = buildChatMessages(_ui.value.messages)
+            val gen = generate(sid, _ui.value.messages)
+            val assistant = ChatMessage(
+                role = "assistant",
+                content = gen.text,
+                sessionId = sid,
+                tokensPerSecond = gen.tps,
+                parts = gen.parts,
+                versions = listOf(gen.text),
+                versionIndex = 0
+            )
+            _ui.value = _ui.value.copy(
+                messages = _ui.value.messages + assistant,
+                streaming = false,
+                currentStream = "",
+                streamParts = emptyList(),
+                errorMessage = gen.error
+            )
+            LogSystem.info("aibox.ui.chat", "ChatViewModel: turn done parts=${gen.parts.size} tps=${gen.tps}")
+            viewModelScope.launch {
+                runCatching { chatRepo.addMessage(sid, assistant) }
+                    .onSuccess { newId -> setPersistedId(assistant.ts, assistant.role, newId) }
+                    .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist assistant msg failed", it) }
+            }
+        }
+    }
+
+    /**
+     * 一次完整的助手回合：多轮推理 + 工具循环，返回正文与结构化时间线。
+     *
+     * 本地模型没有原生 function calling，因此用文本协议（见 [buildToolPrompt]）：
+     * 模型输出 `aibox:tool` 代码块 → 执行工具 → 结果作为下一条消息喂回去 → 继续生成。
+     * 云端模型的工具循环在 [com.aibox.domain.cloud.CloudChatService] 内完成，这里不重复。
+     */
+    private suspend fun generate(sid: Long, history: List<ChatMessage>): Generated {
+        val tools = if (engine.isCloudActive()) emptyList() else runCatching {
+            container.toolRegistry.getActiveToolsForLLM()
+        }.onFailure { LogSystem.warn("aibox.ui.chat", "读取工具列表失败: ${it.message}") }
+            .getOrDefault(emptyList())
+        val toolPrompt = buildToolPrompt(tools)
+
+        val conv = history.toMutableList()
+        val parts = mutableListOf<MsgPart>()
+        val rawAll = StringBuilder()
+        var firstTokMs = 0L
+        var tokCount = 0
+        var error: String? = null
+        var rounds = 0
+
+        try {
+            while (rounds <= MAX_TOOL_ROUNDS) {
+                val turn = StringBuilder()
                 engine.completionChat(
-                    messages = messages,
+                    messages = buildChatMessages(conv, toolPrompt),
                     thinkingMode = thinkingEnabled,
                     onToken = { tok ->
                         if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
                         tokCount++
-                        collected.append(tok)
-                        _ui.value = _ui.value.copy(currentStream = collected.toString())
+                        turn.append(tok)
+                        // 实时解析：思考块 / 工具块随 token 增长即时切换成对应样式
+                        _ui.value = _ui.value.copy(
+                            currentStream = rawAll.toString() + turn,
+                            streamParts = parts + parseTimeline(turn.toString())
+                        )
                     },
                     onStop = { reason ->
-                        val genMs = if (firstTokMs > 0) (System.currentTimeMillis() - firstTokMs).coerceAtLeast(1) else 0L
-                        val tps = if (tokCount > 0 && genMs > 0) tokCount * 1000f / genMs else 0f
-                        val assistant = ChatMessage(
-                            role = "assistant",
-                            content = collected.toString(),
-                            sessionId = sid,
-                            tokensPerSecond = tps
-                        )
-                        val err = if (reason == "decode_failed" || reason == "callback_error" || reason.startsWith("exception"))
-                            "推理中断：$reason" else null
-                        _ui.value = _ui.value.copy(
-                            messages = _ui.value.messages + assistant,
-                            streaming = false,
-                            currentStream = "",
-                            errorMessage = err
-                        )
-                        LogSystem.info("aibox.ui.chat", "ChatViewModel: completion stopped reason=$reason tps=$tps")
-                        viewModelScope.launch {
-                            runCatching { chatRepo.addMessage(sid, assistant) }
-                                .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist assistant msg failed", it) }
+                        if (reason == "decode_failed" || reason == "callback_error" || reason.startsWith("exception")) {
+                            error = "推理中断：$reason"
                         }
                     }
                 )
-            } catch (t: Throwable) {
-                LogSystem.error("aibox.ui.chat", "ChatViewModel: completion threw", t)
-                _ui.value = _ui.value.copy(
-                    streaming = false,
-                    currentStream = "",
-                    errorMessage = "推理异常: ${t.message}"
+                val roundText = turn.toString()
+                rawAll.append(roundText)
+                val call = if (tools.isNotEmpty()) extractToolCall(roundText) else null
+                val parsed = parseTimeline(roundText)
+
+                if (call == null) {
+                    parts += parsed
+                    break
+                }
+
+                // 模型自己声明的工具调用块不重复展示；用统一的 tool part 表示执行状态
+                parts += parsed.filterNot { it.kind == MsgPart.KIND_TOOL }
+                val displayName = container.toolRegistry.getTool(call.name)?.displayName ?: call.name
+                val toolPart = MsgPart.tool(call.name, displayName, call.argumentsJson, running = true)
+                parts += toolPart
+                _ui.value = _ui.value.copy(streamParts = parts.toList())
+
+                val outcome = toolInvocationViewModel.executeAwait(
+                    toolId = call.name,
+                    params = call.arguments,
+                    sessionId = "chat-$sid",
+                    deviceInfo = buildDeviceInfo()
                 )
+                var success = false
+                var output = ""
+                var hits: List<ToolHit> = emptyList()
+                when (outcome) {
+                    is Outcome.Success -> {
+                        success = outcome.value.success
+                        output = outcome.value.output.ifBlank { outcome.value.error.orEmpty() }
+                        hits = (outcome.value.structuredData as? List<*>)
+                            ?.filterIsInstance<SearchResultItem>()
+                            ?.map { ToolHit(it.title, it.url, it.snippet) }
+                            ?: emptyList()
+                    }
+                    is Outcome.Failure -> {
+                        success = false
+                        output = outcome.reason
+                    }
+                }
+                parts[parts.lastIndex] = toolPart.copy(
+                    running = false,
+                    success = success,
+                    output = output,
+                    hits = hits
+                )
+                _ui.value = _ui.value.copy(streamParts = parts.toList())
+
+                // 回填本轮输出与工具结果，让模型继续基于真实结果作答
+                conv += ChatMessage(role = "assistant", content = roundText, sessionId = sid)
+                conv += ChatMessage(
+                    role = "user",
+                    content = "[工具 ${call.name} 执行结果]\n$output",
+                    sessionId = sid
+                )
+                rounds++
             }
+        } catch (t: Throwable) {
+            LogSystem.error("aibox.ui.chat", "ChatViewModel: generate threw", t)
+            error = "推理异常: ${t.message}"
         }
+
+        val text = parts.filter { it.kind == MsgPart.KIND_TEXT && it.text.isNotBlank() }
+            .joinToString("\n\n") { it.text.trim() }
+            .trim()
+            .ifBlank { rawAll.toString().trim() }
+        val genMs = if (firstTokMs > 0) (System.currentTimeMillis() - firstTokMs).coerceAtLeast(1) else 0L
+        val tps = if (tokCount > 0 && genMs > 0) tokCount * 1000f / genMs else 0f
+        return Generated(text, parts, error, tps)
     }
+
+    /** 一次生成回合的结果。 */
+    private data class Generated(
+        val text: String,
+        val parts: List<MsgPart>,
+        val error: String?,
+        val tps: Float
+    )
 
     fun stop() {
         engine.interrupt()
@@ -289,68 +395,112 @@ class ChatViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 重新生成最后一条助手回复。
+     *
+     * 旧内容不会丢：作为 [ChatMessage.versions] 的一版保留，新结果追加为最后一版，
+     * 消息下方出现 `2/3` 这样的版本切换器（见 [switchVersion]）。
+     */
     fun regenerate() {
         if (_ui.value.streaming) return
         val msgs = _ui.value.messages
-        if (msgs.isEmpty()) return
-        val last = msgs.last()
-        if (last.role != "assistant") return
-        val withoutLast = msgs.dropLast(1)
+        val lastIndex = msgs.indexOfLast { it.role == "assistant" }
+        if (lastIndex < 0) return
+        val last = msgs[lastIndex]
+        val history = msgs.take(lastIndex)
+        // 先移除旧回复，只显示新生成的流式内容；完成后把新版本追加回去（旧内容在 versions 里）
         _ui.value = _ui.value.copy(
-            messages = withoutLast,
+            messages = history,
             streaming = true,
             currentStream = "",
+            streamParts = emptyList(),
             errorMessage = null
         )
         LogSystem.info("aibox.ui.chat", "ChatViewModel: regenerate")
         viewModelScope.launch {
-            val collected = StringBuilder()
-            // 本轮 tps 本地计时 (同 continueSend)
-            var firstTokMs = 0L
-            var tokCount = 0
-            try {
-                val messages = buildChatMessages(withoutLast)
-                engine.completionChat(
-                    messages = messages,
-                    thinkingMode = thinkingEnabled,
-                    onToken = { tok ->
-                        if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
-                        tokCount++
-                        collected.append(tok)
-                        _ui.value = _ui.value.copy(currentStream = collected.toString())
-                    },
-                    onStop = { reason ->
-                        val genMs = if (firstTokMs > 0) (System.currentTimeMillis() - firstTokMs).coerceAtLeast(1) else 0L
-                        val tps = if (tokCount > 0 && genMs > 0) tokCount * 1000f / genMs else 0f
-                        val assistant = ChatMessage(
-                            role = "assistant",
-                            content = collected.toString(),
-                            sessionId = _ui.value.sessionId,
-                            tokensPerSecond = tps
-                        )
-                        _ui.value = _ui.value.copy(
-                            messages = _ui.value.messages + assistant,
-                            streaming = false,
-                            currentStream = ""
-                        )
-                        LogSystem.info("aibox.ui.chat", "ChatViewModel: regenerate stopped reason=$reason tps=$tps")
-                        if (_ui.value.sessionId != 0L) {
-                            viewModelScope.launch {
-                                runCatching { chatRepo.addMessage(_ui.value.sessionId, assistant) }
-                                    .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist regenerate msg failed", it) }
-                            }
-                        }
-                    }
-                )
-            } catch (t: Throwable) {
-                LogSystem.error("aibox.ui.chat", "ChatViewModel: regenerate threw", t)
-                _ui.value = _ui.value.copy(
-                    streaming = false,
-                    currentStream = "",
-                    errorMessage = "重新生成异常: ${t.message}"
-                )
+            val gen = generate(_ui.value.sessionId, history)
+            val base = if (last.versions.isEmpty()) listOf(last.content) else last.versions
+            val versions = base + gen.text
+            val updated = last.copy(
+                content = gen.text,
+                parts = gen.parts,
+                versions = versions,
+                versionIndex = versions.lastIndex,
+                tokensPerSecond = gen.tps
+            )
+            val list = _ui.value.messages.toMutableList()
+            list.add(updated)
+            _ui.value = _ui.value.copy(
+                messages = list.toList(),
+                streaming = false,
+                currentStream = "",
+                streamParts = emptyList(),
+                errorMessage = gen.error
+            )
+            persistUpdate(updated)
+        }
+    }
+
+    /** 切换消息的历史版本（重新生成 / 编辑前的版本）。 */
+    fun switchVersion(message: ChatMessage, index: Int) {
+        if (_ui.value.streaming) return
+        if (index !in message.versions.indices) return
+        val updated = message.copy(
+            content = message.versions[index],
+            versionIndex = index,
+            // 版本切换后时间线需要按新正文重新解析
+            parts = emptyList()
+        )
+        replaceMessage(message, updated)
+        persistUpdate(updated)
+    }
+
+    /** 编辑用户消息：旧内容自动保留为一个版本，可随时切回。 */
+    fun editMessage(message: ChatMessage, newText: String) {
+        if (_ui.value.streaming) return
+        val text = newText.trim()
+        if (text.isEmpty() || text == message.content) return
+        val base = if (message.versions.isEmpty()) listOf(message.content) else message.versions
+        val versions = base + text
+        val updated = message.copy(
+            content = text,
+            versions = versions,
+            versionIndex = versions.lastIndex,
+            parts = emptyList()
+        )
+        replaceMessage(message, updated)
+        persistUpdate(updated)
+    }
+
+    private fun replaceMessage(old: ChatMessage, updated: ChatMessage) {
+        val list = _ui.value.messages.map {
+            if (it.id == old.id && it.ts == old.ts) updated else it
+        }
+        _ui.value = _ui.value.copy(messages = list)
+    }
+
+    private fun persistUpdate(message: ChatMessage) {
+        viewModelScope.launch {
+            if (message.id > 0) {
+                runCatching { chatRepo.updateMessage(message) }
+                    .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: update msg failed", it) }
+            } else if (message.sessionId != 0L) {
+                // 新会话里还没落库的消息（id=0）：补插入，保证版本历史能持久化
+                runCatching { chatRepo.addMessage(message.sessionId, message) }
+                    .onSuccess { newId -> setPersistedId(message.ts, message.role, newId) }
+                    .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: insert msg failed", it) }
             }
         }
+    }
+
+    /** 消息落库后回填 id，后续编辑 / 切换版本才能 update 到同一行。 */
+    private fun setPersistedId(ts: Long, role: String, id: Long) {
+        if (id <= 0) return
+        _ui.value = _ui.value.copy(
+            messages = _ui.value.messages.map {
+                if (it.ts == ts && it.role == role && it.id == 0L) it.copy(id = id) else it
+            }
+        )
     }
 
     fun dismissError() {
@@ -479,7 +629,10 @@ class ChatViewModel : ViewModel() {
      * - 文本附件正文拼进 user content；图片通过 [NativeBridge.ChatMsg.images] 交给云端多模态
      * - 思考档位 off / low / high 追加提示词，作为本地与云端的通用兜底
      */
-    private fun buildChatMessages(msgs: List<ChatMessage>): List<NativeBridge.ChatMsg> {
+    private fun buildChatMessages(
+        msgs: List<ChatMessage>,
+        toolPrompt: String = ""
+    ): List<NativeBridge.ChatMsg> {
         val list = mutableListOf<NativeBridge.ChatMsg>()
         val levelHint = when (_ui.value.thinkingLevel) {
             "off" -> "请直接给出答案，不要输出思考过程。"
@@ -487,7 +640,7 @@ class ChatViewModel : ViewModel() {
             "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
             else -> ""
         }
-        val sys = listOf(systemPrompt.trim(), levelHint, UI_CAPABILITY_HINT)
+        val sys = listOf(systemPrompt.trim(), levelHint, UI_CAPABILITY_HINT, toolPrompt)
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
         if (sys.isNotBlank()) {
@@ -496,8 +649,10 @@ class ChatViewModel : ViewModel() {
         for (m in msgs) {
             val textParts = m.attachments.filter { it.kind == "text" && it.text.isNotBlank() }
             val images = m.attachments.filter { it.kind == "image" }.map { it.uri }
-            val content = if (textParts.isEmpty() && images.isEmpty()) m.content else buildString {
-                append(m.content)
+            // 回传历史时去掉客户端内部标记（思考 / 工具结果），模型不需要看到
+            val clean = stripTimelineMarkers(m.content)
+            val content = if (textParts.isEmpty() && images.isEmpty()) clean else buildString {
+                append(clean)
                 textParts.forEach { a ->
                     if (isNotEmpty()) append("\n\n")
                     append("[附件：${a.name}]\n")
@@ -552,5 +707,10 @@ class ChatViewModel : ViewModel() {
     /** 快捷切换思考档位（顶栏菜单里用）。 */
     fun setThinkingLevel(level: String) {
         viewModelScope.launch { settings.setThinkingLevel(level) }
+    }
+
+    private companion object {
+        /** 本地模型工具循环上限，避免模型反复调用同一工具。 */
+        const val MAX_TOOL_ROUNDS = 4
     }
 }

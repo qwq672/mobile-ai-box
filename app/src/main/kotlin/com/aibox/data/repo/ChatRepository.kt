@@ -80,6 +80,11 @@ class ChatRepository(context: Context) {
         return id
     }
 
+    suspend fun updateMessage(msg: ChatMessage) {
+        if (msg.id <= 0) return
+        messageDao.update(msg.toEntity(msg.sessionId))
+    }
+
     suspend fun deleteMessage(id: Long) {
         messageDao.deleteById(id)
     }
@@ -127,11 +132,23 @@ private fun MessageEntity.toChatMessage() = ChatMessage(
     attachments = if (attachmentsJson.isBlank()) emptyList()
     else runCatching {
         attachmentJson.decodeFromString<List<com.aibox.data.model.ChatAttachment>>(attachmentsJson)
-    }.getOrDefault(emptyList())
+    }.getOrDefault(emptyList()),
+    parts = if (partsJson.isBlank()) emptyList()
+    else runCatching {
+        attachmentJson.decodeFromString<List<com.aibox.data.model.MsgPart>>(partsJson)
+    }.getOrDefault(emptyList()),
+    versions = if (versionsJson.isBlank()) emptyList()
+    else runCatching {
+        attachmentJson.decodeFromString<List<String>>(versionsJson)
+    }.getOrDefault(emptyList()),
+    versionIndex = versionIndex
 )
 private fun ChatMessage.toEntity(sid: Long) = MessageEntity(
     id = id, sessionId = sid, role = role, content = content,
     ts = ts, tokensPerSecond = tokensPerSecond,
     attachmentsJson = if (attachments.isEmpty()) ""
-    else attachmentJson.encodeToString(attachments)
+    else attachmentJson.encodeToString(attachments),
+    partsJson = if (parts.isEmpty()) "" else attachmentJson.encodeToString(parts),
+    versionsJson = if (versions.isEmpty()) "" else attachmentJson.encodeToString(versions),
+    versionIndex = versionIndex
 )

@@ -39,7 +39,16 @@ data class MessageEntity(
     val tokensPerSecond: Float,
     /** 附件 JSON（[com.aibox.data.model.ChatAttachment] 列表），空串表示无附件。 */
     @ColumnInfo(defaultValue = "")
-    val attachmentsJson: String = ""
+    val attachmentsJson: String = "",
+    /** 结构化时间线 JSON（[com.aibox.data.model.MsgPart] 列表），空串表示按 content 解析。 */
+    @ColumnInfo(defaultValue = "")
+    val partsJson: String = "",
+    /** 版本历史 JSON（字符串列表），空串表示只有一个版本。 */
+    @ColumnInfo(defaultValue = "")
+    val versionsJson: String = "",
+    /** 当前展示的版本下标。 */
+    @ColumnInfo(defaultValue = "0")
+    val versionIndex: Int = 0
 )
 
 /**

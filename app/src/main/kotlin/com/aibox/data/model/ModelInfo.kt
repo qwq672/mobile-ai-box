@@ -45,7 +45,15 @@ data class ChatMessage(
     val content: String,
     val ts: Long = System.currentTimeMillis(),
     val tokensPerSecond: Float = 0f,
-    val attachments: List<ChatAttachment> = emptyList()
+    val attachments: List<ChatAttachment> = emptyList(),
+    /** 结构化时间线（思考 / 工具 / 正文交错）；为空时由 [content] 解析，兼容旧数据。 */
+    val parts: List<MsgPart> = emptyList(),
+    /**
+     * 消息版本历史（重新生成 / 编辑前的内容）。
+     * 非空时 [versions] 的每一项都是一版正文，当前展示 [versionIndex] 对应的那一版。
+     */
+    val versions: List<String> = emptyList(),
+    val versionIndex: Int = 0
 )
 
 /** 一次会话 */

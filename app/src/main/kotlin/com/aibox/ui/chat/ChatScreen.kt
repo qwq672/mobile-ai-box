@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mic
@@ -76,6 +77,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -112,6 +114,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.data.model.ChatMessage
 import com.aibox.data.model.ChatAttachment
+import com.aibox.data.model.MsgPart
 import com.aibox.ui.shortcut.ShortcutEditorLauncher
 import com.aibox.ui.theme.LocalCornerScale
 import com.aibox.ui.tool.ToolConfirmDialog
@@ -149,22 +152,13 @@ fun ChatScreen(
     val drawerState = com.aibox.ui.nav.LocalDrawerState.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    // 仅在消息列表 size 变化时滚动到底，避免每个 token 都触发 animateScrollToItem
-    LaunchedEffect(ui.messages.size) {
-        if (ui.messages.isNotEmpty()) {
-            listState.animateScrollToItem(ui.messages.lastIndex)
-        }
-    }
-    // B6 工具调用 UI: 工具调用变化时也滚动到底
-    LaunchedEffect(ui.toolInvocations.size) {
-        if (ui.toolInvocations.isNotEmpty() && !listState.isScrollInProgress) {
-            listState.animateScrollToItem(ui.messages.size + ui.toolInvocations.size)
-        }
-    }
-    // 流式 token 进来时确保可见
-    LaunchedEffect(ui.currentStream.length) {
-        if (ui.currentStream.isNotEmpty() && !listState.isScrollInProgress) {
-            listState.animateScrollToItem(ui.messages.size)
+    // 始终滚到「底部占位项」，而不是 messages.size（那里其实是流式项的开头，
+    // 这正是之前流式时只能看到回复开头、划不到最底的原因）。
+    val listItemCount = ui.messages.size + ui.toolInvocations.size +
+        (if (ui.streaming) 1 else 0) + 1 // 最后一项是底部 spacer
+    LaunchedEffect(listItemCount, ui.currentStream.length, ui.streamParts.size) {
+        if (listItemCount > 0 && !listState.isScrollInProgress) {
+            listState.scrollToItem(listItemCount - 1)
         }
     }
     // 错误用 snackbar
@@ -178,6 +172,9 @@ fun ChatScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
     var sheetOpen by remember { mutableStateOf(false) }
+    // 用户消息编辑：编辑前的内容会作为历史版本保留
+    var editTarget by remember { mutableStateOf<ChatMessage?>(null) }
+    var editText by remember { mutableStateOf("") }
 
     // 进入页面时内容渐显（导航 → 聊天）：透明度 + 轻微上移，避免只剩一瞬间的淡入
     var contentVisible by remember { mutableStateOf(false) }
@@ -351,7 +348,7 @@ fun ChatScreen(
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             state = listState,
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                             verticalArrangement = Arrangement.spacedBy(if (ui.docStyle) 18.dp else 8.dp)
                         ) {
                             val lastAssistantIndex = ui.messages.indexOfLast { it.role == "assistant" }
@@ -374,7 +371,11 @@ fun ChatScreen(
                                         { vm.regenerate() }
                                     } else null,
                                     onDelete = { vm.deleteMessage(m) },
-                                    onChoice = { vm.send(it) }
+                                    onChoice = { vm.send(it) },
+                                    onSwitchVersion = { vm.switchVersion(m, it) },
+                                    onEdit = if (m.role == "user") {
+                                        { editTarget = m; editText = m.content }
+                                    } else null
                                 )
                             }
                             // B6 工具调用 UI: 在消息后渲染活跃的工具调用列表
@@ -384,10 +385,15 @@ fun ChatScreen(
                                     onRetry = { vm.retryToolInvocation(inv.id) }
                                 )
                             }
-                            if (ui.currentStream.isNotEmpty()) {
+                            if (ui.currentStream.isNotEmpty() || ui.streamParts.isNotEmpty()) {
                                 item(key = "stream") {
                                     MessageItem(
-                                        m = ChatMessage(role = "assistant", content = ui.currentStream, sessionId = 0),
+                                        m = ChatMessage(
+                                            role = "assistant",
+                                            content = ui.currentStream,
+                                            sessionId = 0,
+                                            parts = ui.streamParts
+                                        ),
                                         docStyle = ui.docStyle,
                                         showActions = false,
                                         animate = true,
@@ -395,7 +401,7 @@ fun ChatScreen(
                                     )
                                 }
                             }
-                            if (ui.streaming && ui.currentStream.isEmpty()) {
+                            if (ui.streaming && ui.currentStream.isEmpty() && ui.streamParts.isEmpty()) {
                                 item(key = "thinking") { ThinkingIndicator(docStyle = ui.docStyle) }
                             }
                             // 让最后一条消息不被输入栏挡住
@@ -409,7 +415,7 @@ fun ChatScreen(
                     Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .height(28.dp)
+                        .height(18.dp)
                         .background(
                             Brush.verticalGradient(
                                 listOf(Color.Transparent, MaterialTheme.colorScheme.background)
@@ -510,6 +516,32 @@ fun ChatScreen(
             },
             dismissButton = {
                 TextButton(onClick = { clearOpen = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 编辑用户消息：保存后旧内容进入版本历史
+    editTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { editTarget = null },
+            title = { Text("编辑消息") },
+            text = {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = { editText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 8
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.editMessage(target, editText)
+                    editTarget = null
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editTarget = null }) { Text("取消") }
             }
         )
     }
@@ -948,10 +980,16 @@ private fun MessageItem(
     onCopy: () -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
     onDelete: () -> Unit = {},
-    onChoice: (String) -> Unit = {}
+    onChoice: (String) -> Unit = {},
+    onSwitchVersion: (Int) -> Unit = {},
+    onEdit: (() -> Unit)? = null
 ) {
     val isUser = m.role == "user"
     var menuOpen by remember { mutableStateOf(false) }
+    // 结构化时间线；旧消息没有 parts 时按正文解析（思考 / 工具标记）
+    val parts = remember(m.content, m.parts) {
+        if (m.parts.isNotEmpty()) m.parts else parseTimeline(m.content)
+    }
     val scale = LocalCornerScale.current
     val bubbleRadius = (18 * scale).toInt().dp
     val tailRadius = (5 * scale).toInt().coerceAtLeast(2).dp
@@ -1005,21 +1043,14 @@ private fun MessageItem(
                         .fillMaxWidth()
                         .then(longPress)
                 ) {
-                    val (think, body) = remember(m.content) { splitThinking(m.content) }
-                    if (think != null) {
-                        ThinkingSection(thinking = think, streaming = animate && body.isBlank())
-                        if (body.isNotBlank()) Spacer(Modifier.height(8.dp))
-                    }
-                    if (body.isNotBlank()) {
-                        MarkdownText(
-                            text = body,
-                            modifier = if (animate) {
-                                Modifier.animateContentSize(animationSpec = tween(120))
-                            } else Modifier,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            onChoice = onChoice
-                        )
-                    }
+                    AssistantParts(
+                        parts = parts,
+                        streaming = animate,
+                        onChoice = onChoice,
+                        modifier = if (animate) {
+                            Modifier.animateContentSize(animationSpec = tween(120))
+                        } else Modifier
+                    )
                 }
             }
 
@@ -1037,18 +1068,11 @@ private fun MessageItem(
                             .then(longPress)
                     ) {
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                            val (think, body) = remember(m.content) { splitThinking(m.content) }
-                            if (think != null) {
-                                ThinkingSection(thinking = think, streaming = animate && body.isBlank())
-                                if (body.isNotBlank()) Spacer(Modifier.height(8.dp))
-                            }
-                            if (body.isNotBlank()) {
-                                MarkdownText(
-                                    text = body,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    onChoice = onChoice
-                                )
-                            }
+                            AssistantParts(
+                                parts = parts,
+                                streaming = animate,
+                                onChoice = onChoice
+                            )
                         }
                     }
                 }
@@ -1064,6 +1088,13 @@ private fun MessageItem(
                 leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp)) },
                 onClick = { menuOpen = false; onCopy() }
             )
+            if (onEdit != null) {
+                DropdownMenuItem(
+                    text = { Text("编辑") },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { menuOpen = false; onEdit() }
+                )
+            }
             if (onRegenerate != null) {
                 DropdownMenuItem(
                     text = { Text("重新生成") },
@@ -1077,6 +1108,11 @@ private fun MessageItem(
                 onClick = { menuOpen = false; onDelete() }
             )
         }
+    }
+
+    // 版本切换器：重新生成 / 编辑前的历史版本（1/3、2/3 …）
+    if (m.versions.size > 1) {
+        VersionSwitcher(m, onSwitchVersion)
     }
 
     // 最后一条助手消息的常驻小操作行（参考 ChatGPT / Claude）
@@ -1093,6 +1129,72 @@ private fun MessageItem(
             MiniAction(Icons.Outlined.MoreHoriz, "更多") { menuOpen = true }
         }
     }
+    }
+}
+
+/** 助手消息时间线：思考 / 工具 / 正文按出现顺序交错渲染。 */
+@Composable
+private fun AssistantParts(
+    parts: List<MsgPart>,
+    streaming: Boolean,
+    onChoice: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        parts.forEachIndexed { index, part ->
+            when (part.kind) {
+                MsgPart.KIND_THINK -> ThinkingSection(
+                    thinking = part.text,
+                    streaming = streaming && index == parts.lastIndex
+                )
+                MsgPart.KIND_TOOL -> ToolPartRow(part)
+                else -> if (part.text.isNotBlank()) {
+                    MarkdownText(
+                        text = part.text,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        onChoice = onChoice
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 版本切换器：‹ 2/3 ›，切换重新生成或编辑前的历史版本。 */
+@Composable
+private fun VersionSwitcher(m: ChatMessage, onSwitch: (Int) -> Unit) {
+    Row(
+        Modifier.padding(top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        VersionArrow("‹", enabled = m.versionIndex > 0) { onSwitch(m.versionIndex - 1) }
+        Text(
+            "${m.versionIndex + 1}/${m.versions.size}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        VersionArrow("›", enabled = m.versionIndex < m.versions.lastIndex) { onSwitch(m.versionIndex + 1) }
+    }
+}
+
+@Composable
+private fun VersionArrow(text: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(24.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text,
+            fontSize = 16.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.3f)
+        )
     }
 }
 

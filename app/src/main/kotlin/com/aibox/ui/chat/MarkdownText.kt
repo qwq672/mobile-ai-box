@@ -35,6 +35,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -509,87 +512,65 @@ private fun MdTable(block: MdBlock.Table) {
 
 /* ---------------- 思考内容折叠 ---------------- */
 
-/** 把思考标记从正文里切出来；支持云端注释标记和本地模型的 <think> /  Thinking。 */
-fun splitThinking(raw: String): Pair<String?, String> {
-    val t = raw.trimStart()
-    // 1. 云端 / 注入的注释标记
-    if (t.startsWith("<!--think-->")) {
-        val end = t.indexOf("<!--/think-->")
-        return if (end < 0) {
-            t.removePrefix("<!--think-->").trim() to ""
-        } else {
-            t.substring("<!--think-->".length, end).trim() to
-                t.substring(end + "<!--/think-->".length).trim()
-        }
-    }
-    // 2. 本地模型的原生思考块：
-    //    Qwen3.5 → <think>…</think>；Qwen3 →  Thinking…<｜end▁of▁thinking｜>
-    if (t.startsWith("</think>")) {
-        return null to t.removePrefix("</think>").trimStart()
-    }
-    val opening = when {
-        t.startsWith("<think>") -> "<think>"
-        t.startsWith(" Thinking") -> " Thinking"
-        t.startsWith("Thinking Process:") -> "Thinking Process:"
-        else -> return null to raw
-    }
-    val rest = t.substring(opening.length)
-    val closeMarks = listOf("</think>", "<｜end▁of▁thinking｜>", "<|end_of_thinking|>", "<|/think|>")
-    var end = -1
-    var markLen = 0
-    for (m in closeMarks) {
-        val i = rest.indexOf(m)
-        if (i >= 0 && (end < 0 || i < end)) {
-            end = i
-            markLen = m.length
-        }
-    }
-    // 只有英文前缀、又找不到结束标记时，别把整篇正文都当思考，原样展示
-    if (end < 0 && opening == "Thinking Process:") return null to raw
-    return if (end < 0) {
-        rest.trim() to ""
-    } else {
-        rest.substring(0, end).trim() to rest.substring(end + markLen).trim()
-    }
-}
-
 /**
- * 思考过程折叠块。默认收起，点一下展开；流式生成中显示「正在思考…」。
+ * 思考过程折叠块。
+ *
+ * 按需求「不用框」：不放 Surface 背景，只留一行淡淡的标题（图标 + 字数），
+ * 默认收起，点一下展开正文；流式生成中显示「正在思考…」。
  */
 @Composable
 fun ThinkingSection(thinking: String, streaming: Boolean) {
     var expanded by remember { androidx.compose.runtime.mutableStateOf(false) }
     if (thinking.isBlank()) return
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(10.dp)
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { expanded = !expanded }
+                .padding(vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.Psychology,
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+                tint = dim.copy(alpha = 0.7f)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (streaming) "正在思考…" else "思维过程 · ${thinking.length} 字",
+                style = MaterialTheme.typography.labelMedium,
+                color = dim.copy(alpha = 0.85f),
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                modifier = Modifier.size(16.dp),
+                tint = dim.copy(alpha = 0.6f)
+            )
+        }
+        if (expanded) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = !expanded },
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(top = 4.dp)
+                    .height(IntrinsicSize.Min)
             ) {
-                Text(
-                    if (streaming) "正在思考…" else "已深度思考（${thinking.length} 字）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f)
+                Box(
+                    Modifier
+                        .width(2.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(dim.copy(alpha = 0.25f))
                 )
-                Text(
-                    if (expanded) "收起" else "展开",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (expanded) {
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.width(10.dp))
                 Text(
                     thinking,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = dim,
                     lineHeight = 19.sp
                 )
             }

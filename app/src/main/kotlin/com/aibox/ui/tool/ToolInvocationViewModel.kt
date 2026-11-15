@@ -5,6 +5,7 @@ import com.aibox.domain.tool.FunctionCall
 import com.aibox.domain.tool.ToolContext
 import com.aibox.domain.tool.ToolExecutor
 import com.aibox.domain.tool.ToolRegistry
+import com.aibox.domain.tool.ToolResult
 import com.aibox.domain.tool.ToolSettingsRepository
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
@@ -81,25 +82,49 @@ class ToolInvocationViewModel(
         sessionId: String,
         deviceInfo: DeviceInfo
     ): String {
-        val tool = toolRegistry.getTool(toolId)
-        val invocationId = generateInvocationId()
-        val needsConfirm = tool?.requiresConfirmation ?: false
+        val initial = createInvocation(toolId, params, sessionId, deviceInfo)
+        LogSystem.info(TAG, "submit: id=${initial.id} tool=$toolId params=${params.keys}")
+        scope.launch { runInvocation(initial) }
+        return initial.id
+    }
 
+    /**
+     * 同步执行一次工具调用并等待结果（供本地模型的工具循环使用）。
+     *
+     * 与 [submit] 的区别：不 launch，直接在当前协程里跑完；高级工具仍会走确认弹窗
+     * （内部 await 用户选择）。返回值给调用方拼进下一轮对话。
+     */
+    suspend fun executeAwait(
+        toolId: String,
+        params: Map<String, Any>,
+        sessionId: String,
+        deviceInfo: DeviceInfo
+    ): Outcome<ToolResult> {
+        val initial = createInvocation(toolId, params, sessionId, deviceInfo)
+        LogSystem.info(TAG, "executeAwait: id=${initial.id} tool=$toolId")
+        return runInvocation(initial)
+    }
+
+    /** 创建 invocation 并登记执行上下文；不启动执行。 */
+    private fun createInvocation(
+        toolId: String,
+        params: Map<String, Any>,
+        sessionId: String,
+        deviceInfo: DeviceInfo
+    ): ToolInvocation {
+        val tool = toolRegistry.getTool(toolId)
         val initial = ToolInvocation(
-            id = invocationId,
+            id = generateInvocationId(),
             toolId = toolId,
             toolDisplayName = tool?.displayName ?: toolId,
             toolIcon = tool?.icon ?: "?",
             params = params,
             state = ToolState.RUNNING,
-            needsConfirmation = needsConfirm
+            needsConfirmation = tool?.requiresConfirmation ?: false
         )
-        invocationContexts[invocationId] = InvocationContext(sessionId, deviceInfo)
+        invocationContexts[initial.id] = InvocationContext(sessionId, deviceInfo)
         _invocations.update { it + initial }
-        LogSystem.info(TAG, "submit: id=$invocationId tool=$toolId params=${params.keys} needsConfirm=$needsConfirm")
-
-        scope.launch { runInvocation(initial) }
-        return invocationId
+        return initial
     }
 
     /**
@@ -179,13 +204,13 @@ class ToolInvocationViewModel(
     /**
      * 执行一次 invocation：构造 [ToolContext] → 调 [ToolExecutor.executeFunctionCall] → 更新状态。
      */
-    private suspend fun runInvocation(invocation: ToolInvocation) {
+    private suspend fun runInvocation(invocation: ToolInvocation): Outcome<ToolResult> {
         val ctx = invocationContexts[invocation.id]
         if (ctx == null) {
             updateInvocation(invocation.id) {
                 it.copy(state = ToolState.FAILED, error = "Lost invocation context")
             }
-            return
+            return Outcome.Failure("Lost invocation context")
         }
 
         val tool = toolRegistry.getTool(invocation.toolId)
@@ -193,7 +218,7 @@ class ToolInvocationViewModel(
             updateInvocation(invocation.id) {
                 it.copy(state = ToolState.FAILED, error = "Tool not found: ${invocation.toolId}")
             }
-            return
+            return Outcome.Failure("Tool not found: ${invocation.toolId}")
         }
 
         // 高级工具且未在白名单 → 状态置 CONFIRMING（dialog 弹起时显示）；executor 内部会调 confirmCallback
@@ -270,6 +295,7 @@ class ToolInvocationViewModel(
                 LogSystem.warn(TAG, "runInvocation failed: id=${invocation.id} tool=${invocation.toolId} reason=${outcome.reason}")
             }
         }
+        return outcome
     }
 
     /**

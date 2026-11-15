@@ -6,13 +6,17 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
+import com.aibox.data.model.MsgPart
+import com.aibox.data.model.ToolHit
 import com.aibox.data.repo.SettingsRepository
 import com.aibox.domain.tool.DeviceInfo
 import com.aibox.domain.tool.FunctionCall
 import com.aibox.domain.tool.ToolContext
 import com.aibox.domain.tool.ToolExecutor
 import com.aibox.domain.tool.ToolRegistry
+import com.aibox.domain.tool.builtin.SearchResultItem
 import com.aibox.infra.jni.NativeBridge
+import com.aibox.ui.chat.encodeToolPartMarker
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
 import kotlinx.coroutines.Dispatchers
@@ -112,12 +116,41 @@ class CloudChatService(
 
             for (call in turn.toolCalls) {
                 LogSystem.info(TAG, "tool call: ${call.name} args=${call.argumentsJson.take(200)}")
-                onToken("\n\n[工具] ${call.name} …\n\n")
+                val tool = toolRegistry.getTool(call.name)
                 val args = parseArguments(call.argumentsJson)
-                val output = when (val r = toolExecutor.executeFunctionCall(FunctionCall(call.name, args), context)) {
-                    is Outcome.Success -> r.value.output
-                    is Outcome.Failure -> "ERROR: ${r.reason}"
+                val running = MsgPart.tool(
+                    toolId = call.name,
+                    toolName = tool?.displayName ?: call.name,
+                    args = call.argumentsJson,
+                    running = true
+                )
+                // 用结构化标记推给 UI：消息时间线里渲染成「图标 + 暗色文字」的工具行
+                onToken("\n\n" + encodeToolPartMarker(running) + "\n\n")
+
+                val outcome = toolExecutor.executeFunctionCall(FunctionCall(call.name, args), context)
+                val output: String
+                var success: Boolean
+                var hits: List<ToolHit> = emptyList()
+                when (outcome) {
+                    is Outcome.Success -> {
+                        success = outcome.value.success
+                        output = outcome.value.output.ifBlank { outcome.value.error.orEmpty() }
+                        hits = (outcome.value.structuredData as? List<*>)
+                            ?.filterIsInstance<SearchResultItem>()
+                            ?.map { ToolHit(it.title, it.url, it.snippet) }
+                            ?: emptyList()
+                    }
+                    is Outcome.Failure -> {
+                        success = false
+                        output = "ERROR: ${outcome.reason}"
+                    }
                 }
+                onToken(encodeToolPartMarker(running.copy(
+                    running = false,
+                    success = success,
+                    output = output,
+                    hits = hits
+                )) + "\n\n")
                 history.add(CloudMsg("tool", output, toolCallId = call.id))
             }
             rounds++
