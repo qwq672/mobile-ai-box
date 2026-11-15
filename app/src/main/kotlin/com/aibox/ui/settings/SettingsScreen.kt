@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Casino
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.FormatAlignLeft
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
@@ -521,6 +522,15 @@ fun SettingsScreen(
                                 "关闭则用 /no_think 标志强制不思考，更快但质量略降。") },
                             trailingContent = { Switch(checked = ui.thinkingMode, onCheckedChange = vm::onThinkingModeChange) },
                             leadingContent = { Icon(Icons.Outlined.Psychology, contentDescription = null, modifier = Modifier.size(24.dp)) }
+                        )
+                        HorizontalDivider()
+                        ListItem(
+                            headlineContent = { Text("文档流消息样式") },
+                            supportingContent = { Text(
+                                "开启后助手回复不带气泡，正文直接铺在背景上（类似 ChatGPT / Claude），长回答更好读。" +
+                                "关闭则用户与助手都使用气泡。") },
+                            trailingContent = { Switch(checked = ui.chatDocStyle, onCheckedChange = vm::onChatDocStyleChange) },
+                            leadingContent = { Icon(Icons.Outlined.FormatAlignLeft, contentDescription = null, modifier = Modifier.size(24.dp)) }
                         )
                     }
                 }

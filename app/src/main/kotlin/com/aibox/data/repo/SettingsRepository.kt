@@ -45,6 +45,8 @@ class SettingsRepository(private val context: Context) {
         // B3 WebSearchTool：第三方搜索引擎 API key（用户在 Settings 配；空表示未配）
         val TAVILY_API_KEY  = stringPreferencesKey("tavily_api_key")
         val EXA_API_KEY     = stringPreferencesKey("exa_api_key")
+        // 聊天消息呈现：true = 文档流（助手无气泡），false = 双方气泡
+        val CHAT_DOC_STYLE  = booleanPreferencesKey("chat_doc_style")
         // 云端模型（OpenAI 兼容协议）
         val CLOUD_ENABLED   = booleanPreferencesKey("cloud_enabled")
         val CLOUD_BASE_URL  = stringPreferencesKey("cloud_base_url")
@@ -74,6 +76,9 @@ class SettingsRepository(private val context: Context) {
     val language: Flow<String> = context.dataStore.data.map { it[Keys.LANGUAGE] ?: "zh" }
     val lastModelId: Flow<Long> = context.dataStore.data.map { (it[Keys.LAST_MODEL_ID] ?: -1L).toLong() }
     val thinkingMode: Flow<Boolean> = context.dataStore.data.map { it[Keys.THINKING_MODE] ?: true }
+
+    /** 聊天消息呈现：true = 文档流（助手无气泡），false = 双方气泡 */
+    val chatDocStyle: Flow<Boolean> = context.dataStore.data.map { it[Keys.CHAT_DOC_STYLE] ?: true }
 
     /** Material You 取色 */
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.DYNAMIC_COLOR] ?: true }
@@ -139,6 +144,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setThinkingMode(on: Boolean) =
         context.dataStore.edit { it[Keys.THINKING_MODE] = on }
+
+    suspend fun setChatDocStyle(on: Boolean) =
+        context.dataStore.edit { it[Keys.CHAT_DOC_STYLE] = on }
 
     // ===================================================
     // B3 WebSearchTool：第三方搜索引擎 API key

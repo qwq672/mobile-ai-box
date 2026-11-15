@@ -60,6 +60,8 @@ class ChatViewModel : ViewModel() {
         val contextMax: Int = 0,
         val sessionId: Long = 0,
         val sessionTitle: String = "",
+        /** 消息呈现：true = 文档流（助手无气泡），false = 双方气泡 */
+        val docStyle: Boolean = true,
         // B6 工具调用 UI: 活跃工具调用列表 + 当前待确认（若有）
         val toolInvocations: List<ToolInvocation> = emptyList(),
         val pendingToolConfirmation: PendingToolConfirmation? = null
@@ -77,6 +79,11 @@ class ChatViewModel : ViewModel() {
         }
         viewModelScope.launch {
             settings.thinkingMode.collectLatest { thinkingMode = it }
+        }
+        viewModelScope.launch {
+            settings.chatDocStyle.collectLatest { on ->
+                _ui.value = _ui.value.copy(docStyle = on)
+            }
         }
         viewModelScope.launch {
             engine.stats.collectLatest { s ->
