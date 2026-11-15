@@ -56,6 +56,13 @@
         android:localeConfig="@xml/locales_config"
         tools:targetApi="34">
 
+        <!-- targetSdk 31+ 默认看不到 vendor 库，必须在 manifest 显式声明，
+             否则 dlopen 会被 linker namespace 拒绝（HTP/OpenCL 都属于这种情况）。 -->
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+        <uses-native-library android:name="libcb.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libadreno_utils.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

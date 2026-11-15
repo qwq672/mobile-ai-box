@@ -143,9 +143,10 @@ android {
                 "DebugProbesKt.bin"
             )
         }
-        // 避免重复 jni 库 (pocket-llm 风格: useLegacyPackaging = false)
+        // ggml-hexagon / OpenCL 需要真实的 .so 文件路径（ggml_backend_load 会做 access 检查），
+        // 所以必须让安装时把 jni 库解压到 nativeLibraryDir。
         jniLibs {
-            useLegacyPackaging = false
+            useLegacyPackaging = true
         }
     }
 }
