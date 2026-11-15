@@ -8,6 +8,16 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+/**
+ * Hexagon / QNN 实验构建开关。
+ *
+ * 默认关闭：需要高通 Hexagon SDK + QNN SDK 才能编译出可用的 HTP 后端，
+ * 普通 CI 不会触发。开启方式：`./gradlew assembleRelease -Paibox.npu=true`。
+ */
+val aiboxNpu = providers.gradleProperty("aibox.npu")
+    .map { it.equals("true", ignoreCase = true) }
+    .getOrElse(false)
+
 android {
     namespace = "com.aibox"
     compileSdk = 34
@@ -34,7 +44,8 @@ android {
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
                     "-DANDROID_PLATFORM=android-28",  // API 28+ 有 Vulkan 1.1 (vkGetPhysicalDeviceFeatures2)
-                    "-DCMAKE_BUILD_TYPE=Release"
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DAIBOX_NPU=${if (aiboxNpu) "ON" else "OFF"}"
                 )
                 // 注意：这些 flags 会同时作用于 add_subdirectory 的 llama.cpp。
                 // llama.cpp 0.4.x 的 ggml-backend-reg 等用到 try/RTTI，不能全局关异常/RTTI。

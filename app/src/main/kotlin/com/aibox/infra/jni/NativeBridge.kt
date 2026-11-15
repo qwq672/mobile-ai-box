@@ -93,6 +93,12 @@ class NativeBridge {
 
     external fun llamaInterrupt()
 
+    /**
+     * 设置高通 HTP skel 搜索目录（ADSP_LIBRARY_PATH）。
+     * 必须在第一次 llamaLoad / backend init 之前调用；非 Hexagon 构建调用无副作用。
+     */
+    external fun setAdspLibraryPath(dir: String)
+
     // -------- 状态查询 --------
     external fun llamaTokensPerSecond(): Float
     external fun llamaContextUsed(): Int

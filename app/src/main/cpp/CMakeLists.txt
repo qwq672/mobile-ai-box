@@ -9,6 +9,15 @@ option(AIBOX_VULKAN  "Enable Vulkan backend"   ON)
 option(AIBOX_OPENCL  "Enable OpenCL backend"  ON)
 option(AIBOX_NPU     "Enable Hexagon NPU"     OFF)
 
+if(AIBOX_NPU)
+    if(NOT DEFINED ENV{HEXAGON_SDK_ROOT} AND NOT DEFINED ENV{QNN_SDK_ROOT})
+        message(WARNING
+            "AIBOX_NPU=ON 但未检测到 HEXAGON_SDK_ROOT / QNN_SDK_ROOT，"
+            "ggml-hexagon 很可能编译失败。请先安装 Hexagon SDK 或改用默认构建。")
+    endif()
+    message(STATUS "AIBOX_NPU=ON: 启用 ggml-hexagon（仅部分高通 SoC 可用，skel 需放到 assets/hexagon/）")
+endif()
+
 # Vulkan header version mismatch fix: NDK 26.1 headers are v365, but environment has v366.
 # Disable the static_assert in vulkan.hpp so ggml-vulkan.cpp compiles.
 # MUST be set BEFORE add_subdirectory(llama.cpp) to affect ggml-vulkan target.

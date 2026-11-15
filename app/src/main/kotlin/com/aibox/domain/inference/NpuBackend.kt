@@ -16,7 +16,8 @@ class NpuBackend(
     private val native: NativeBridge,
     private val mem: MemoryOptimizer,
     private val governor: ThermalGovernor,
-    private val cpuInfo: CpuInfo
+    private val cpuInfo: CpuInfo,
+    private val appContext: android.content.Context? = null
 ) : Backend {
 
     override val type = BackendType.NPU
@@ -29,6 +30,12 @@ class NpuBackend(
 
     override suspend fun load(modelPath: String, config: InferenceConfig): Boolean = withContext(Dispatchers.Default) {
         if (!isAvailable()) return@withContext false
+        // HTP 的 skel 必须先落到私有目录并写进 ADSP_LIBRARY_PATH，
+        // 否则 dlopen 之后 DSP 侧找不到 kernel，加载必失败。
+        HexagonAssets.prepare(appContext)?.let { dir ->
+            runCatching { native.setAdspLibraryPath(dir) }
+                .onFailure { com.aibox.util.log.LogSystem.warn("aibox.hexagon", "setAdspLibraryPath 失败: ${it.message}") }
+        }
         val gpuLayers = if (config.nGpuLayers == 0) Int.MAX_VALUE / 2 else config.nGpuLayers
         val threads = config.effectiveThreads(cpuInfo.bigCores)
         val ok = try {

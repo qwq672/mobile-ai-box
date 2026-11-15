@@ -14,6 +14,7 @@
 #include <android/log.h>
 #include <dlfcn.h>
 #include <cstdarg>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <memory>
@@ -189,6 +190,23 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_aibox_infra_jni_NativeBridge_nativeVersion(JNIEnv* env, jclass) {
     std::string v = "llama.cpp=" + std::string(llama_print_system_info()) + " aibox=v261018-1";
     return env->NewStringUTF(v.c_str());
+}
+
+/**
+ * 设置高通 HTP skel 的搜索路径（ADSP_LIBRARY_PATH）。
+ *
+ * Hexagon 后端在 dlopen libQnnHtp.so / libhexagon_nn_skel.so 时由 DSP RPC 层
+ * 通过该环境变量找 skel；必须在 backend init 之前调用。
+ * 只有 AIBOX_NPU 构建才会真正用到，普通构建调用也无副作用。
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_com_aibox_infra_jni_NativeBridge_setAdspLibraryPath(JNIEnv* env, jclass, jstring jdir) {
+    if (!jdir) return;
+    const char* dir = env->GetStringUTFChars(jdir, nullptr);
+    if (!dir) return;
+    setenv("ADSP_LIBRARY_PATH", dir, 1);
+    LOGI("setAdspLibraryPath: %s", dir);
+    env->ReleaseStringUTFChars(jdir, dir);
 }
 
 // ---------- 架构检测 ----------
