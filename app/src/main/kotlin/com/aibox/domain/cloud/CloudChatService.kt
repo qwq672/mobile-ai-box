@@ -148,7 +148,8 @@ class CloudChatService(
                 onToken(encodeToolPartMarker(running.copy(
                     running = false,
                     success = success,
-                    output = output,
+                    // UI 只展示摘要；完整输出仍通过 history 回给模型
+                    output = output.take(4000),
                     hits = hits
                 )) + "\n\n")
                 history.add(CloudMsg("tool", output, toolCallId = call.id))

@@ -339,7 +339,7 @@ class ChatViewModel : ViewModel() {
                 parts[parts.lastIndex] = toolPart.copy(
                     running = false,
                     success = success,
-                    output = output,
+                    output = output.take(4000),
                     hits = hits
                 )
                 _ui.value = _ui.value.copy(streamParts = parts.toList())

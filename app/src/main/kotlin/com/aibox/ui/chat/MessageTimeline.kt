@@ -3,6 +3,8 @@ package com.aibox.ui.chat
 import android.util.Base64
 import com.aibox.data.model.MsgPart
 import com.aibox.domain.tool.ToolFunctionSchema
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -170,7 +172,7 @@ fun stripTimelineMarkers(content: String): String =
 
 /** 云端 / 工具结果共用的标记编码（Base64 避免正文里出现 `-->` 冲突）。 */
 fun encodeToolPartMarker(part: MsgPart): String {
-    val json = markerJson.encodeToString(MsgPart.serializer(), part)
+    val json = markerJson.encodeToString(part)
     val b64 = Base64.encodeToString(json.toByteArray(), Base64.NO_WRAP)
     return "<!--tool:$b64-->"
 }
@@ -239,7 +241,7 @@ private fun addTool(out: MutableList<MsgPart>, part: MsgPart) {
 
 private fun decodeToolMarker(b64: String): MsgPart? = runCatching {
     val json = String(Base64.decode(b64, Base64.NO_WRAP))
-    markerJson.decodeFromString(MsgPart.serializer(), json)
+    markerJson.decodeFromString<MsgPart>(json)
 }.getOrNull()
 
 private fun decodeToolCall(body: String): ToolCall? {

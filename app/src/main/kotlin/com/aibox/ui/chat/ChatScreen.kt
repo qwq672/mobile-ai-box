@@ -157,7 +157,11 @@ fun ChatScreen(
     val listItemCount = ui.messages.size + ui.toolInvocations.size +
         (if (ui.streaming) 1 else 0) + 1 // 最后一项是底部 spacer
     LaunchedEffect(listItemCount, ui.currentStream.length, ui.streamParts.size) {
-        if (listItemCount > 0 && !listState.isScrollInProgress) {
+        val info = listState.layoutInfo
+        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+        // 用户主动往上翻时不要抢滚动；在底部附近（或首次）才自动跟随
+        val nearBottom = lastVisible >= info.totalItemsCount - 2
+        if (listItemCount > 0 && !listState.isScrollInProgress && nearBottom) {
             listState.scrollToItem(listItemCount - 1)
         }
     }
