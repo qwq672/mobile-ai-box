@@ -12,8 +12,9 @@ plugins {
  * Hexagon（ggml-hexagon）实验构建开关。
  *
  * 默认关闭：只需要 Hexagon SDK（HEXAGON_SDK_ROOT / HEXAGON_TOOLS_ROOT），
- * 不需要 QNN SDK；零售机还需要 HEXAGON_HTP_CERT 给 HTP skel 签名。
- * 普通 CI 不会触发。开启方式：`./gradlew assembleRelease -Paibox.npu=true`。
+ * 不需要 QNN SDK。Android 产出的 HTP skel 未签名，零售机能否加载取决于
+ * 设备的 FastRPC unsigned PD 策略（HEXAGON_HTP_CERT 只对 Windows 构建生效）。
+ * 开启方式：`./gradlew assembleRelease -Paibox.npu=true`。
  */
 val aiboxNpu = providers.gradleProperty("aibox.npu")
     .map { it.equals("true", ignoreCase = true) }
