@@ -147,7 +147,7 @@ class PluginManager(
                 descriptorClass = service.name ?: "",
                 version = pkgInfo.versionName ?: "",
                 displayName = runCatching { app?.loadLabel(pm)?.toString() }
-                    .getOrDefault(packageName),
+                    .getOrNull() ?: packageName,
                 sizeBytes = runCatching { java.io.File(app?.sourceDir ?: "").length() }
                     .getOrDefault(0L)
             )
