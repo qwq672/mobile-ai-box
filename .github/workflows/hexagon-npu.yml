@@ -66,10 +66,15 @@ jobs:
           test -f "$VK_HPP" || {
             echo "::error::缺少 $VK_HPP（ggml-vulkan 必需）"; exit 1; }
           echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # 官方 zip 里的 qaic 是未解包的，hexagon_fun.cmake 期望 ipc/fastrpc/qaic/bin/qaic
+          make -C "$HEXAGON_SDK_ROOT/ipc/fastrpc/qaic" >/dev/null
+          test -x "$HEXAGON_SDK_ROOT/ipc/fastrpc/qaic/bin/qaic" || {
+            echo "::error::qaic 准备失败"; exit 1; }
           for v in $HTP_ARCHS; do
-            if ! find "$HEXAGON_SDK_ROOT" -maxdepth 4 -type d -name "toolv21_$v" | grep -q .; then
-              echo "::warning::SDK 内未找到 toolv21_$v，若该 arch 编译失败请检查 SDK 版本"
-            fi
+            test -d "$HEXAGON_SDK_ROOT/rtos/qurt/compute$v" || {
+              echo "::error::SDK 缺少 compute$v（$v 需要 Hexagon SDK 6.7.0.0）"; exit 1; }
+            test -d "$HEXAGON_SDK_ROOT/tools/HEXAGON_Tools/21.0.04/Tools/target/hexagon/lib/$v" || {
+              echo "::warning::未找到 $v 的工具链库，编译可能失败"; }
           done
 
       - name: Set up JDK 17

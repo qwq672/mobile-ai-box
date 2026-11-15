@@ -48,6 +48,10 @@ android {
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DAIBOX_NPU=${if (aiboxNpu) "ON" else "OFF"}"
                 )
+                if (aiboxNpu) {
+                    // ggml-hexagon 的 hexagon_fun.cmake 要求该变量非空（用于 FastRPC 头路径）
+                    arguments += "-DPREBUILT_LIB_DIR=android_aarch64"
+                }
                 // 注意：这些 flags 会同时作用于 add_subdirectory 的 llama.cpp。
                 // llama.cpp 0.4.x 的 ggml-backend-reg 等用到 try/RTTI，不能全局关异常/RTTI。
                 // 针对本 app 的优化（隐藏符号、gc-sections）在 CMakeLists.txt 里对 aibox target 单独设置。
