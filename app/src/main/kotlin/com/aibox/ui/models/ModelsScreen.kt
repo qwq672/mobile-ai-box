@@ -42,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -485,17 +486,24 @@ private fun PrefabRow(label: String, note: String, progress: Int, onDownload: ()
                 Column(
                     modifier = Modifier
                         .padding(start = 12.dp)
-                        .widthIn(min = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                        .widthIn(min = 104.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.End
                 ) {
+                    Text(
+                        "下载中 $progress%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     LinearProgressIndicator(
                         progress = { progress / 100f },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        "$progress%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(MaterialTheme.shapes.small),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
                     )
                 }
             } else if (progress >= 100) {
@@ -564,17 +572,45 @@ private fun RemoteFileRow(file: RemoteGgufFile, progress: Int, onDownload: () ->
             }
             when {
                 progress in 1..99 -> {
-                    LinearProgressIndicator(
-                        progress = { progress / 100f },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text("$progress%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { progress / 100f },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(6.dp)
+                                .clip(MaterialTheme.shapes.small),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                        )
+                        Spacer(Modifier.size(10.dp))
+                        Text(
+                            "$progress%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
                 progress >= 100 -> {
-                    Text("已下载", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Outlined.Verified,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text("已下载", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    }
                 }
                 else -> {
-                    OutlinedButton(onClick = onDownload) {
+                    FilledTonalButton(
+                        onClick = onDownload,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.size(8.dp))
                         Text("下载")

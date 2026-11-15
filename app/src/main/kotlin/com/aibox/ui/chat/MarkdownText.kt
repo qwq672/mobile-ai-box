@@ -1,6 +1,7 @@
 package com.aibox.ui.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -197,6 +199,8 @@ fun MarkdownText(
                     Modifier.padding(vertical = 2.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
                 )
+
+                is MdBlock.Table -> MdTable(block)
             }
         }
     }
@@ -210,6 +214,7 @@ private sealed interface MdBlock {
     data class Quote(val text: String) : MdBlock
     data class ListItem(val marker: String, val ordered: Boolean, val text: String) : MdBlock
     data class Code(val lang: String, val code: String) : MdBlock
+    data class Table(val header: List<String>, val rows: List<List<String>>) : MdBlock
     data object Divider : MdBlock
 }
 
@@ -259,6 +264,20 @@ private fun parseBlocks(src: String): List<MdBlock> {
             continue
         }
 
+        // Markdown 表格：当前行以 | 开头，且下一行是 |---|---| 分隔行
+        if (trimmed.startsWith("|") && i + 1 < lines.size && isTableSeparator(lines[i + 1])) {
+            flushParagraph(); flushQuote()
+            val header = splitTableRow(trimmed)
+            i += 2
+            val rows = mutableListOf<List<String>>()
+            while (i < lines.size && lines[i].trimStart().startsWith("|")) {
+                rows.add(splitTableRow(lines[i].trimStart()))
+                i++
+            }
+            blocks.add(MdBlock.Table(header, rows))
+            continue
+        }
+
         when {
             trimmed.isEmpty() -> { flushParagraph(); flushQuote() }
 
@@ -297,6 +316,139 @@ private fun parseBlocks(src: String): List<MdBlock> {
     flushParagraph()
     flushQuote()
     return blocks
+}
+
+/* ---------------- 表格 ---------------- */
+
+private fun isTableSeparator(line: String): Boolean {
+    val t = line.trim()
+    if (!t.startsWith("|")) return false
+    val cells = t.trim('|').split('|')
+    return cells.isNotEmpty() && cells.all { it.trim().matches(Regex(":?-{2,}:?")) }
+}
+
+private fun splitTableRow(line: String): List<String> =
+    line.trim().trim('|').split('|').map { it.trim() }
+
+@Composable
+private fun MdTable(block: MdBlock.Table) {
+    val primary = MaterialTheme.colorScheme.primary
+    val headerBg = MaterialTheme.colorScheme.surfaceContainerHighest
+    val rowBg = MaterialTheme.colorScheme.surfaceContainerLow
+    val cols = maxOf(block.header.size, block.rows.maxOfOrNull { it.size } ?: 0)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        color = rowBg,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column {
+            Row(Modifier.background(headerBg)) {
+                for (c in 0 until cols) {
+                    Text(
+                        parseInline(block.header.getOrElse(c) { "" }, primary),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .widthIn(min = 76.dp, max = 220.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+            }
+            block.rows.forEachIndexed { idx, row ->
+                if (idx > 0) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                }
+                Row {
+                    for (c in 0 until cols) {
+                        Text(
+                            parseInline(row.getOrElse(c) { "" }, primary),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .widthIn(min = 76.dp, max = 220.dp)
+                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ---------------- 思考内容折叠 ---------------- */
+
+/** 把思考标记从正文里切出来；两种标记都支持。 */
+fun splitThinking(raw: String): Pair<String?, String> {
+    val open = when {
+        raw.startsWith("<!--think-->") -> "<!--think-->"
+        raw.startsWith(" thinking") || raw.startsWith("Thinking Process:") -> null
+        else -> return null to raw
+    }
+    if (open == null) {
+        // 本地模型的原生思考块（Qwen3 输出  thinking…<｜end▁of▁thinking｜>）
+        val begin = raw.indexOf(" thinking")
+        if (begin < 0) return null to raw
+        val end = raw.indexOf("<｜end▁of▁thinking｜>", begin)
+        return if (end < 0) {
+            raw.substring(begin + 7).trim() to ""
+        } else {
+            raw.substring(begin + 7, end).trim() to raw.substring(end + 8).trim()
+        }
+    }
+    val end = raw.indexOf("<!--/think-->")
+    return if (end < 0) {
+        raw.removePrefix(open).trim() to ""
+    } else {
+        raw.substring(open.length, end).trim() to raw.substring(end + "<!--/think-->".length).trim()
+    }
+}
+
+/**
+ * 思考过程折叠块。默认收起，点一下展开；流式生成中显示「正在思考…」。
+ */
+@Composable
+fun ThinkingSection(thinking: String, streaming: Boolean) {
+    var expanded by remember { androidx.compose.runtime.mutableStateOf(false) }
+    if (thinking.isBlank()) return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (streaming) "正在思考…" else "已深度思考（${thinking.length} 字）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (expanded) "收起" else "展开",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (expanded) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    thinking,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 19.sp
+                )
+            }
+        }
+    }
 }
 
 /* ---------------- 行内解析 ---------------- */

@@ -8,6 +8,7 @@ import com.aibox.domain.inference.InferenceConfigV2
 import com.aibox.domain.inference.InferenceRequest
 import com.aibox.domain.inference.LoadedModel
 import com.aibox.domain.inference.ModalityInput
+import com.aibox.domain.inference.ModelFormat
 import com.aibox.domain.inference.OptimizationFlags
 import com.aibox.domain.inference.TaskType
 import com.aibox.util.log.LogSystem
@@ -77,6 +78,12 @@ class TtftOptimizer(
         }
         val lastModel: ModelInfo = modelRepository.lastUsed() ?: run {
             LogSystem.info(tag, "no lastUsed model, skip preload")
+            return
+        }
+        // 预加载只对 GGUF 生效：非 GGUF（LiteRT / MNN / ONNX）需要对应后端，
+        // 而这里取的是第一个已注册后端（通常是 llama.cpp），强加载会失败。
+        if (ModelFormat.fromPath(lastModel.filePath) != ModelFormat.GGUF) {
+            LogSystem.info(tag, "skip preload: non-GGUF model (${lastModel.filePath})")
             return
         }
         val backendName = backendManager.listBackends().firstOrNull()?.getName() ?: run {

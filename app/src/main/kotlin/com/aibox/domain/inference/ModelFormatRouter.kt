@@ -35,6 +35,11 @@ object ModelFormatRouter {
             fun fromPath(filePath: String): ModelFormat {
                 val lower = filePath.lowercase().trim()
                 return when {
+                    // 兼容历史导入路径被错误追加 .gguf 的情况（如 xxx.litertlm.gguf）
+                    lower.contains(".litertlm.") -> LITERTLM
+                    lower.contains(".tflite.")   -> TFLITE
+                    lower.contains(".onnx.")     -> ONNX
+                    lower.contains(".mnn.")      -> MNN
                     lower.endsWith(".gguf")      -> GGUF
                     lower.endsWith(".bin")       -> BIN
                     lower.endsWith(".tflite")    -> TFLITE

@@ -32,10 +32,18 @@ object FileUtils {
     /** 计算 .gguf 文件的真实大小（MB） */
     fun fileSizeMb(file: File): Long = file.length() / 1024 / 1024
 
-    /** 列出所有已导入的 .gguf */
+    /**
+     * 列出所有已导入的模型文件（gguf / tflite / litertlm / onnx / mnn / bin）。
+     * 不要只列 .gguf：否则 LiteRT 等模型导入后不会出现在列表里。
+     */
     fun listGguf(context: Context): List<File> =
-        modelsDir(context).listFiles { f -> f.isFile && f.name.endsWith(".gguf") }
+        modelsDir(context).listFiles { f -> f.isFile && isModelFile(f.name) }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
+
+    private val MODEL_EXTENSIONS = setOf("gguf", "tflite", "litertlm", "onnx", "mnn", "bin")
+
+    private fun isModelFile(name: String): Boolean =
+        MODEL_EXTENSIONS.any { name.endsWith(".$it", ignoreCase = true) }
 
     private fun queryName(context: Context, uri: Uri): String {
         var name = "imported_${System.currentTimeMillis()}.gguf"
@@ -43,7 +51,11 @@ object FileUtils {
             val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             if (idx >= 0 && c.moveToFirst()) name = c.getString(idx)
         }
-        if (!name.endsWith(".gguf")) name = "$name.gguf"
+        // 关键：保留模型真实后缀（.litertlm / .tflite …）。
+        // 之前无条件补 .gguf 会把 LFM2.5-230M_int8.litertlm 变成 .litertlm.gguf，
+        // 导致路由到 llama.cpp 后加载失败。
+        val hasKnownExt = isModelFile(name)
+        if (!hasKnownExt && !name.contains('.')) name = "$name.gguf"
         return name
     }
 }

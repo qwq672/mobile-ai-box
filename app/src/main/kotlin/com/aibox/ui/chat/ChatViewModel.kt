@@ -55,6 +55,8 @@ class ChatViewModel : ViewModel() {
         val backendName: String = "CPU",
         val tokensPerSecond: Float = 0f,
         val thermalPercent: Int = 0,
+        /** 真实摄氏度；-1 = 读不到（不要用百分比冒充） */
+        val thermalCelsius: Double = -1.0,
         val errorMessage: String? = null,
         val hasModel: Boolean = false,
         val modelName: String = "",
@@ -77,14 +79,14 @@ class ChatViewModel : ViewModel() {
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
     @Volatile private var systemPrompt: String = ""
-    @Volatile private var thinkingMode: Boolean = true
+
+    /** 思考开关统一由档位决定，避免「关了还发 /think」的状态不一致。 */
+    private val thinkingEnabled: Boolean
+        get() = _ui.value.thinkingLevel != "off"
 
     init {
         viewModelScope.launch {
             settings.config.collectLatest { systemPrompt = it.systemPrompt }
-        }
-        viewModelScope.launch {
-            settings.thinkingMode.collectLatest { thinkingMode = it }
         }
         viewModelScope.launch {
             settings.thinkingLevel.collectLatest { level ->
@@ -94,6 +96,11 @@ class ChatViewModel : ViewModel() {
         viewModelScope.launch {
             settings.chatDocStyle.collectLatest { on ->
                 _ui.value = _ui.value.copy(docStyle = on)
+            }
+        }
+        viewModelScope.launch {
+            container.thermalMonitor.celsius.collectLatest { c ->
+                _ui.value = _ui.value.copy(thermalCelsius = c)
             }
         }
         viewModelScope.launch {
@@ -206,7 +213,7 @@ class ChatViewModel : ViewModel() {
                 val messages = buildChatMessages(_ui.value.messages)
                 engine.completionChat(
                     messages = messages,
-                    thinkingMode = thinkingMode,
+                    thinkingMode = thinkingEnabled,
                     onToken = { tok ->
                         if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
                         tokCount++
@@ -291,7 +298,7 @@ class ChatViewModel : ViewModel() {
                 val messages = buildChatMessages(withoutLast)
                 engine.completionChat(
                     messages = messages,
-                    thinkingMode = thinkingMode,
+                    thinkingMode = thinkingEnabled,
                     onToken = { tok ->
                         if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
                         tokCount++
@@ -453,8 +460,8 @@ class ChatViewModel : ViewModel() {
 
     /**
      * 把对话历史转换成 NativeBridge.ChatMsg 数组给 native 端用模型内置 chat template 格式化。
-     * - systemPrompt 非空时作为 system message；思考开启时即使为空也补一条，
-     *   以便 native 端在 system message 末尾追加 /think 标志
+     * - systemPrompt 非空时作为 system message（为空则不加，native 会把 /think
+     *   或 /no_think 追加到最后一条 user message）
      * - 文本附件正文拼进 user content；图片通过 [NativeBridge.ChatMsg.images] 交给云端多模态
      * - 思考档位 low / high 追加提示词，作为本地与云端的通用兜底
      */
@@ -468,10 +475,8 @@ class ChatViewModel : ViewModel() {
         val sys = listOf(systemPrompt.trim(), levelHint)
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
-        if (sys.isNotBlank() || _ui.value.thinkingLevel != "off") {
-            // native 端只在 system message 非空时追加 /think 或 /no_think，
-            // 所以关闭思考时也要给一条占位 system，确保 /no_think 能注入。
-            list.add(NativeBridge.ChatMsg(role = "system", content = sys.ifBlank { " " }))
+        if (sys.isNotBlank()) {
+            list.add(NativeBridge.ChatMsg(role = "system", content = sys))
         }
         for (m in msgs) {
             val textParts = m.attachments.filter { it.kind == "text" && it.text.isNotBlank() }

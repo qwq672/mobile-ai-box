@@ -109,6 +109,8 @@ class OpenAiCompatibleClient {
                 val source = response.body?.source() ?: error("empty response body")
 
                 val content = StringBuilder()
+                val reasoning = StringBuilder()
+                var reasoningOpen = false
                 val toolCalls = linkedMapOf<Int, ToolCallAccumulator>()
                 var finishReason = "stop"
 
@@ -129,9 +131,24 @@ class OpenAiCompatibleClient {
                     choice["finish_reason"]?.jsonPrimitive?.contentOrNull?.let { finishReason = it }
 
                     val delta = choice["delta"]?.jsonObject ?: continue
+                    // 思考内容：DeepSeek / vLLM / Ollama 等用 reasoning_content，部分网关用 reasoning
+                    val reasoningDelta = delta["reasoning_content"]?.jsonPrimitive?.contentOrNull
+                        ?: delta["reasoning"]?.jsonPrimitive?.contentOrNull
+                    if (!reasoningDelta.isNullOrEmpty()) {
+                        if (!reasoningOpen) {
+                            reasoningOpen = true
+                            onToken("<!--think-->")
+                        }
+                        reasoning.append(reasoningDelta)
+                        onToken(reasoningDelta)
+                    }
                     delta["content"]?.jsonPrimitive?.contentOrNull
                         ?.takeIf { it.isNotEmpty() }
                         ?.let {
+                            if (reasoningOpen) {
+                                reasoningOpen = false
+                                onToken("<!--/think-->\n\n")
+                            }
                             content.append(it)
                             onToken(it)
                         }
@@ -145,6 +162,11 @@ class OpenAiCompatibleClient {
                         fn?.get("name")?.jsonPrimitive?.contentOrNull?.let { acc.name = it }
                         fn?.get("arguments")?.jsonPrimitive?.contentOrNull?.let { acc.args.append(it) }
                     }
+                }
+
+                if (reasoningOpen) {
+                    reasoningOpen = false
+                    onToken("<!--/think-->")
                 }
 
                 val calls = toolCalls.toSortedMap().values

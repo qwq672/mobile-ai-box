@@ -39,7 +39,7 @@ class ThermalMonitor {
     private val _thermalPercent = MutableStateFlow(-1)
     val thermalPercent: StateFlow<Int> = _thermalPercent.asStateFlow()
 
-    /** 原始摄氏度;-1.0 表示未读到。来自 sysfs 或 PowerManager 估算。 */
+    /** 原始摄氏度;-1.0 表示未读到。优先 sysfs / 电池真实值，绝不估算伪造。 */
     private val _celsius = MutableStateFlow(-1.0)
     val celsius: StateFlow<Double> = _celsius.asStateFlow()
 
@@ -101,6 +101,10 @@ class ThermalMonitor {
 
     private var job: Job? = null
     private var sysfsPaths: List<String> = emptyList()
+    /** thermal_zone temp 路径 → 传感器类型（cpu / gpu / skin / battery …）。 */
+    private var sysfsTypes: Map<String, String> = emptyMap()
+    /** hwmon 温度输入路径（部分 OEM 只在这里暴露温度）。 */
+    private var hwmonPaths: List<String> = emptyList()
     private var cpuFreqPath: String? = null
     private var gpuFreqPaths: List<String> = emptyList()
     private var gpuUsagePaths: List<String> = emptyList()
@@ -114,7 +118,10 @@ class ThermalMonitor {
 
     fun start() {
         if (job?.isActive == true) return
-        sysfsPaths = findAllTempZones()
+        val zones = findAllTempZones()
+        sysfsPaths = zones.first
+        sysfsTypes = zones.second
+        hwmonPaths = findAllHwmonPaths()
         cpuFreqPath = findCpuFreqPath()
         gpuFreqPaths = findAllGpuFreqPaths()
         gpuUsagePaths = findAllGpuUsagePaths()
@@ -175,6 +182,9 @@ class ThermalMonitor {
 
     /** 单次循环:读温度 + CPU/GPU 频率 + 利用率 + 内存 + 电量 + 追加 history + 推导 ThermalLevel。 */
     private fun tick() {
+        // 0. 先读电量/电池温度（真实温度兜底依赖它）
+        readBattery()
+
         // 1. 读温度 + 原始摄氏度
         val (pct, c) = readPercentWithCelsius()
         _thermalPercent.value = pct
@@ -193,10 +203,7 @@ class ThermalMonitor {
         // 5. 读内存使用率 + app 内存
         readMemoryUsage()
 
-        // 6. 读电量
-        readBattery()
-
-        // 7. 追加 history
+        // 6. 追加 history
         val sample = ThermalSample(
             timestamp = System.currentTimeMillis(),
             percent = pct,
@@ -222,18 +229,18 @@ class ThermalMonitor {
 
     /**
      * 读温度百分比 + 原始摄氏度。返回 (percent, celsius)。
+     *
+     * 关键原则：**绝不伪造摄氏度**。
+     * - 能从 sysfs / 电池拿到真实温度 → 用真实值换算档位
+     * - 只拿到 PowerManager 离散档位 → percent 用档位，celsius 返回 -1（UI 显示「—」）
+     * 这样不会出现「手机很烫但界面显示 35℃」的误导。
      */
     private fun readPercentWithCelsius(): Pair<Int, Double> {
-        for (path in sysfsPaths) {
-            try {
-                val raw = File(path).readText().trim()
-                if (raw.isEmpty() || raw == "0") continue
-                val milli = raw.toLong()
-                if (milli <= 0) continue
-                val celsiusVal = milli / 1000.0
-                val pct = ((celsiusVal - 35) * 100 / 30).toInt().coerceIn(0, 100)
-                if (pct >= 0) return pct to celsiusVal
-            } catch (_: Exception) { /* try next */ }
+        val real = readRealCelsius()
+        if (real > 0.0) {
+            // 28℃ 以下算凉爽，65℃ 以上算极热；线性映射到 0..100
+            val pct = ((real - 28.0) / 37.0 * 100.0).toInt().coerceIn(0, 100)
+            return pct to real
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -241,12 +248,62 @@ class ThermalMonitor {
             return try {
                 val status = pm.currentThermalStatus
                 val pct = (status * 100 / 6).coerceIn(0, 100)
-                val estC = 35.0 + pct * 30.0 / 100.0
-                pct to estC
+                // 不再用 35 + pct*30/100 估算温度
+                pct to -1.0
             } catch (_: Exception) { -1 to -1.0 }
         }
 
         return -1 to -1.0
+    }
+
+    /**
+     * 读取设备上最可信的真实温度（摄氏度），读不到返回 -1.0。
+     *
+     * 顺序：CPU/SKIN/GPU 等热区 → 全部热区最大值 → 电池温度 → hwmon。
+     * 过滤明显异常值（< -20 或 > 120），避免个别传感器返回 0 或乱码。
+     */
+    private fun readRealCelsius(): Double {
+        // 1. 优先 thermal_zone 中类型像 CPU/GPU/SKIN 的
+        var bestPriority = -1.0
+        var bestAny = -1.0
+        for (path in sysfsPaths) {
+            val c = readTempFile(path) ?: continue
+            if (c !in -20.0..120.0) continue
+            if (c > bestAny) bestAny = c
+            val type = sysfsTypes[path].orEmpty()
+            if (type.contains("cpu") || type.contains("gpu") || type.contains("skin") ||
+                type.contains("soc") || type.contains("ap")
+            ) {
+                if (c > bestPriority) bestPriority = c
+            }
+        }
+        if (bestPriority > 0.0) return bestPriority
+        if (bestAny > 0.0) return bestAny
+
+        // 2. 电池温度（真实值，通常 25~45℃，是很好的兜底）
+        val b = _batteryCelsius.value
+        if (b in 0.0..120.0) return b
+
+        // 3. hwmon
+        for (path in hwmonPaths) {
+            val c = readTempFile(path) ?: continue
+            if (c in -20.0..120.0) return c
+        }
+        return -1.0
+    }
+
+    /** 温度文件可能是毫摄氏度（45000）或摄氏度（45），统一化。 */
+    private fun readTempFile(path: String): Double? {
+        return try {
+            val raw = File(path).readText().trim()
+            if (raw.isEmpty()) return null
+            val v = raw.toDoubleOrNull() ?: return null
+            when {
+                v <= 0 -> null
+                v > 1000 -> v / 1000.0  // 毫摄氏度
+                else -> v
+            }
+        } catch (_: Exception) { null }
     }
 
     /** 读 CPU 当前主频(kHz);0 表示读不到。 */
@@ -372,24 +429,50 @@ class ThermalMonitor {
     }
 
     /**
-     * 扫描所有 thermal_zone,按温度从高到低排序。
+     * 扫描所有 thermal_zone 与 /sys/devices/virtual/thermal，返回
+     * (按温度从高到低排序的 temp 路径, 路径→传感器类型)。
+     *
+     * 荣耀/华为等机型 /sys/class/thermal 为空，但 /sys/devices/virtual/thermal 可读，
+     * 所以两处都要扫。
      */
-    private fun findAllTempZones(): List<String> {
-        val base = File("/sys/class/thermal")
+    private fun findAllTempZones(): Pair<List<String>, Map<String, String>> {
+        val bases = listOf(
+            File("/sys/class/thermal"),
+            File("/sys/devices/virtual/thermal")
+        )
+        val entries = mutableListOf<Triple<String, String, Double>>()
+        for (base in bases) {
+            if (!base.exists()) continue
+            val zones = base.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") }
+                ?: continue
+            for (zone in zones) {
+                try {
+                    val tempFile = File(zone, "temp")
+                    if (!tempFile.exists()) continue
+                    val c = readTempFile(tempFile.absolutePath) ?: continue
+                    if (c !in -20.0..120.0) continue
+                    val typeFile = File(zone, "type")
+                    val type = if (typeFile.exists()) typeFile.readText().trim().lowercase() else ""
+                    if (entries.any { it.first == tempFile.absolutePath }) continue
+                    entries.add(Triple(tempFile.absolutePath, type, c))
+                } catch (_: Exception) { /* next */ }
+            }
+        }
+        val sorted = entries.sortedByDescending { it.third }
+        return sorted.map { it.first } to sorted.associate { it.first to it.second }
+    }
+
+    /** 扫描 /sys/class/hwmon/hwmonN/tempM_input（部分 OEM 的温度只在这里）。 */
+    private fun findAllHwmonPaths(): List<String> {
+        val base = File("/sys/class/hwmon")
         if (!base.exists()) return emptyList()
-        val zones = base.listFiles { f -> f.isDirectory && f.name.startsWith("thermal_zone") }
-            ?: return emptyList()
-        return zones.mapNotNull { zone ->
-            try {
-                val tempFile = File(zone, "temp")
-                val typeFile = File(zone, "type")
-                if (!tempFile.exists()) return@mapNotNull null
-                val temp = tempFile.readText().trim().toLongOrNull() ?: return@mapNotNull null
-                if (temp <= 0) return@mapNotNull null
-                val type = if (typeFile.exists()) typeFile.readText().trim().lowercase() else ""
-                Triple(tempFile.absolutePath, type, temp)
-            } catch (_: Exception) { null }
-        }.sortedByDescending { it.third }.map { it.first }
+        val out = mutableListOf<String>()
+        base.listFiles { f -> f.isDirectory }?.forEach { hw ->
+            hw.listFiles { f -> f.isFile && f.name.matches(Regex("temp\\d+_input")) }?.forEach { f ->
+                out.add(f.absolutePath)
+            }
+        }
+        return out
     }
 
     /**
@@ -499,12 +582,12 @@ data class ThermalSample(
 /**
  * 散热档位枚举(用于 UI 渲染色调 + 建议)。
  *
- * 阈值(与 ThermalGovernor 对齐):
+ * 阈值(与 ThermalGovernor 对齐, percent 由真实摄氏度映射):
  * - UNKNOWN: percent < 0(未读到温度)
- * - COOL: percent < 50(正常)
- * - WARM: percent 50..75(轻微发热,建议关注)
- * - HOT: percent 75..90(明显发热,建议降线程)
- * - CRITICAL: percent >= 90(极热,建议暂停长测)
+ * - COOL: percent < 40(正常)
+ * - WARM: percent 40..65(轻微发热,建议关注)
+ * - HOT: percent 65..85(明显发热,建议降线程)
+ * - CRITICAL: percent >= 85(极热,建议暂停长测)
  */
 enum class ThermalLevel {
     UNKNOWN,
@@ -516,9 +599,9 @@ enum class ThermalLevel {
     companion object {
         fun fromPercent(pct: Int): ThermalLevel = when {
             pct < 0 -> UNKNOWN
-            pct < 50 -> COOL
-            pct < 75 -> WARM
-            pct < 90 -> HOT
+            pct < 40 -> COOL
+            pct < 65 -> WARM
+            pct < 85 -> HOT
             else -> CRITICAL
         }
     }

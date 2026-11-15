@@ -201,7 +201,16 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun onAccentColorChange(spec: String) {
-        viewModelScope.launch { container.settingsRepository.setAccentColor(spec) }
+        viewModelScope.launch {
+            if (spec.equals("dynamic", ignoreCase = true)) {
+                container.settingsRepository.setDynamicColor(true)
+                container.settingsRepository.setAccentColor("dynamic")
+            } else {
+                // 选具体颜色时自动关闭 Material You，否则壁纸配色会覆盖用户选择
+                container.settingsRepository.setDynamicColor(false)
+                container.settingsRepository.setAccentColor(spec)
+            }
+        }
     }
 
     fun onCornerScaleChange(scale: Float) {

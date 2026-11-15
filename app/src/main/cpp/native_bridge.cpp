@@ -767,20 +767,40 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
         if (!msg) continue;
         jstring jrole = (jstring) env->GetObjectField(msg, roleFid);
         jstring jcontent = (jstring) env->GetObjectField(msg, contentFid);
-        std::string role = jrole ? std::string(env->GetStringUTFChars(jrole, nullptr)) : "user";
-        std::string content = jcontent ? std::string(env->GetStringUTFChars(jcontent, nullptr)) : "";
-        if (jrole) env->ReleaseStringUTFChars(jrole, env->GetStringUTFChars(jrole, nullptr));
-        if (jcontent) env->ReleaseStringUTFChars(jcontent, env->GetStringUTFChars(jcontent, nullptr));
-
-        // 如果是 system message 且 thinkingMode 开启，追加 /think 标志
-        if (role == "system" && !content.empty()) {
-            content += "\n" + think_flag;
+        std::string role = "user";
+        std::string content;
+        if (jrole) {
+            const char* r = env->GetStringUTFChars(jrole, nullptr);
+            if (r) { role = r; env->ReleaseStringUTFChars(jrole, r); }
+        }
+        if (jcontent) {
+            const char* c = env->GetStringUTFChars(jcontent, nullptr);
+            if (c) { content = c; env->ReleaseStringUTFChars(jcontent, c); }
         }
 
+        // 不再往 system message 里塞 /think：Qwen3 等模板只识别 user turn 里的标志，
+        // 且系统提示词为空时会被整条跳过。统一在下面追加到最后一条 user message。
         strings.emplace_back(std::move(role), std::move(content));
+        if (jrole) env->DeleteLocalRef(jrole);
+        if (jcontent) env->DeleteLocalRef(jcontent);
         env->DeleteLocalRef(msg);
     }
     env->DeleteLocalRef(msgCls);
+
+    // 把 /think 或 /no_think 追加到最后一条 user message（与 Qwen3 官方用法一致）；
+    // 如果整段对话没有 user，则退回追加到最后一条消息。
+    if (!strings.empty()) {
+        int target = -1;
+        for (int i = (int) strings.size() - 1; i >= 0; --i) {
+            if (strings[i].first == "user") { target = i; break; }
+        }
+        if (target < 0) target = (int) strings.size() - 1;
+        std::string& c = strings[target].second;
+        if (c.find(think_flag) == std::string::npos) {
+            if (!c.empty() && c.back() != '\n') c += "\n";
+            c += think_flag;
+        }
+    }
 
     for (auto& p : strings) {
         chat.push_back({p.first.c_str(), p.second.c_str()});

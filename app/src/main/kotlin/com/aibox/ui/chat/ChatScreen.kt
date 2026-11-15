@@ -177,12 +177,12 @@ fun ChatScreen(
     var clearOpen by remember { mutableStateOf(false) }
     var sheetOpen by remember { mutableStateOf(false) }
 
-    // 进入页面时内容渐显（导航 → 聊天）
+    // 进入页面时内容渐显（导航 → 聊天）：透明度 + 轻微上移，避免只剩一瞬间的淡入
     var contentVisible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { contentVisible = true }
-    val contentAlpha by animateFloatAsState(
+    val contentProgress by animateFloatAsState(
         targetValue = if (contentVisible) 1f else 0f,
-        animationSpec = tween(280),
+        animationSpec = tween(durationMillis = 420, easing = androidx.compose.animation.core.FastOutSlowInEasing),
         label = "chatFade"
     )
 
@@ -314,7 +314,8 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
-                .alpha(contentAlpha)
+                .alpha(contentProgress)
+                .offset(y = (18 * (1f - contentProgress)).dp)
         ) {
             when {
                 !ui.hasModel -> {
@@ -396,6 +397,7 @@ fun ChatScreen(
                     contextUsed = ui.contextUsed,
                     contextMax = ui.contextMax,
                     backendName = ui.backendName,
+                    thermalCelsius = ui.thermalCelsius,
                     thermalPercent = ui.thermalPercent
                 )
             }
@@ -660,6 +662,7 @@ private fun StatusPill(
     contextUsed: Int,
     contextMax: Int,
     backendName: String,
+    thermalCelsius: Double = -1.0,
     thermalPercent: Int = -1
 ) {
     Row(
@@ -699,18 +702,36 @@ private fun StatusPill(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (thermalPercent >= 0) {
+                if (thermalCelsius > 0) {
                     Dot()
                     Text(
-                        "$thermalPercent°",
+                        "%.1f°C".format(thermalCelsius),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (thermalPercent >= 85) MaterialTheme.colorScheme.error
+                        color = if (thermalCelsius >= 50.0) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else if (thermalPercent >= 0) {
+                    // 只有离散热档位、没有真实温度时，显示档位而不是伪造的摄氏度
+                    Dot()
+                    Text(
+                        thermalLevelLabel(thermalPercent),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (thermalPercent >= 65) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
         }
     }
+}
+
+/** 只有离散热档位时的文案（避免把百分比当成温度显示）。 */
+private fun thermalLevelLabel(pct: Int): String = when {
+    pct < 25 -> "凉爽"
+    pct < 50 -> "常温"
+    pct < 70 -> "偏热"
+    pct < 88 -> "发烫"
+    else -> "过热"
 }
 
 @Composable
@@ -947,13 +968,20 @@ private fun MessageItem(
                         .fillMaxWidth()
                         .then(longPress)
                 ) {
-                    MarkdownText(
-                        text = m.content,
-                        modifier = if (animate) {
-                            Modifier.animateContentSize(animationSpec = tween(120))
-                        } else Modifier,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    val (think, body) = remember(m.content) { splitThinking(m.content) }
+                    if (think != null) {
+                        ThinkingSection(thinking = think, streaming = animate && body.isBlank())
+                        if (body.isNotBlank()) Spacer(Modifier.height(8.dp))
+                    }
+                    if (body.isNotBlank()) {
+                        MarkdownText(
+                            text = body,
+                            modifier = if (animate) {
+                                Modifier.animateContentSize(animationSpec = tween(120))
+                            } else Modifier,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
 
@@ -971,10 +999,17 @@ private fun MessageItem(
                             .then(longPress)
                     ) {
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                            MarkdownText(
-                                text = m.content,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                            val (think, body) = remember(m.content) { splitThinking(m.content) }
+                            if (think != null) {
+                                ThinkingSection(thinking = think, streaming = animate && body.isBlank())
+                                if (body.isNotBlank()) Spacer(Modifier.height(8.dp))
+                            }
+                            if (body.isNotBlank()) {
+                                MarkdownText(
+                                    text = body,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     }
                 }
@@ -1083,11 +1118,11 @@ private fun Composer(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(shapeRadius.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 4.dp
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+        shadowElevation = 6.dp
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 10.dp)) {
+        Column(Modifier.padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 9.dp)) {
             PendingAttachmentBar(
                 attachments = attachments,
                 onRemove = onRemoveAttachment,
@@ -1100,7 +1135,8 @@ private fun Composer(
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(
                     color = if (enabled) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 22.sp
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 maxLines = 6,
@@ -1108,33 +1144,33 @@ private fun Composer(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { doSend() }),
                 decorationBox = { inner ->
-                    Box {
+                    Box(Modifier.padding(top = 2.dp, bottom = 4.dp)) {
                         if (input.isEmpty()) {
                             Text(
                                 if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型",
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
                         }
                         inner()
                     }
                 }
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 CircleAction(
                     size = 34,
-                    container = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    container = MaterialTheme.colorScheme.primaryContainer,
                     enabled = enabled,
                     onClick = onOpenPlus
                 ) {
                     Icon(
                         Icons.Outlined.Add,
                         contentDescription = "添加",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -1153,7 +1189,7 @@ private fun Composer(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
                 // 发送 / 停止：同一个圆形按钮形变，生成中变实心停止块
                 val circleColor = when {
                     streaming -> MaterialTheme.colorScheme.error
@@ -1166,7 +1202,7 @@ private fun Composer(
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 CircleAction(
-                    size = 36,
+                    size = 38,
                     container = circleColor,
                     enabled = streaming || canSend,
                     onClick = { if (streaming) onStop() else doSend() }

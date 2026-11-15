@@ -53,6 +53,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -215,6 +216,37 @@ fun SettingsScreen(
                                         }
                                     }
                                 }
+                            }
+                            Spacer(Modifier.size(10.dp))
+                            // 自定义色相：拖动后按该色相重建整套主题（不只换主色）
+                            var hue by remember(ui.accentColor) {
+                                androidx.compose.runtime.mutableFloatStateOf(
+                                    hueOfHex(ui.accentColor).takeIf { it >= 0f } ?: 210f
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "自定义色相",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.size(12.dp))
+                                Slider(
+                                    value = hue,
+                                    onValueChange = { hue = it },
+                                    onValueChangeFinished = {
+                                        vm.onAccentColorChange(hsvToHex(hue))
+                                    },
+                                    valueRange = 0f..360f,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(Modifier.size(10.dp))
+                                Box(
+                                    Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(android.graphics.Color.parseColor(hsvToHex(hue))))
+                                )
                             }
                         }
                         HorizontalDivider()
@@ -1027,4 +1059,21 @@ private fun PermissionCard() {
             }
         }
     }
+}
+
+/** 从 #RRGGBB 提取色相（0..360）；解析失败返回 -1。 */
+private fun hueOfHex(spec: String): Float {
+    if (spec.isBlank() || spec.equals("dynamic", true)) return -1f
+    return try {
+        val c = android.graphics.Color.parseColor(spec)
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(c, hsv)
+        hsv[0]
+    } catch (_: Exception) { -1f }
+}
+
+/** 固定饱和度/明度，按色相生成一个适合做主题种子的 #RRGGBB。 */
+private fun hsvToHex(hue: Float): String {
+    val c = android.graphics.Color.HSVToColor(floatArrayOf(hue, 0.62f, 0.62f))
+    return String.format("#%06X", 0xFFFFFF and c)
 }

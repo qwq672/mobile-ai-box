@@ -129,7 +129,7 @@ private fun schemeFromSeed(seed: Color, dark: Boolean): ColorScheme {
     )
 
     val base = if (dark) DarkColors else LightColors
-    return if (dark) base.copy(
+    if (dark) return base.copy(
         primary = tone(h, s.coerceAtMost(0.72f), 0.78f),
         onPrimary = tone(h, s, 0.16f),
         primaryContainer = tone(h, s * 0.7f, 0.28f),
@@ -143,7 +143,19 @@ private fun schemeFromSeed(seed: Color, dark: Boolean): ColorScheme {
         tertiaryContainer = tone(h + 60f, s * 0.5f, 0.3f),
         onTertiaryContainer = tone(h + 60f, s * 0.4f, 0.92f),
         inversePrimary = tone(h, s * 0.7f, 0.42f),
-        surfaceTint = tone(h, s.coerceAtMost(0.72f), 0.78f)
+        surfaceTint = tone(h, s.coerceAtMost(0.72f), 0.78f),
+        // 让背景/卡片也带一点主色倾向，而不是纯灰
+        background = tone(h, 0.12f, 0.09f),
+        surface = tone(h, 0.12f, 0.09f),
+        surfaceContainerLow = tone(h, 0.12f, 0.11f),
+        surfaceContainer = tone(h, 0.13f, 0.13f),
+        surfaceContainerHigh = tone(h, 0.14f, 0.16f),
+        surfaceContainerHighest = tone(h, 0.15f, 0.20f),
+        onBackground = tone(h, 0.08f, 0.94f),
+        onSurface = tone(h, 0.08f, 0.94f),
+        onSurfaceVariant = tone(h, 0.10f, 0.76f),
+        outline = tone(h, 0.14f, 0.60f),
+        outlineVariant = tone(h, 0.14f, 0.32f)
     ) else base.copy(
         primary = tone(h, s, 0.4f),
         onPrimary = Color.White,
@@ -158,7 +170,18 @@ private fun schemeFromSeed(seed: Color, dark: Boolean): ColorScheme {
         tertiaryContainer = tone(h + 60f, s * 0.5f, 0.92f),
         onTertiaryContainer = tone(h + 60f, s * 0.8f, 0.18f),
         inversePrimary = tone(h, s * 0.7f, 0.78f),
-        surfaceTint = tone(h, s, 0.4f)
+        surfaceTint = tone(h, s, 0.4f),
+        background = tone(h, 0.10f, 0.985f),
+        surface = tone(h, 0.10f, 0.985f),
+        surfaceContainerLow = tone(h, 0.10f, 0.96f),
+        surfaceContainer = tone(h, 0.11f, 0.94f),
+        surfaceContainerHigh = tone(h, 0.12f, 0.91f),
+        surfaceContainerHighest = tone(h, 0.13f, 0.88f),
+        onBackground = tone(h, 0.10f, 0.11f),
+        onSurface = tone(h, 0.10f, 0.11f),
+        onSurfaceVariant = tone(h, 0.12f, 0.34f),
+        outline = tone(h, 0.18f, 0.50f),
+        outlineVariant = tone(h, 0.14f, 0.80f)
     )
 }
 
