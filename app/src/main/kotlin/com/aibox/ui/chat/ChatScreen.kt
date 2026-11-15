@@ -97,6 +97,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -184,6 +186,16 @@ fun ChatScreen(
         targetValue = if (contentVisible) 1f else 0f,
         animationSpec = tween(durationMillis = 420, easing = androidx.compose.animation.core.FastOutSlowInEasing),
         label = "chatFade"
+    )
+    // 输入栏稍晚一点出现，让「内容 → 输入」有层次而不是一起闪出来
+    val composerProgress by animateFloatAsState(
+        targetValue = if (contentVisible) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = 420,
+            delayMillis = 90,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing
+        ),
+        label = "composerFade"
     )
 
     // 相册 / 文件选择（系统 Photo Picker 与 SAF，无需存储权限）
@@ -314,76 +326,96 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
-                .alpha(contentProgress)
-                .offset(y = (18 * (1f - contentProgress)).dp)
         ) {
-            when {
-                !ui.hasModel -> {
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        EmptyModelState()
+            // 内容区：底部加一层渐隐遮罩，避免与输入栏之间出现生硬的截断线
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .alpha(contentProgress)
+                    .offset(y = (18 * (1f - contentProgress)).dp)
+            ) {
+                when {
+                    !ui.hasModel -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            EmptyModelState()
+                        }
                     }
-                }
-                ui.messages.isEmpty() && ui.currentStream.isEmpty() && !ui.streaming -> {
-                    EmptyChatState(
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        onSuggestion = { vm.send(it) }
-                    )
-                }
-                else -> {
-                    LazyColumn(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        state = listState,
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(if (ui.docStyle) 18.dp else 8.dp)
-                    ) {
-                        val lastAssistantIndex = ui.messages.indexOfLast { it.role == "assistant" }
-                        itemsIndexed(
-                            items = ui.messages,
-                            key = { _, m -> "${m.id}-${m.ts}" }
-                        ) { index, m ->
-                            MessageItem(
-                                m = m,
-                                docStyle = ui.docStyle,
-                                showActions = !ui.streaming && index == lastAssistantIndex,
-                                animate = false,
-                                onCopy = {
-                                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                            as android.content.ClipboardManager
-                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("AIBox", m.content))
-                                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                                },
-                                onRegenerate = if (m.role == "assistant") {
-                                    { vm.regenerate() }
-                                } else null,
-                                onDelete = { vm.deleteMessage(m) }
-                            )
-                        }
-                        // B6 工具调用 UI: 在消息后渲染活跃的工具调用列表
-                        items(items = ui.toolInvocations, key = { inv -> inv.id }) { inv ->
-                            ToolInvocationBubble(
-                                invocation = inv,
-                                onRetry = { vm.retryToolInvocation(inv.id) }
-                            )
-                        }
-                        if (ui.currentStream.isNotEmpty()) {
-                            item(key = "stream") {
+                    ui.messages.isEmpty() && ui.currentStream.isEmpty() && !ui.streaming -> {
+                        EmptyChatState(
+                            modifier = Modifier.fillMaxSize(),
+                            onSuggestion = { vm.send(it) }
+                        )
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            state = listState,
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(if (ui.docStyle) 18.dp else 8.dp)
+                        ) {
+                            val lastAssistantIndex = ui.messages.indexOfLast { it.role == "assistant" }
+                            itemsIndexed(
+                                items = ui.messages,
+                                key = { _, m -> "${m.id}-${m.ts}" }
+                            ) { index, m ->
                                 MessageItem(
-                                    m = ChatMessage(role = "assistant", content = ui.currentStream, sessionId = 0),
+                                    m = m,
                                     docStyle = ui.docStyle,
-                                    showActions = false,
-                                    animate = true
+                                    showActions = !ui.streaming && index == lastAssistantIndex,
+                                    animate = false,
+                                    onCopy = {
+                                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                                as android.content.ClipboardManager
+                                        cm.setPrimaryClip(android.content.ClipData.newPlainText("AIBox", m.content))
+                                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onRegenerate = if (m.role == "assistant") {
+                                        { vm.regenerate() }
+                                    } else null,
+                                    onDelete = { vm.deleteMessage(m) },
+                                    onChoice = { vm.send(it) }
                                 )
                             }
+                            // B6 工具调用 UI: 在消息后渲染活跃的工具调用列表
+                            items(items = ui.toolInvocations, key = { inv -> inv.id }) { inv ->
+                                ToolInvocationBubble(
+                                    invocation = inv,
+                                    onRetry = { vm.retryToolInvocation(inv.id) }
+                                )
+                            }
+                            if (ui.currentStream.isNotEmpty()) {
+                                item(key = "stream") {
+                                    MessageItem(
+                                        m = ChatMessage(role = "assistant", content = ui.currentStream, sessionId = 0),
+                                        docStyle = ui.docStyle,
+                                        showActions = false,
+                                        animate = true,
+                                        onChoice = { vm.send(it) }
+                                    )
+                                }
+                            }
+                            if (ui.streaming && ui.currentStream.isEmpty()) {
+                                item(key = "thinking") { ThinkingIndicator(docStyle = ui.docStyle) }
+                            }
+                            // 让最后一条消息不被输入栏挡住
+                            item(key = "bottom_spacer") { Spacer(Modifier.height(8.dp)) }
                         }
-                        if (ui.streaming && ui.currentStream.isEmpty()) {
-                            item(key = "thinking") { ThinkingIndicator(docStyle = ui.docStyle) }
-                        }
-                        // 让最后一条消息不被输入栏挡住
-                        item(key = "bottom_spacer") { Spacer(Modifier.height(8.dp)) }
                     }
                 }
+
+                // 底部渐隐：内容滚到输入栏附近时柔和消失，而不是被硬切
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(28.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, MaterialTheme.colorScheme.background)
+                            )
+                        )
+                )
             }
 
             // 运行状态：仅在生成时出现，不生成时完全隐形
@@ -411,7 +443,11 @@ fun ChatScreen(
                 onSend = { txt -> vm.send(txt); keyboard?.hide() },
                 onStop = { vm.stop() },
                 onOpenPlus = { sheetOpen = true },
-                onMic = requestMic
+                onMic = requestMic,
+                modifier = Modifier.graphicsLayer {
+                    alpha = composerProgress
+                    translationY = (1f - composerProgress) * 26f
+                }
             )
         }
     }
@@ -911,7 +947,8 @@ private fun MessageItem(
     animate: Boolean = false,
     onCopy: () -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
-    onDelete: () -> Unit = {}
+    onDelete: () -> Unit = {},
+    onChoice: (String) -> Unit = {}
 ) {
     val isUser = m.role == "user"
     var menuOpen by remember { mutableStateOf(false) }
@@ -979,7 +1016,8 @@ private fun MessageItem(
                             modifier = if (animate) {
                                 Modifier.animateContentSize(animationSpec = tween(120))
                             } else Modifier,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            onChoice = onChoice
                         )
                     }
                 }
@@ -1007,7 +1045,8 @@ private fun MessageItem(
                             if (body.isNotBlank()) {
                                 MarkdownText(
                                     text = body,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    onChoice = onChoice
                                 )
                             }
                         }
@@ -1162,9 +1201,12 @@ private fun Composer(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 CircleAction(
-                    size = 34,
+                    size = 38,
                     container = MaterialTheme.colorScheme.primaryContainer,
                     enabled = enabled,
+                    // composer 左右内边距不对称（左 16 / 右 10），往左挪 6dp 后
+                    // 与右侧发送按钮的视觉边距保持一致
+                    modifier = Modifier.offset(x = (-6).dp),
                     onClick = onOpenPlus
                 ) {
                     Icon(
@@ -1177,7 +1219,7 @@ private fun Composer(
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
-                        .size(34.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
                         .clickable(enabled = enabled, onClick = onMic),
                     contentAlignment = Alignment.Center
@@ -1234,11 +1276,12 @@ private fun CircleAction(
     size: Int,
     container: Color,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
     content: @Composable () -> Unit
 ) {
     Box(
-        Modifier
+        modifier
             .size(size.dp)
             .clip(CircleShape)
             .background(if (enabled) container else container.copy(alpha = 0.5f))

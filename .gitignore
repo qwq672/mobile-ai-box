@@ -77,6 +77,9 @@ lint/tmp/
 # Mac
 .DS_Store
 
+# Kotlin 编译器会话目录
+.kotlin/
+
 # 本地/CI 下载的 llama.cpp 源码
 app/src/main/cpp/llama.cpp/
 

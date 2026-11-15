@@ -28,6 +28,20 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
+/**
+ * 告诉模型回复会经过 Markdown 扩展渲染，让数学公式 / 图片 / 任务清单 /
+ * 选择按钮这些能力真正被用起来。保持简短，避免小模型被提示词带偏。
+ */
+private const val UI_CAPABILITY_HINT = """你的回复会以 Markdown 渲染，按需使用以下扩展，不要滥用：
+1. 数学公式：行内 $...$，独立公式 $$...$$
+2. 图片：![说明](https://...)（只使用可直接访问的 https 图片地址）
+3. 任务清单：- [ ] 待办 / - [x] 已完成
+4. 需要用户做选择时，用 aibox:choices 代码块输出 2~4 个选项（每行一个），客户端会渲染成按钮，用户点击后该选项会作为下一条消息发给你：
+```aibox:choices
+选项一
+选项二
+```"""
+
 class ChatViewModel : ViewModel() {
 
     private val container get() = AIBoxApp.instance.container
@@ -472,7 +486,7 @@ class ChatViewModel : ViewModel() {
             "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
             else -> ""
         }
-        val sys = listOf(systemPrompt.trim(), levelHint)
+        val sys = listOf(systemPrompt.trim(), levelHint, UI_CAPABILITY_HINT)
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
         if (sys.isNotBlank()) {

@@ -26,6 +26,9 @@
 
 #include "llama.h"
 #include "ggml-backend.h"
+#if defined(POCKET_NPU)
+#include "ggml-hexagon.h"
+#endif
 #include "memory_pool.h"
 #include "bridge.h"
 
@@ -72,6 +75,20 @@ static void native_log(int priority, const char* tag, const char* fmt, ...) {
 
 #define LOGI(...) native_log(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) native_log(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+// 把 ggml / llama 的日志也接进 LogSystem，方便用户日志里直接看到
+// hexagon 后端初始化失败的原因（libcdsprpc、skel、unsigned PD 等）。
+static void ggml_log_forward(enum ggml_log_level level, const char* text, void* /*user_data*/) {
+    if (!text) return;
+    int prio = ANDROID_LOG_INFO;
+    switch (level) {
+        case GGML_LOG_LEVEL_ERROR: prio = ANDROID_LOG_ERROR; break;
+        case GGML_LOG_LEVEL_WARN:  prio = ANDROID_LOG_WARN;  break;
+        case GGML_LOG_LEVEL_DEBUG: prio = ANDROID_LOG_DEBUG; break;
+        default: break;
+    }
+    native_log(prio, "AIBox-ggml", "%s", text);
+}
 
 // ---------- llama.cpp 0.4.x 兼容层 ----------
 #define POCKET_SET_FLASH_ATTN(cp) (cp).flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED
@@ -161,6 +178,22 @@ static bool htp_device_present() {
     return device_present("HTP") || device_present("Hexagon");
 }
 
+// GGML_BACKEND_DL 关闭时 hexagon 是由 ggml 静态注册的：Registry 构造时调用
+// ggml_backend_hexagon_reg()，如果那一刻 htpdrv_init 失败（例如 ADSP 环境还没就绪），
+// 返回 NULL 就不会注册，后面设备列表里永远没有 HTP。这里在环境准备好后重试一次，
+// 成功后手动注册进 ggml 的全局 registry。
+static bool retry_hexagon_registration() {
+#if defined(POCKET_NPU)
+    ggml_backend_reg_t reg = ggml_backend_hexagon_reg();
+    LOGI("retry_hexagon_registration: reg=%p", (void*) reg);
+    if (!reg) return false;
+    ggml_backend_register(reg);
+    return htp_device_present();
+#else
+    return false;
+#endif
+}
+
 // 最近一次加载失败的原始原因（C++ 异常文本），供 Kotlin 侧展示到「诊断」里。
 // llama.cpp 在 Vulkan 设备初始化失败、KV 量化与 FA 冲突等场景下会 throw，
 // 这些异常如果跨过 JNI 边界就会直接 abort（表现为闪退），所以必须就地捕获。
@@ -211,6 +244,10 @@ Java_com_aibox_infra_jni_NativeBridge_npuAvailable(JNIEnv*, jclass) {
     // hexagon 后端默认没有被静态注册（只随 APK 以 .so 形式存在），
     // 需要显式按路径 dlopen 一次，设备列表里才会出现 HTP。
     if (!htp_device_present()) {
+        retry_hexagon_registration();
+    }
+    if (!htp_device_present()) {
+        // 兜底：动态加载（GGML_BACKEND_DL 构建时 ggml_backend_init 才存在）
         load_backend_lib("hexagon");
     }
     const bool ok = htp_device_present();
@@ -1179,6 +1216,9 @@ Java_com_aibox_infra_jni_NativeBridge_thermalPercent(JNIEnv*, jclass) {
 // ---------- JNI_OnLoad ----------
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     g_vm = vm;
+    // ggml/llama 的日志走统一通道，hexagon 初始化失败的原因才能进到用户日志里
+    ggml_log_set(ggml_log_forward, nullptr);
+    llama_log_set(ggml_log_forward, nullptr);
     JNIEnv* env = nullptr;
     if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_VERSION_1_6;
     // 在主线程 ClassLoader 上下文预缓存 StringCallback.onValue（后续 completion 回调用）

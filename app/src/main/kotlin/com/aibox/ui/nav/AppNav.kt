@@ -1,5 +1,6 @@
 package com.aibox.ui.nav
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -191,13 +192,21 @@ fun AppNav() {
                 navController = nav,
                 startDestination = Dest.Home.route,
                 enterTransition = {
-                    fadeIn(tween(200)) + slideInHorizontally(tween(200)) { it / 12 }
+                    fadeIn(tween(320, easing = FastOutSlowInEasing)) +
+                        slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { it / 16 }
                 },
-                exitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { -it / 12 } },
+                exitTransition = {
+                    fadeOut(tween(240, easing = FastOutSlowInEasing)) +
+                        slideOutHorizontally(tween(240, easing = FastOutSlowInEasing)) { -it / 16 }
+                },
                 popEnterTransition = {
-                    fadeIn(tween(200)) + slideInHorizontally(tween(200)) { -it / 12 }
+                    fadeIn(tween(320, easing = FastOutSlowInEasing)) +
+                        slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { -it / 16 }
                 },
-                popExitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(200)) { it / 12 } }
+                popExitTransition = {
+                    fadeOut(tween(240, easing = FastOutSlowInEasing)) +
+                        slideOutHorizontally(tween(240, easing = FastOutSlowInEasing)) { it / 16 }
+                }
             ) {
                 // E 主页 Hybrid：Home 为启动路由
                 composable(Dest.Home.route) {
@@ -295,10 +304,10 @@ fun AppNav() {
                 composable(
                     Dest.Chat.route,
                     // 聊天页用纯渐显，避免横向滑动 + 页面自身渐显叠加造成"闪"
-                    enterTransition = { fadeIn(tween(280)) },
-                    exitTransition = { fadeOut(tween(180)) },
-                    popEnterTransition = { fadeIn(tween(240)) },
-                    popExitTransition = { fadeOut(tween(180)) }
+                    enterTransition = { fadeIn(tween(320, easing = FastOutSlowInEasing)) },
+                    exitTransition = { fadeOut(tween(200, easing = FastOutSlowInEasing)) },
+                    popEnterTransition = { fadeIn(tween(280, easing = FastOutSlowInEasing)) },
+                    popExitTransition = { fadeOut(tween(200, easing = FastOutSlowInEasing)) }
                 ) { backStackEntry ->
                     val sid = backStackEntry.savedStateHandle
                         .get<Long>("sessionId") ?: 0L

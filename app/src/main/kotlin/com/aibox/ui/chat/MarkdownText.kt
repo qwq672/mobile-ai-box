@@ -1,5 +1,20 @@
 package com.aibox.ui.chat
 
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.BaselineShift
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -70,7 +85,9 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.onSurface,
     baseFontSize: Int = 16,
-    lineHeight: Int = 24
+    lineHeight: Int = 24,
+    /** 点击 `aibox:choices` 组件按钮时回调，一般用于直接把选项发给模型 */
+    onChoice: (String) -> Unit = {}
 ) {
     val blocks = remember(text) { parseBlocks(text) }
     val primary = MaterialTheme.colorScheme.primary
@@ -203,6 +220,63 @@ fun MarkdownText(
                 )
 
                 is MdBlock.Table -> MdTable(block)
+
+                is MdBlock.Math -> Text(
+                    latexToAnnotated(block.tex),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(vertical = 2.dp),
+                    softWrap = false,
+                    textAlign = if (block.display) TextAlign.Center else TextAlign.Start,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = (baseFontSize + 2).sp,
+                        lineHeight = (lineHeight + 8).sp,
+                        fontFamily = FontFamily.Serif
+                    )
+                )
+
+                is MdBlock.Image -> MdImage(block)
+
+                is MdBlock.Task -> Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        if (block.checked) Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                        contentDescription = if (block.checked) "已完成" else "未完成",
+                        tint = if (block.checked) primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        parseInline(block.text, primary),
+                        color = if (block.checked) MaterialTheme.colorScheme.onSurfaceVariant else color,
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontSize = baseFontSize.sp,
+                            lineHeight = lineHeight.sp,
+                            textDecoration = if (block.checked) TextDecoration.LineThrough else null
+                        )
+                    )
+                }
+
+                is MdBlock.Choices -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    block.options.forEachIndexed { idx, option ->
+                        OutlinedButton(
+                            onClick = { onChoice(option) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "${'A' + idx}. $option",
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Start,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -217,13 +291,20 @@ private sealed interface MdBlock {
     data class ListItem(val marker: String, val ordered: Boolean, val text: String) : MdBlock
     data class Code(val lang: String, val code: String) : MdBlock
     data class Table(val header: List<String>, val rows: List<List<String>>) : MdBlock
+    data class Math(val tex: String, val display: Boolean) : MdBlock
+    data class Image(val alt: String, val url: String) : MdBlock
+    data class Task(val checked: Boolean, val text: String) : MdBlock
+    /** `aibox:choices` 组件：把若干选项渲染成按钮，点击即发送 */
+    data class Choices(val options: List<String>) : MdBlock
     data object Divider : MdBlock
 }
 
 private val headingRegex = Regex("^(#{1,6})\\s+(.*)$")
 private val ulRegex = Regex("^[-*+]\\s+(.*)$")
+private val taskRegex = Regex("^[-*+]\\s+\\[([ xX])]\\s+(.*)$")
 private val olRegex = Regex("^(\\d+)[.)]\\s+(.*)$")
 private val hrRegex = Regex("^\\s*([-*_])\\1{2,}\\s*$")
+private val imageRegex = Regex("^!\\[([^]]*)]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)$")
 
 private fun parseBlocks(src: String): List<MdBlock> {
     if (src.isBlank()) return emptyList()
@@ -251,6 +332,36 @@ private fun parseBlocks(src: String): List<MdBlock> {
         val line = raw.trimEnd()
         val trimmed = line.trimStart()
 
+        // 独立成行的图片
+        val img = imageRegex.matchEntire(trimmed)
+        if (img != null) {
+            flushParagraph(); flushQuote()
+            blocks.add(MdBlock.Image(img.groupValues[1], img.groupValues[2]))
+            i++
+            continue
+        }
+
+        // $$ 独立公式块
+        if (trimmed.startsWith("$$")) {
+            flushParagraph(); flushQuote()
+            val rest = trimmed.removePrefix("$$").removeSuffix("$$").trim()
+            if (rest.isNotEmpty() && trimmed.endsWith("$$") && trimmed.length > 4) {
+                blocks.add(MdBlock.Math(rest, true))
+                i++
+            } else {
+                val tex = StringBuilder(rest)
+                i++
+                while (i < lines.size && !lines[i].trimStart().startsWith("$$")) {
+                    if (tex.isNotEmpty()) tex.append('\n')
+                    tex.append(lines[i].trim())
+                    i++
+                }
+                if (i < lines.size) i++
+                if (tex.isNotBlank()) blocks.add(MdBlock.Math(tex.toString(), true))
+            }
+            continue
+        }
+
         // 围栏代码块
         if (trimmed.startsWith("```")) {
             flushParagraph(); flushQuote()
@@ -262,7 +373,16 @@ private fun parseBlocks(src: String): List<MdBlock> {
                 i++
             }
             if (i < lines.size) i++ // 跳过结束围栏
-            blocks.add(MdBlock.Code(lang, code.toString().trimEnd()))
+            // 组件扩展：```aibox:choices
+            if (lang == "choices" || lang == "aibox:choices") {
+                val options = code.toString().lineSequence()
+                    .map { it.trim().removePrefix("- ").removePrefix("* ").trim() }
+                    .filter { it.isNotEmpty() }
+                    .toList()
+                if (options.isNotEmpty()) blocks.add(MdBlock.Choices(options))
+            } else {
+                blocks.add(MdBlock.Code(lang, code.toString().trimEnd()))
+            }
             continue
         }
 
@@ -294,6 +414,12 @@ private fun parseBlocks(src: String): List<MdBlock> {
             trimmed.startsWith(">") -> {
                 flushParagraph()
                 quote.append(trimmed.removePrefix(">").trim()).append('\n')
+            }
+
+            taskRegex.matches(trimmed) -> {
+                flushParagraph(); flushQuote()
+                val m = taskRegex.find(trimmed)!!
+                blocks.add(MdBlock.Task(m.groupValues[1].isNotBlank(), m.groupValues[2]))
             }
 
             ulRegex.matches(trimmed) -> {
@@ -505,6 +631,15 @@ private fun parseInline(src: String, primary: Color): AnnotatedString = buildAnn
                     i = end + 2
                 } else { buffer.append("~~"); i += 2 }
             }
+            // 行内公式 $...$
+            src[i] == '$' && i + 1 < src.length && src[i + 1] != '$' -> {
+                val end = src.indexOf('$', i + 1)
+                if (end > i + 1 && !src.substring(i + 1, end).contains('\n')) {
+                    flush()
+                    append(latexToAnnotated(src.substring(i + 1, end)))
+                    i = end + 1
+                } else { buffer.append('$'); i++ }
+            }
             // 行内代码
             src[i] == '`' -> {
                 val end = src.indexOf('`', i + 1)
@@ -565,4 +700,140 @@ private fun parseInline(src: String, primary: Color): AnnotatedString = buildAnn
         }
     }
     flush()
+}
+
+/* ---------------- 轻量 LaTeX ---------------- */
+
+private val latexSymbols = linkedMapOf(
+    "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ",
+    "\\epsilon" to "ε", "\\zeta" to "ζ", "\\eta" to "η", "\\theta" to "θ",
+    "\\iota" to "ι", "\\kappa" to "κ", "\\lambda" to "λ", "\\mu" to "μ",
+    "\\nu" to "ν", "\\xi" to "ξ", "\\pi" to "π", "\\rho" to "ρ",
+    "\\sigma" to "σ", "\\tau" to "τ", "\\phi" to "φ", "\\chi" to "χ",
+    "\\psi" to "ψ", "\\omega" to "ω",
+    "\\Gamma" to "Γ", "\\Delta" to "Δ", "\\Theta" to "Θ", "\\Lambda" to "Λ",
+    "\\Xi" to "Ξ", "\\Pi" to "Π", "\\Sigma" to "Σ", "\\Phi" to "Φ",
+    "\\Psi" to "Ψ", "\\Omega" to "Ω",
+    "\\times" to "×", "\\cdot" to "·", "\\div" to "÷", "\\pm" to "±",
+    "\\mp" to "∓", "\\le" to "≤", "\\leq" to "≤", "\\ge" to "≥", "\\geq" to "≥",
+    "\\neq" to "≠", "\\ne" to "≠", "\\approx" to "≈", "\\equiv" to "≡",
+    "\\infty" to "∞", "\\sum" to "∑", "\\prod" to "∏", "\\int" to "∫",
+    "\\partial" to "∂", "\\nabla" to "∇", "\\sqrt" to "√",
+    "\\to" to "→", "\\rightarrow" to "→", "\\Rightarrow" to "⇒",
+    "\\leftarrow" to "←", "\\Leftarrow" to "⇐", "\\iff" to "⇔",
+    "\\in" to "∈", "\\notin" to "∉", "\\subset" to "⊂", "\\supset" to "⊃",
+    "\\subseteq" to "⊆", "\\supseteq" to "⊇", "\\emptyset" to "∅",
+    "\\cup" to "∪", "\\cap" to "∩", "\\forall" to "∀", "\\exists" to "∃",
+    "\\angle" to "∠", "\\perp" to "⊥", "\\parallel" to "∥",
+    "\\langle" to "⟨", "\\rangle" to "⟩",
+    "\\cdots" to "⋯", "\\ldots" to "…", "\\propto" to "∝",
+    "\\sim" to "∼", "\\cong" to "≅", "\\therefore" to "∴", "\\because" to "∵",
+    "\\ell" to "ℓ", "\\prime" to "′",
+    "\\degree" to "°", "\\circ" to "∘",
+)
+
+/**
+ * 把常见 LaTeX 片段转成可读的 Unicode / 上下标。
+ *
+ * 不做完整数学排版：目标是流式输出里能看懂，而不是替代 KaTeX。
+ * 遇到 `\begin{...}` 这类复杂环境时原样返回，避免渲染出错。
+ */
+private fun latexToAnnotated(tex: String): AnnotatedString {
+    var s = tex.trim()
+    if (s.contains("\\begin")) return AnnotatedString(s)
+
+    // 只去掉 \left / \right 命令本身，保留其后的括号；不能直接 replace("\\left")
+    // 否则 \leftarrow 会被误伤成 "arrow"
+    s = s.replace(Regex("""\\(left|right)(?![a-zA-Z])"""), "")
+    s = s.replace("\\,", " ").replace("\\;", " ").replace("\\!", "")
+        .replace("\\quad", "  ").replace("\\qquad", "    ")
+        .replace("\\\\", "\n")
+    s = Regex("""\\text\{([^{}]*)}""").replace(s) { it.groupValues[1] }
+    s = Regex("""\\mathrm\{([^{}]*)}""").replace(s) { it.groupValues[1] }
+    // 嵌套分式按由内向外替换三轮
+    repeat(3) {
+        s = Regex("""\\frac\{([^{}]*)\}\{([^{}]*)}""").replace(s) { m ->
+            val a = m.groupValues[1]
+            val b = m.groupValues[2]
+            val an = if (a.length <= 1) a else "($a)"
+            val bn = if (b.length <= 1) b else "($b)"
+            "$an⁄$bn"
+        }
+    }
+    s = Regex("""\\sqrt\{([^{}]*)}""").replace(s) { "√(${it.groupValues[1]})" }
+    // 长命令优先替换，避免 \le 先吃掉 \leq、\in 先吃掉 \infty / \int
+    latexSymbols.entries.sortedByDescending { it.key.length }
+        .forEach { (cmd, sym) -> s = s.replace(cmd, sym) }
+    // 未识别的命令去掉反斜杠保留名字
+    s = Regex("""\\[a-zA-Z]+""").replace(s) { it.value.drop(1) }
+
+    return buildAnnotatedString {
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '^' || c == '_') {
+                val superScript = c == '^'
+                var j = i + 1
+                var content = ""
+                if (j < s.length && s[j] == '{') {
+                    val e = s.indexOf('}', j)
+                    if (e > j) {
+                        content = s.substring(j + 1, e)
+                        j = e + 1
+                    } else {
+                        j++
+                    }
+                } else if (j < s.length) {
+                    content = s[j].toString()
+                    j++
+                }
+                val shift = if (superScript) BaselineShift.Superscript else BaselineShift.Subscript
+                withStyle(SpanStyle(baselineShift = shift, fontSize = 12.sp)) { append(content) }
+                i = j
+            } else {
+                append(c)
+                i++
+            }
+        }
+    }
+}
+
+/* ---------------- 图片 ---------------- */
+
+/** 直接解码远程 / 本地图片，避免为 Markdown 引入额外的图片库依赖。 */
+@Composable
+private fun MdImage(block: MdBlock.Image) {
+    val ctx = LocalContext.current
+    val bmp by produceState<android.graphics.Bitmap?>(initialValue = null, block.url) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val input = when {
+                    block.url.startsWith("http://") || block.url.startsWith("https://") ->
+                        java.net.URL(block.url).openStream()
+                    block.url.startsWith("file://") ->
+                        java.io.File(java.net.URI(block.url)).inputStream()
+                    else -> ctx.contentResolver.openInputStream(android.net.Uri.parse(block.url))
+                }
+                input?.use { BitmapFactory.decodeStream(it) }
+            }.getOrNull()
+        }
+    }
+    val image = bmp
+    if (image != null) {
+        Image(
+            bitmap = image.asImageBitmap(),
+            contentDescription = block.alt,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 320.dp)
+                .clip(RoundedCornerShape(10.dp))
+        )
+    } else {
+        Text(
+            "图片：${block.alt.ifBlank { block.url }}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }

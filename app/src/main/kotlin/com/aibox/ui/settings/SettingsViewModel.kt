@@ -4,16 +4,19 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibox.AIBoxApp
 import com.aibox.domain.inference.BackendType
+import com.aibox.domain.inference.HexagonAssets
 import com.aibox.domain.inference.InferenceConfig
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.util.CpuInfo
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsViewModel : ViewModel() {
 
@@ -135,10 +138,17 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             val b = container.nativeBridge
             val v = runCatching { b.vulkanAvailable() }.getOrDefault(false)
-            val hasSkel = runCatching {
-                AIBoxApp.instance.assets.list("hexagon")?.any { it.endsWith(".so") } == true
+            // 先部署 HTP skel 并设置 ADSP_LIBRARY_PATH 再探测，否则 hexagon
+            // 后端会在缺 skel 的环境里初始化失败并永久缓存 0 设备的结果。
+            val n = runCatching {
+                withContext(Dispatchers.IO) {
+                    val ctx = AIBoxApp.instance
+                    val hasSkel = ctx.assets.list("hexagon")?.any { it.endsWith(".so") } == true
+                    if (!hasSkel) return@withContext false
+                    HexagonAssets.prepare(ctx)?.let { b.setAdspLibraryPath(it) }
+                    b.npuAvailable()
+                }
             }.getOrDefault(false)
-            val n = hasSkel && runCatching { b.npuAvailable() }.getOrDefault(false)
             val o = runCatching { b.openclAvailable() }.getOrDefault(false)
             LogSystem.info("aibox.ui.settings", "SettingsVM backend probe: vulkan=$v npu=$n opencl=$o native=${_ui.value.nativeVersion}")
             _ui.value = _ui.value.copy(

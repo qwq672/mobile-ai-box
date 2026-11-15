@@ -27,9 +27,14 @@ class NpuBackend(
 
     override fun isAvailable(): Boolean {
         return try {
-            // assets 检查很便宜（只列目录），不会在这里解压 skel。
+            // assets 检查很便宜（只列目录）；没有 skel 就不用往下走。
             val hasSkel = appContext?.assets?.list("hexagon")?.any { it.endsWith(".so") } == true
-            hasSkel && native.npuAvailable()
+            if (!hasSkel) return false
+            // 必须先把 skel 部署到私有目录并写入 ADSP_LIBRARY_PATH 再探测：
+            // hexagon 后端首次初始化拿不到 skel 会失败，ggml 会把「0 个 HTP 设备」
+            // 的结果注册下去，之后即使补上路径也一直是 N/A。
+            HexagonAssets.prepare(appContext)?.let { native.setAdspLibraryPath(it) }
+            native.npuAvailable()
         } catch (e: Throwable) {
             false
         }
