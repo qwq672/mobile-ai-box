@@ -7,8 +7,11 @@ name: Build AIBox NPU APK (Hexagon)
 #   skel 编译依赖 hexagon-clang / QAIC / IDL 工具链，只能在装好 SDK 的机器上跑。
 #
 # runner 需要预先准备：
-#   1. Hexagon SDK（环境变量 HEXAGON_SDK_ROOT，可选 HEXAGON_TOOLS_ROOT）
+#   1. Hexagon SDK 6.7.0.0（上游 llama.cpp 文档/toolchain v0.8 用的就是这一版；
+#      环境变量 HEXAGON_SDK_ROOT，可选 HEXAGON_TOOLS_ROOT）
 #      SDK 内需含 hvx/v73、v75、v79、v81、v85 对应的 toolv21 预编译库
+#      上游 docs 用 ghcr.io/snapdragon-toolchain/arm64-android:v0.8 容器，
+#      里面是 Hexagon SDK 6.7.0.0（该容器只用于编 llama.cpp，本项目仍用下面的 NDK）
 #   2. Android SDK + NDK 26.1.10909125 + cmake 3.22.1
 #   3. Vulkan 头（NDK sysroot 下 vulkan/vulkan.hpp），用于 ggml-vulkan 回退
 #
