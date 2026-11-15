@@ -28,6 +28,8 @@ class SettingsViewModel : ViewModel() {
         val loggingEnabled: Boolean = true,
         val logFilePath: String? = null,
         val thinkingMode: Boolean = true,
+        // 消息呈现：true = 文档流（助手无气泡），false = 双方气泡
+        val chatDocStyle: Boolean = true,
         // 设备状态采样周期（ms），设置页可切 1s/2s/5s
         val thermalIntervalMs: Int = 2000,
         // 原生层最近一次加载/解码失败的原因（空串 = 无错误）
@@ -66,6 +68,11 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.thinkingMode.collectLatest {
                 _ui.value = _ui.value.copy(thinkingMode = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.chatDocStyle.collectLatest {
+                _ui.value = _ui.value.copy(chatDocStyle = it)
             }
         }
         viewModelScope.launch {
@@ -129,6 +136,10 @@ class SettingsViewModel : ViewModel() {
 
     fun onThinkingModeChange(on: Boolean) {
         viewModelScope.launch { container.settingsRepository.setThinkingMode(on) }
+    }
+
+    fun onChatDocStyleChange(on: Boolean) {
+        viewModelScope.launch { container.settingsRepository.setChatDocStyle(on) }
     }
 
     fun clearLog() {

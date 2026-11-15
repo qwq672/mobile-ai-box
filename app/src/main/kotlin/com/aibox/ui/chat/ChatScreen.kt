@@ -11,9 +11,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,21 +33,26 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
@@ -60,10 +65,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -71,22 +77,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.data.model.ChatMessage
@@ -95,6 +106,16 @@ import com.aibox.ui.tool.ToolConfirmDialog
 import com.aibox.ui.tool.ToolInvocationBubble
 import kotlinx.coroutines.launch
 
+/**
+ * 聊天主界面。
+ *
+ * 布局选择（参考 ChatGPT / Claude / Gemini / DeepSeek）：
+ * - 顶栏：会话标题 + 当前模型/后端副标题，右侧只留温度胶囊与菜单
+ * - 消息区：无头像。默认「文档流」——用户右侧气泡、助手正文直接铺在背景上；
+ *   Settings → 对话 → 文档流消息样式 可切回双方气泡
+ * - 输入区：悬浮胶囊 composer（圆角 28dp + 描边），左侧 + 号、右侧 麦克风 + 发送/停止圆形按钮
+ * - 运行状态（t/s、ctx、后端）只在生成时以胶囊形式浮在输入框上方
+ */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
@@ -144,6 +165,7 @@ fun ChatScreen(
 
     var menuOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
+    var sheetOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -154,61 +176,32 @@ fun ChatScreen(
                     }
                 },
                 title = {
-                    // 顶栏标题固定显示"AIBox",不重复显示模型状态(中间空状态已有提示)
-                    // 模型状态用下面的 stats 行展示(modelName / backend / tps / ctx)
-                    Text(
-                        "AIBox",
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                actions = {
-                    // 紧凑的 stats 行：modelName · backend · tps · ctx
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(end = 4.dp)
-                    ) {
-                        // 模型名作为 chip 显示(空时显示"未加载"小标签)
+                    Column {
+                        Text(
+                            ui.sessionTitle.ifBlank { "AIBox" },
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = FontWeight.SemiBold
+                        )
                         if (ui.modelName.isNotEmpty()) {
                             Text(
-                                ui.modelName,
+                                "${ui.modelName} · ${ui.backendName}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         } else {
                             Text(
-                                "未加载",
+                                "未加载模型",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        Text(
-                            ui.backendName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (ui.tokensPerSecond > 0) {
-                            Dot()
-                            Text(
-                                "%.1ft/s".format(ui.tokensPerSecond),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        if (ui.contextMax > 0) {
-                            Dot()
-                            Text(
-                                "${formatCtx(ui.contextUsed)}/${formatCtx(ui.contextMax)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.error
                             )
                         }
                     }
+                },
+                actions = {
                     ThermalPill(percent = ui.thermalPercent)
                     IconButton(onClick = onOpenSearch) {
                         Icon(Icons.Outlined.Search, contentDescription = "搜索")
@@ -245,69 +238,6 @@ fun ChatScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("调用 datetime 工具(测试)") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("datetime", emptyMap())
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("调用 calculator 工具(测试)") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("calculator", mapOf("expression" to "1 + 2 * 3"))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("调用不存在工具(测试)", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("nonexistent_tool", emptyMap())
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("调用 file_read(高级,需启用)") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("file_read", mapOf("path" to "/proc/cpuinfo", "max_length" to 2000))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("调用 phone_control(高级,需启用)") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool(
-                                        "phone_control",
-                                        mapOf("action" to "copy_clipboard", "target" to "Hello from AIBox")
-                                    )
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("调用 device_info_advanced(高级,需基础启用)") },
-                                leadingIcon = {
-                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.tryInvokeTool("device_info_advanced", emptyMap())
-                                }
-                            )
-                            DropdownMenuItem(
                                 text = { Text("清空工具调用历史") },
                                 leadingIcon = {
                                     Icon(Icons.Outlined.DeleteSweep, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -327,6 +257,81 @@ fun ChatScreen(
                                     clearOpen = true
                                 }
                             )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "工具自检（开发用）",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                enabled = false,
+                                onClick = {}
+                            )
+                            DropdownMenuItem(
+                                text = { Text("datetime") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    vm.tryInvokeTool("datetime", emptyMap())
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("calculator") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    vm.tryInvokeTool("calculator", mapOf("expression" to "1 + 2 * 3"))
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("nonexistent_tool（失败路径）", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    vm.tryInvokeTool("nonexistent_tool", emptyMap())
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("file_read（高级，需启用）") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    vm.tryInvokeTool("file_read", mapOf("path" to "/proc/cpuinfo", "max_length" to 2000))
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("phone_control（高级，需启用）") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    vm.tryInvokeTool(
+                                        "phone_control",
+                                        mapOf("action" to "copy_clipboard", "target" to "Hello from AIBox")
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("device_info_advanced（高级）") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.Build, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    vm.tryInvokeTool("device_info_advanced", emptyMap())
+                                }
+                            )
                         }
                     }
                 }
@@ -339,64 +344,127 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(inner)
         ) {
-            if (!ui.hasModel) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    EmptyModelState()
+            when {
+                !ui.hasModel -> {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        EmptyModelState()
+                    }
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    state = listState,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(items = ui.messages, key = { m -> "${m.id}-${m.ts}" }) { m ->
-                        MessageBubble(
-                            m,
-                            onCopy = {
-                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                        as android.content.ClipboardManager
-                                cm.setPrimaryClip(android.content.ClipData.newPlainText("AIBox", m.content))
-                                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                            },
-                            onRegenerate = if (m.role == "assistant") {
-                                { vm.regenerate() }
-                            } else null,
-                            onDelete = { vm.deleteMessage(m) }
-                        )
-                    }
-                    // B6 工具调用 UI: 在消息后渲染活跃的工具调用列表
-                    items(items = ui.toolInvocations, key = { inv -> inv.id }) { inv ->
-                        ToolInvocationBubble(
-                            invocation = inv,
-                            onRetry = { vm.retryToolInvocation(inv.id) }
-                        )
-                    }
-                    if (ui.currentStream.isNotEmpty()) {
-                        item(key = "stream") {
-                            MessageBubble(
-                                ChatMessage(role = "assistant", content = ui.currentStream, sessionId = 0),
-                                animate = true
+                ui.messages.isEmpty() && ui.currentStream.isEmpty() && !ui.streaming -> {
+                    EmptyChatState(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        onSuggestion = { vm.send(it) }
+                    )
+                }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        state = listState,
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(if (ui.docStyle) 18.dp else 8.dp)
+                    ) {
+                        val lastAssistantIndex = ui.messages.indexOfLast { it.role == "assistant" }
+                        itemsIndexed(
+                            items = ui.messages,
+                            key = { _, m -> "${m.id}-${m.ts}" }
+                        ) { index, m ->
+                            MessageItem(
+                                m = m,
+                                docStyle = ui.docStyle,
+                                showActions = !ui.streaming && index == lastAssistantIndex,
+                                animate = false,
+                                onCopy = {
+                                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                            as android.content.ClipboardManager
+                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("AIBox", m.content))
+                                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                                },
+                                onRegenerate = if (m.role == "assistant") {
+                                    { vm.regenerate() }
+                                } else null,
+                                onDelete = { vm.deleteMessage(m) }
                             )
                         }
+                        // B6 工具调用 UI: 在消息后渲染活跃的工具调用列表
+                        items(items = ui.toolInvocations, key = { inv -> inv.id }) { inv ->
+                            ToolInvocationBubble(
+                                invocation = inv,
+                                onRetry = { vm.retryToolInvocation(inv.id) }
+                            )
+                        }
+                        if (ui.currentStream.isNotEmpty()) {
+                            item(key = "stream") {
+                                MessageItem(
+                                    m = ChatMessage(role = "assistant", content = ui.currentStream, sessionId = 0),
+                                    docStyle = ui.docStyle,
+                                    showActions = false,
+                                    animate = true
+                                )
+                            }
+                        }
+                        if (ui.streaming && ui.currentStream.isEmpty()) {
+                            item(key = "thinking") { ThinkingIndicator(docStyle = ui.docStyle) }
+                        }
+                        // 让最后一条消息不被输入栏挡住
+                        item(key = "bottom_spacer") { Spacer(Modifier.height(8.dp)) }
                     }
-                    if (ui.streaming && ui.currentStream.isEmpty()) {
-                        item(key = "thinking") { ThinkingIndicator() }
-                    }
-                    // 让最后一条消息不被输入栏挡住
-                    item(key = "bottom_spacer") { Spacer(Modifier.height(8.dp)) }
                 }
             }
 
+            // 运行状态：仅在生成时出现，不生成时完全隐形
+            AnimatedVisibility(
+                visible = ui.streaming,
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(150))
+            ) {
+                StatusPill(
+                    tokensPerSecond = ui.tokensPerSecond,
+                    contextUsed = ui.contextUsed,
+                    contextMax = ui.contextMax,
+                    backendName = ui.backendName
+                )
+            }
+
             // 输入栏始终在底部
-            InputBar(
+            Composer(
                 streaming = ui.streaming,
                 enabled = ui.hasModel,
                 onSend = { txt -> vm.send(txt); keyboard?.hide() },
-                onStop = { vm.stop() }
+                onStop = { vm.stop() },
+                onOpenPlus = { sheetOpen = true }
             )
+        }
+    }
+
+    if (sheetOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { sheetOpen = false },
+            sheetState = rememberModalBottomSheetState()
+        ) {
+            Column(
+                Modifier
+                    .navigationBarsPadding()
+                    .padding(bottom = 16.dp)
+            ) {
+                SheetAction(
+                    icon = Icons.Outlined.Image,
+                    title = "照片",
+                    subtitle = "从相册选择图片（附件能力开发中）"
+                ) {
+                    sheetOpen = false
+                    Toast.makeText(context, "附件功能开发中", Toast.LENGTH_SHORT).show()
+                }
+                SheetAction(
+                    icon = Icons.Outlined.AttachFile,
+                    title = "文件",
+                    subtitle = "导入文本 / PDF（附件能力开发中）"
+                ) {
+                    sheetOpen = false
+                    Toast.makeText(context, "附件功能开发中", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -429,13 +497,38 @@ fun ChatScreen(
 }
 
 @Composable
-private fun Dot() {
-    Box(
+private fun SheetAction(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
         Modifier
-            .size(3.dp)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.outline)
-    )
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable
@@ -501,6 +594,66 @@ private fun ThermalPill(percent: Int) {
     }
 }
 
+/** 生成中的运行状态胶囊：贴在手感区上方，不占常驻空间。 */
+@Composable
+private fun StatusPill(
+    tokensPerSecond: Float,
+    contextUsed: Int,
+    contextMax: Int,
+    backendName: String
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = CircleShape
+        ) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    backendName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (tokensPerSecond > 0f) {
+                    Dot()
+                    Text(
+                        "%.1f t/s".format(tokensPerSecond),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                if (contextMax > 0) {
+                    Dot()
+                    Text(
+                        "${formatCtx(contextUsed)}/${formatCtx(contextMax)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Dot() {
+    Box(
+        Modifier
+            .size(3.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.outline)
+    )
+}
+
 @Composable
 private fun EmptyModelState() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -544,18 +697,26 @@ private fun EmptyModelState() {
     }
 }
 
+/** 空会话：居中问候 + 建议提问（参考 Gemini / DeepSeek 的起始页）。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ThinkingIndicator() {
-    Row(
-        modifier = Modifier
-            .padding(horizontal = 4.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+private fun EmptyChatState(
+    modifier: Modifier = Modifier,
+    onSuggestion: (String) -> Unit
+) {
+    val suggestions = listOf(
+        "用三句话介绍一下你自己",
+        "帮我列出今天的待办清单",
+        "用通俗的话解释一下 MoE 模型"
+    )
+    Column(
+        modifier = modifier.padding(horizontal = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        // 头像
         Box(
             Modifier
-                .size(28.dp)
+                .size(56.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
@@ -564,15 +725,55 @@ private fun ThinkingIndicator() {
                 Icons.Outlined.SmartToy,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(30.dp)
             )
         }
-        Spacer(Modifier.width(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            BouncingDot(delay = 0)
-            BouncingDot(delay = 120)
-            BouncingDot(delay = 240)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "嗨！今天想聊些什么？",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(24.dp))
+        suggestions.forEach { s ->
+            Surface(
+                onClick = { onSuggestion(s) },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                Text(
+                    s,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun ThinkingIndicator(docStyle: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = if (docStyle) 0.dp else 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        BouncingDot(delay = 0)
+        BouncingDot(delay = 120)
+        BouncingDot(delay = 240)
+        Spacer(Modifier.width(4.dp))
+        Text(
+            "正在生成",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -603,190 +804,324 @@ private fun BouncingDot(delay: Int) {
     )
 }
 
+/**
+ * 单条消息。
+ *
+ * - [docStyle] = true：用户右侧浅色气泡，助手无气泡纯文本
+ * - [docStyle] = false：双方气泡
+ * - 长按任意消息弹出 复制 / 重新生成 / 删除
+ * - 最后一条助手消息在非生成状态下常驻一行小操作图标
+ */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(
+private fun MessageItem(
     m: ChatMessage,
+    docStyle: Boolean,
+    showActions: Boolean,
     animate: Boolean = false,
     onCopy: () -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
     onDelete: () -> Unit = {}
 ) {
     val isUser = m.role == "user"
-    val bubbleColor = if (isUser) MaterialTheme.colorScheme.primary
-                      else MaterialTheme.colorScheme.surfaceContainerHigh
-    val onBubbleColor = if (isUser) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurface
     var menuOpen by remember { mutableStateOf(false) }
 
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Top
-    ) {
-        if (!isUser) {
-            Avatar(
-                icon = Icons.Outlined.SmartToy,
-                bg = MaterialTheme.colorScheme.primaryContainer,
-                fg = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-        Box {
-            Surface(
-                color = bubbleColor,
-                shape = bubbleShape(isUser),
-                modifier = Modifier
-                    .widthIn(max = 320.dp)
-                    .then(if (animate) Modifier.animateContentSize(animationSpec = tween(120)) else Modifier)
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { menuOpen = true }
-                    )
-            ) {
-                Text(
-                    m.content,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    color = onBubbleColor,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+    val longPress = Modifier.combinedClickable(
+        onClick = {},
+        onLongClick = { menuOpen = true }
+    )
+
+    Column(Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth()) {
+            when {
+            // 用户：左右都靠右的浅色气泡
+            isUser -> {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp),
+                        modifier = Modifier
+                            .widthIn(max = 340.dp)
+                            .then(longPress)
+                    ) {
+                        Text(
+                            m.content,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 22.sp
+                        )
+                    }
+                }
             }
-            DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text("复制") },
-                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                    onClick = { menuOpen = false; onCopy() }
-                )
-                if (onRegenerate != null) {
-                    DropdownMenuItem(
-                        text = { Text("重新生成") },
-                        leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        onClick = { menuOpen = false; onRegenerate() }
+
+            // 助手 + 文档流：无气泡
+            docStyle -> {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .then(longPress)
+                ) {
+                    Text(
+                        m.content,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (animate) Modifier.animateContentSize(animationSpec = tween(120)) else Modifier),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodyLarge,
+                        lineHeight = 24.sp
                     )
                 }
-                DropdownMenuItem(
-                    text = { Text("删除", color = MaterialTheme.colorScheme.error) },
-                    leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
-                    onClick = { menuOpen = false; onDelete() }
-                )
+            }
+
+            // 助手 + 气泡
+            else -> {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 6.dp),
+                        modifier = Modifier
+                            .widthIn(max = 340.dp)
+                            .then(longPress)
+                    ) {
+                        Text(
+                            m.content,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 22.sp
+                        )
+                    }
+                }
             }
         }
-        if (isUser) {
-            Spacer(Modifier.width(8.dp))
-            Avatar(
-                icon = Icons.Outlined.Person,
-                bg = MaterialTheme.colorScheme.surfaceVariant,
-                fg = MaterialTheme.colorScheme.onSurfaceVariant
+
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("复制") },
+                leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                onClick = { menuOpen = false; onCopy() }
+            )
+            if (onRegenerate != null) {
+                DropdownMenuItem(
+                    text = { Text("重新生成") },
+                    leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { menuOpen = false; onRegenerate() }
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
+                onClick = { menuOpen = false; onDelete() }
             )
         }
     }
-}
 
-@Composable
-private fun Avatar(
-    icon: ImageVector,
-    bg: Color,
-    fg: Color
-) {
-    Box(
-        Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .background(bg),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(18.dp))
+    // 最后一条助手消息的常驻小操作行（参考 ChatGPT / Claude）
+    if (!isUser && showActions) {
+        Row(
+            Modifier.padding(top = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            MiniAction(Icons.Outlined.ContentCopy, "复制", onCopy)
+            if (onRegenerate != null) {
+                MiniAction(Icons.Outlined.Refresh, "重新生成", onRegenerate)
+            }
+            MiniAction(Icons.Outlined.MoreHoriz, "更多") { menuOpen = true }
+        }
+    }
     }
 }
 
-private fun bubbleShape(isUser: Boolean) = RoundedCornerShape(
-    topStart = 16.dp,
-    topEnd = 16.dp,
-    bottomEnd = if (isUser) 4.dp else 16.dp,
-    bottomStart = if (isUser) 16.dp else 4.dp
-)
-
 @Composable
-private fun InputBar(
+private fun MiniAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp)
+        )
+    }
+}
+
+/**
+ * 悬浮胶囊输入区。
+ *
+ * 结构参考 ChatGPT / Gemini：
+ * ```
+ * ┌──────────────────────────────────┐
+ * │ 输入内容（1~6 行自动增高）        │
+ * │ [+]                    [🎤] [↑] │
+ * └──────────────────────────────────┘
+ * ```
+ */
+@Composable
+private fun Composer(
     streaming: Boolean,
     enabled: Boolean,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
+    onOpenPlus: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var input by remember { mutableStateOf("") }
-    Surface(
+    var input by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    val canSend = enabled && input.isNotBlank() && !streaming
+    val doSend: () -> Unit = {
+        if (canSend) {
+            onSend(input.trim())
+            input = ""
+        }
+    }
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
-            .navigationBarsPadding(),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 3.dp
+            .navigationBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 4.dp
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 10.dp)) {
+            BasicTextField(
                 value = input,
                 onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("输入消息…") },
-                maxLines = 5,
+                modifier = Modifier.fillMaxWidth(),
                 enabled = enabled,
-                shape = MaterialTheme.shapes.extraLarge,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                maxLines = 6,
+                minLines = 1,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = {
-                        if (input.isNotBlank() && !streaming) {
-                            onSend(input); input = ""
+                keyboardActions = KeyboardActions(onSend = { doSend() }),
+                decorationBox = { inner ->
+                    Box {
+                        if (input.isEmpty()) {
+                            Text(
+                                if (enabled) "发消息或按住说话" else "请先加载模型",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
                         }
+                        inner()
                     }
-                )
+                }
             )
-            Spacer(Modifier.width(8.dp))
-            AnimatedVisibility(
-                visible = !streaming,
-                enter = scaleIn(tween(200)) + fadeIn(tween(200)),
-                exit = scaleOut(tween(200)) + fadeOut(tween(200))
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = {
-                        if (input.isNotBlank()) {
-                            onSend(input); input = ""
-                        }
-                    },
-                    enabled = enabled && input.isNotBlank()
+                CircleAction(
+                    size = 34,
+                    container = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    enabled = enabled,
+                    onClick = onOpenPlus
                 ) {
                     Icon(
-                        Icons.AutoMirrored.Outlined.Send,
-                        contentDescription = "发送",
-                        tint = if (enabled && input.isNotBlank()) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.outline
+                        Icons.Outlined.Add,
+                        contentDescription = "添加",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
-            }
-            AnimatedVisibility(
-                visible = streaming,
-                enter = scaleIn(tween(200)) + fadeIn(tween(200)),
-                exit = scaleOut(tween(200)) + fadeOut(tween(200))
-            ) {
-                IconButton(onClick = onStop) {
+                Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .clickable(enabled = enabled) {
+                            Toast.makeText(context, "语音输入开发中", Toast.LENGTH_SHORT).show()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
-                        Icons.Outlined.Stop,
-                        contentDescription = "停止",
-                        tint = MaterialTheme.colorScheme.error
+                        Icons.Outlined.Mic,
+                        contentDescription = "语音",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
+                }
+                Spacer(Modifier.width(8.dp))
+                // 发送 / 停止：同一个圆形按钮形变，生成中变实心停止块
+                val circleColor = when {
+                    streaming -> MaterialTheme.colorScheme.error
+                    canSend -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                }
+                val iconTint = when {
+                    streaming -> MaterialTheme.colorScheme.onError
+                    canSend -> MaterialTheme.colorScheme.onPrimary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                CircleAction(
+                    size = 36,
+                    container = circleColor,
+                    enabled = streaming || canSend,
+                    onClick = { if (streaming) onStop() else doSend() }
+                ) {
+                    if (streaming) {
+                        Icon(
+                            Icons.Outlined.Stop,
+                            contentDescription = "停止",
+                            tint = iconTint,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "发送",
+                            tint = iconTint,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }
+    }
+    }
+}
+
+@Composable
+private fun CircleAction(
+    size: Int,
+    container: Color,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Box(
+        Modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(if (enabled) container else container.copy(alpha = 0.5f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        content()
     }
 }
 
