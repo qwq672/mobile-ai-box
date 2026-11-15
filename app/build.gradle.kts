@@ -49,8 +49,22 @@ android {
                     "-DAIBOX_NPU=${if (aiboxNpu) "ON" else "OFF"}"
                 )
                 if (aiboxNpu) {
+                    // ggml-hexagon 读的是 CMake 变量，不是环境变量
+                    val hexSdk = System.getenv("HEXAGON_SDK_ROOT")
+                    if (hexSdk.isNullOrBlank()) {
+                        throw GradleException("-Paibox.npu=true 需要先设置 HEXAGON_SDK_ROOT")
+                    }
+                    arguments += "-DHEXAGON_SDK_ROOT=$hexSdk"
+                    System.getenv("HEXAGON_TOOLS_ROOT")?.takeIf { it.isNotBlank() }?.let {
+                        arguments += "-DHEXAGON_TOOLS_ROOT=$it"
+                    }
                     // ggml-hexagon 的 hexagon_fun.cmake 要求该变量非空（用于 FastRPC 头路径）
                     arguments += "-DPREBUILT_LIB_DIR=android_aarch64"
+                    // 某些环境的 python3 shim 不可用，显式指定解释器
+                    val py = System.getenv("AIBOX_PYTHON3") ?: "/usr/bin/python3"
+                    if (file(py).exists()) {
+                        arguments += "-DPython3_EXECUTABLE=$py"
+                    }
                 }
                 // 注意：这些 flags 会同时作用于 add_subdirectory 的 llama.cpp。
                 // llama.cpp 0.4.x 的 ggml-backend-reg 等用到 try/RTTI，不能全局关异常/RTTI。
@@ -70,7 +84,8 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            // ggml-hexagon 的 htp 子工程要求 CMake >= 3.22.2
+            version = if (aiboxNpu) "3.31.6" else "3.22.1"
         }
     }
 

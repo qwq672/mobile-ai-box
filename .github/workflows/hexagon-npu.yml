@@ -12,7 +12,8 @@ name: Build AIBox NPU APK (Hexagon)
 #      SDK 内需含 hvx/v73、v75、v79、v81、v85 对应的 toolv21 预编译库
 #      上游 docs 用 ghcr.io/snapdragon-toolchain/arm64-android:v0.8 容器，
 #      里面是 Hexagon SDK 6.7.0.0（该容器只用于编 llama.cpp，本项目仍用下面的 NDK）
-#   2. Android SDK + NDK 26.1.10909125 + cmake 3.22.1
+#   2. Android SDK + NDK 26.1.10909125 + cmake 3.31.6
+#      （ggml-hexagon 的 htp 子工程要求 CMake >= 3.22.2，AGP 默认的 3.22.1 不够）
 #   3. Vulkan 头（NDK sysroot 下 vulkan/vulkan.hpp），用于 ggml-vulkan 回退
 #
 # 说明：上游的 HEXAGON_HTP_CERT 只作用于 Windows 构建；Android 这里产出的 skel
@@ -41,7 +42,7 @@ jobs:
     timeout-minutes: 360
     env:
       NDK_VERSION: 26.1.10909125
-      CMAKE_VERSION: 3.22.1
+      CMAKE_VERSION: 3.31.6
       LLAMA_REF: ${{ inputs.llama_ref }}
       HTP_ARCHS: v73 v75 v79 v81 v85
 
@@ -66,6 +67,8 @@ jobs:
           test -f "$VK_HPP" || {
             echo "::error::缺少 $VK_HPP（ggml-vulkan 必需）"; exit 1; }
           echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # ggml-vulkan 需要 glslc，NDK 自带一份
+          echo "$ANDROID_HOME/ndk/$NDK_VERSION/shader-tools/linux-x86_64" >> "$GITHUB_PATH"
           # 官方 zip 里的 qaic 是未解包的，hexagon_fun.cmake 期望 ipc/fastrpc/qaic/bin/qaic
           make -C "$HEXAGON_SDK_ROOT/ipc/fastrpc/qaic" >/dev/null
           test -x "$HEXAGON_SDK_ROOT/ipc/fastrpc/qaic/bin/qaic" || {
@@ -97,29 +100,37 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-hexagon-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}-v1
 
-      # 第一遍：编译 host 端 libggml-hexagon + 5 个 arch 的 HTP skel。
-      # 此时 APK 还没有 assets/hexagon，先不关心产物。
-      - name: Build native (host + HTP skels)
+      # 第一遍：编译 host 端 libggml-hexagon / libllama 等。
+      # 注意：AGP 只会构建主工程目标，ExternalProject 的 htp-vXX 不会自动编译，
+      # 所以下面单独调用 CMake 构建五个 skel。
+      - name: Build native (host)
         run: ./gradlew :app:assembleRelease -Paibox.npu=true --no-daemon --stacktrace
+
+      - name: Build HTP skels
+        run: |
+          set -euo pipefail
+          BD=$(dirname "$(find app/.cxx/Release -maxdepth 3 -name CMakeCache.txt | head -1)")
+          test -f "$BD/CMakeCache.txt" || { echo "::error::找不到 CMake 构建目录"; exit 1; }
+          echo "CMake build dir: $BD"
+          "$ANDROID_HOME/cmake/$CMAKE_VERSION/bin/cmake" --build "$BD" --target \
+            htp-v73 htp-v75 htp-v79 htp-v81 htp-v85
+          ls -lh "$BD/llama_build/ggml/src/ggml-hexagon/"libggml-htp-*.so
 
       - name: Collect HTP skels into assets
         run: |
           set -euo pipefail
+          BD=$(dirname "$(find app/.cxx/Release -maxdepth 3 -name CMakeCache.txt | head -1)")
+          SRC="$BD/llama_build/ggml/src/ggml-hexagon"
           mkdir -p app/src/main/assets/hexagon
           for v in $HTP_ARCHS; do
-            src=$(find app/.cxx -type f -name "libggml-htp-$v.so" | head -1)
-            if [ -z "$src" ]; then
+            src="$SRC/libggml-htp-$v.so"
+            if [ ! -f "$src" ]; then
               echo "::error::没有生成 libggml-htp-$v.so（检查 Hexagon SDK 是否支持 $v）"
-              echo "--- 已生成的 skel:"
-              find app/.cxx -type f -name 'libggml-htp-*.so' || true
               exit 1
             fi
             cp -f "$src" app/src/main/assets/hexagon/
           done
           ls -lh app/src/main/assets/hexagon/
-          for v in $HTP_ARCHS; do
-            test -f "app/src/main/assets/hexagon/libggml-htp-$v.so"
-          done
 
       # 第二遍：assets 变了，mergeAssets 会重新打包；native 部分直接命中缓存。
       - name: Repackage APK with skels

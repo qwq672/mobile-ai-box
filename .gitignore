@@ -77,5 +77,11 @@ lint/tmp/
 # Mac
 .DS_Store
 
+# 本地/CI 下载的 llama.cpp 源码
+app/src/main/cpp/llama.cpp/
+
+# Hexagon 构建产出的 skel（由 CI 或本地 NPU 构建生成）
+app/src/main/assets/hexagon/
+
 # 误提交的 skills 快照（体积大、且含大量 html，会污染 GitHub 语言统计）
 skills/
