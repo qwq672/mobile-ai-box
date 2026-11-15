@@ -20,11 +20,13 @@ import com.aibox.infra.benchmark.ComparisonReport
 import com.aibox.infra.benchmark.MultiTurnResult
 import com.aibox.infra.benchmark.SmoothnessResult
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 基准测试页 ViewModel（P2）。
@@ -246,7 +248,9 @@ class BenchmarkViewModel : ViewModel() {
             val backend = container.backendManager.getBackend(backendName) ?: continue
             var loaded: LoadedModel? = null
             try {
-                val loadOutcome = backend.loadModel(modelPath, baseConfig)
+                // 关键：loadModel/unload 走的是 V1BackendAdapter 里的 runBlocking + JNI，
+                // 直接在 viewModelScope（Main）上调用会把 UI 冻住，用户看到的就是「一开始就卡死」。
+                val loadOutcome = withContext(Dispatchers.IO) { backend.loadModel(modelPath, baseConfig) }
                 loaded = loadOutcome.getOrNull()
                 if (loaded == null) {
                     val reason = loadOutcome.reasonOrNull() ?: "unknown"
@@ -267,7 +271,7 @@ class BenchmarkViewModel : ViewModel() {
                             completed = done
                         )
                     )
-                    val r = system.basicBenchmark.run(backend, loaded, spec)
+                    val r = withContext(Dispatchers.IO) { system.basicBenchmark.run(backend, loaded, spec) }
                     allResults.add(r)
                     system.storage.save(r, backendName, modelFormat = null, descriptor = container.backendManager.getDescriptor(backendName))
                     done++
@@ -277,7 +281,7 @@ class BenchmarkViewModel : ViewModel() {
                     )
                 }
             } finally {
-                loaded?.let { runCatching { backend.unload(it) } }
+                loaded?.let { handle -> withContext(Dispatchers.IO) { runCatching { backend.unload(handle) } } }
             }
         }
 
@@ -298,12 +302,14 @@ class BenchmarkViewModel : ViewModel() {
             }
         }
         try {
-            val report = system.backendComparison.compareBackends(
-                modelPath = modelPath,
-                modelFormat = inferModelFormat(modelPath),
-                backends = backends,
-                baseConfig = baseConfig
-            )
+            val report = withContext(Dispatchers.IO) {
+                system.backendComparison.compareBackends(
+                    modelPath = modelPath,
+                    modelFormat = inferModelFormat(modelPath),
+                    backends = backends,
+                    baseConfig = baseConfig
+                )
+            }
             // 持久化每条结果
             report.resultsByBackend.forEach { (name, r) ->
                 system.storage.save(r, name, modelFormat = report.modelFormat, descriptor = container.backendManager.getDescriptor(name))
@@ -322,7 +328,7 @@ class BenchmarkViewModel : ViewModel() {
     private suspend fun runColdStart(modelPath: String) {
         val backendName = _ui.value.selectedBackendNames.firstOrNull() ?: return
         val backend = container.backendManager.getBackend(backendName) ?: return
-        val result = AdvancedBenchmark.coldStart(backend, modelPath, buildConfig())
+        val result = withContext(Dispatchers.IO) { AdvancedBenchmark.coldStart(backend, modelPath, buildConfig()) }
         _ui.value = _ui.value.copy(
             latestAdvanced = AdvancedResultBundle(coldStart = result),
             infoMessage = "冷启动：加载 ${result.loadTimeMs}ms · 首 token ${result.firstTokenMs}ms · 总响应 ${result.totalResponseMs}ms"
@@ -334,18 +340,18 @@ class BenchmarkViewModel : ViewModel() {
         val backendName = _ui.value.selectedBackendNames.firstOrNull() ?: return
         val backend = container.backendManager.getBackend(backendName) ?: return
         val config = buildConfig()
-        val loaded = backend.loadModel(modelPath, config).getOrNull() ?: run {
+        val loaded = withContext(Dispatchers.IO) { backend.loadModel(modelPath, config).getOrNull() } ?: run {
             _ui.value = _ui.value.copy(errorMessage = "loadModel 失败")
             return
         }
         try {
-            val result = AdvancedBenchmark.multiTurn(backend, loaded, turns = 10)
+            val result = withContext(Dispatchers.IO) { AdvancedBenchmark.multiTurn(backend, loaded, turns = 10) }
             _ui.value = _ui.value.copy(
                 latestAdvanced = AdvancedResultBundle(multiTurn = result),
                 infoMessage = "多轮 ${result.ttftPerTurn.size} 轮完成；平均 TTFT ${if (result.ttftPerTurn.isEmpty()) 0L else result.ttftPerTurn.average().toLong()}ms"
             )
         } finally {
-            runCatching { backend.unload(loaded) }
+            withContext(Dispatchers.IO) { runCatching { backend.unload(loaded) } }
         }
     }
 
@@ -354,18 +360,18 @@ class BenchmarkViewModel : ViewModel() {
         val backendName = _ui.value.selectedBackendNames.firstOrNull() ?: return
         val backend = container.backendManager.getBackend(backendName) ?: return
         val config = buildConfig()
-        val loaded = backend.loadModel(modelPath, config).getOrNull() ?: run {
+        val loaded = withContext(Dispatchers.IO) { backend.loadModel(modelPath, config).getOrNull() } ?: run {
             _ui.value = _ui.value.copy(errorMessage = "loadModel 失败")
             return
         }
         try {
-            val result = AdvancedBenchmark.streamingSmoothness(backend, loaded, targetTokens = 100)
+            val result = withContext(Dispatchers.IO) { AdvancedBenchmark.streamingSmoothness(backend, loaded, targetTokens = 100) }
             _ui.value = _ui.value.copy(
                 latestAdvanced = AdvancedResultBundle(smoothness = result),
                 infoMessage = "平滑度：间隔均值 ${result.meanIntervalMs}ms · 方差 ${result.varianceMs2} · 最大 ${result.maxIntervalMs}ms @ token #${result.maxIntervalPosition}"
             )
         } finally {
-            runCatching { backend.unload(loaded) }
+            withContext(Dispatchers.IO) { runCatching { backend.unload(loaded) } }
         }
     }
 

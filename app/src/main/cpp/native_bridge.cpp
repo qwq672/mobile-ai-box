@@ -257,6 +257,13 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         LOGI("llamaLoad: detected 1-bit/ternary model, GPU backend strongly recommended");
     }
 
+    // 上一次 unload / 生成被中断后，这两个标志可能还留着，会让新加载后的第一次
+    // 生成直接走 "unloading in progress, abort" 分支（表现为加载完立刻结束/卡住）。
+    g_interrupt.store(false);
+    g_unloading.store(false);
+    g_n_past_total = 0;
+    g_last_prompt.clear();
+
     if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
     g_vocab = nullptr;
@@ -286,6 +293,13 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     int n_gpu_layers = nGpuLayers;
     if (n_gpu_layers > 0 && !llama_supports_gpu_offload()) {
         LOGI("llamaLoad: backend=%s 但本库未注册 GPU 后端，n_gpu_layers 置 0", backend);
+        n_gpu_layers = 0;
+    }
+    // 1-bit / ternary 量化（Q1_0 等）在 Vulkan 上缺少完整的内核覆盖，
+    // 设备驱动会在 prompt eval 阶段直接 SIGSEGV（日志里连异常都没有）。
+    // 这类模型强制走 CPU，稳定优先。
+    if (is_1bit && n_gpu_layers > 0) {
+        LOGI("llamaLoad: 1-bit/ternary 模型在 GPU 上易触发驱动崩溃，n_gpu_layers 置 0（走 CPU）");
         n_gpu_layers = 0;
     }
 

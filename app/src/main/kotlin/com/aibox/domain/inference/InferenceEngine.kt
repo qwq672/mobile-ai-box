@@ -44,6 +44,7 @@ class InferenceEngine(
 
     private val memoryOptimizer = MemoryOptimizer(nativeBridge)
     private val thermalGovernor = ThermalGovernor(thermalMonitor)
+    private val gpuGuard = GpuGuard(appContext)
 
     @Volatile private var currentBackend: Backend? = null
     @Volatile private var currentModelPath: String? = null
@@ -128,6 +129,13 @@ class InferenceEngine(
                 for (type in chain) {
                     if (!isBackendAvailable(type)) {
                         LogSystem.info("aibox.inference.engine", "InferenceEngine: $type not available, skip")
+                        continue
+                    }
+                    if ((type == BackendType.VULKAN || type == BackendType.OPENCL) && gpuGuard.isVulkanBlocked()) {
+                        // 上一次（或连续两次）GPU 推理把进程带崩了，本次启动不再尝试，
+                        // 否则用户每次点开始都会闪退一次。
+                        LogSystem.warn("aibox.inference.engine", "InferenceEngine: $type 被崩溃护栏禁用，跳过")
+                        lastError = "$type: 连续崩溃已自动禁用"
                         continue
                     }
                     LogSystem.info("aibox.inference.engine", "InferenceEngine: trying $type ...")
@@ -245,6 +253,9 @@ class InferenceEngine(
      * 2. 提升当前线程优先级到 URGENT_DISPLAY，减少调度延迟
      */
     private suspend inline fun <T> withInferenceBoost(block: () -> T): T {
+        // 先落盘「推理进行中」标记：若 GPU 驱动把进程带走，下次启动能识别崩溃，
+        // 连续两次就自动回退 CPU（见 GpuGuard）。
+        gpuGuard.onInferenceStart(effectiveBackend)
         // 获取 wake lock
         val pm = appContext?.getSystemService(android.content.Context.POWER_SERVICE)
                 as? android.os.PowerManager
@@ -267,6 +278,7 @@ class InferenceEngine(
         try {
             return block()
         } finally {
+            gpuGuard.onInferenceEnd(effectiveBackend)
             try { android.os.Process.setThreadPriority(oldPriority) } catch (_: Throwable) {}
             try { wakeLock?.release() } catch (_: Throwable) {}
         }
@@ -276,12 +288,20 @@ class InferenceEngine(
         currentBackend?.interrupt()
     }
 
-    suspend fun unload() = mutex.withLock {
-        currentBackend?.close()
-        currentBackend = null
-        currentModelPath = null
-        memoryOptimizer.releaseAll()
-        _state.value = EngineState()
+    /**
+     * 卸载模型。
+     *
+     * 必须切到 IO 线程：close() 会阻塞在 native 的 g_mutex 上，
+     * 如果调用方在 Main 线程（ModelsViewModel.activate 就是），整个 UI 会僵住。
+     */
+    suspend fun unload() = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            currentBackend?.close()
+            currentBackend = null
+            currentModelPath = null
+            memoryOptimizer.releaseAll()
+            _state.value = EngineState()
+        }
     }
 
     /** 启动后 1s 一次刷新 stats（UI 用） */

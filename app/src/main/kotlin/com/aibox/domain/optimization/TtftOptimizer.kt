@@ -59,6 +59,22 @@ class TtftOptimizer(
             LogSystem.debug(tag, "preloadModel disabled by user, skip")
             return
         }
+        // 启动预加载只能"捡空档"：用户点过「加载模型」、或已经有模型在 native 里，
+        // 就不能再插一次 load —— 预加载用的是默认参数（cpu / 较小 ctx），
+        // 会把用户刚选好的（vulkan / 4096）覆盖掉，表现就是第二次加载卡住或输出异常。
+        if (userActivatedModel) {
+            LogSystem.info(tag, "user already activated a model, skip preload")
+            return
+        }
+        if (backendManager.listLoadedModels().isNotEmpty()) {
+            LogSystem.info(tag, "a model is already loaded, skip preload")
+            return
+        }
+        kotlinx.coroutines.delay(STARTUP_GRACE_MS)
+        if (userActivatedModel || backendManager.listLoadedModels().isNotEmpty()) {
+            LogSystem.info(tag, "model loaded during startup grace period, skip preload")
+            return
+        }
         val lastModel: ModelInfo = modelRepository.lastUsed() ?: run {
             LogSystem.info(tag, "no lastUsed model, skip preload")
             return
@@ -155,6 +171,19 @@ class TtftOptimizer(
                 seenFirst = true
                 LogSystem.debug(tag, "first stream chunk received, emitting immediately (streamFirstTokenImmediately=true)")
             }
+        }
+    }
+
+    companion object {
+        /** 启动后给用户留的操作窗口：这段时间内用户点了加载，就不做预加载。 */
+        private const val STARTUP_GRACE_MS = 8_000L
+
+        /** 用户是否已经主动加载过模型（进程内标记，避免预加载覆盖用户选择）。 */
+        @Volatile private var userActivatedModel = false
+
+        /** 用户主动加载模型时调用。 */
+        fun markUserActivated() {
+            userActivatedModel = true
         }
     }
 }

@@ -12,12 +12,14 @@ import com.aibox.domain.inference.InferenceEngine
 import com.aibox.domain.inference.LoadedModel
 import com.aibox.domain.inference.ModelFormatRouter
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
@@ -92,6 +94,9 @@ class ModelsViewModel : ViewModel() {
             _ui.value = _ui.value.copy(loading = true, error = null)
             LogSystem.info("aibox.ui.models", "ModelsViewModel: activating ${m.name} (${m.filePath})")
 
+            // 告诉启动预加载"让路"，别再插一次 load 把用户选择的模型覆盖掉
+            com.aibox.domain.optimization.TtftOptimizer.markUserActivated()
+
             // 卸载上一个(V1 或 V2)
             unloadCurrentSilently()
 
@@ -118,8 +123,11 @@ class ModelsViewModel : ViewModel() {
             } catch (t: Throwable) {
                 LogSystem.error("aibox.ui.models", "ModelsViewModel: activate threw", t)
                 _ui.value = _ui.value.copy(error = "加载异常: ${t.message}")
+            } finally {
+                // 无论成功/失败/取消都要把 loading 复位，否则第二次点「加载」会被
+                // 开头的 `if (loading) return` 直接吞掉，表现就是永远停在「正在加载模型」。
+                _ui.value = _ui.value.copy(loading = false)
             }
-            _ui.value = _ui.value.copy(loading = false)
         }
     }
 
@@ -158,8 +166,10 @@ class ModelsViewModel : ViewModel() {
             val v2Config = InferenceConfigV2(
                 taskType = com.aibox.domain.inference.TaskType.TEXT_GENERATION
             )
-            val outcome = withTimeoutOrNull(90_000L) {
-                backend.loadModel(m.filePath, v2Config)
+            val outcome = withContext(Dispatchers.IO) {
+                withTimeoutOrNull(90_000L) {
+                    backend.loadModel(m.filePath, v2Config)
+                }
             } ?: run {
                 _ui.value = _ui.value.copy(error = "V2 加载超时(90s),插件可能初始化失败")
                 return
@@ -235,7 +245,7 @@ class ModelsViewModel : ViewModel() {
     }
 
     /** 静默卸载当前激活的模型(V1 或 V2),不抛错。 */
-    private suspend fun unloadCurrentSilently() {
+    private suspend fun unloadCurrentSilently() = withContext(Dispatchers.IO) {
         // V2 卸载
         val v2BackendName = activeV2BackendName
         val v2Handle = activeV2Handle
@@ -257,6 +267,13 @@ class ModelsViewModel : ViewModel() {
             if (engine.state.value.loaded) engine.unload()
         } catch (t: Throwable) {
             LogSystem.warn("aibox.ui.models", "unloadCurrentSilently: V1 unload failed: ${t.message}")
+        }
+        // 启动预加载可能绕过本 VM 直接调了 V1BackendAdapter，registry 里会留下
+        // 指向已被释放的 native 模型的句柄；这里统一清掉，避免后续误用。
+        runCatching {
+            container.backendManager.listLoadedModels().forEach { (name, model) ->
+                container.backendManager.untrackLoaded(name, model)
+            }
         }
     }
 
