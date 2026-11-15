@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <exception>
 
 #include "llama.h"
 #include "memory_pool.h"
@@ -78,6 +79,9 @@ static llama_model*     g_model  = nullptr;
 static llama_context*   g_ctx    = nullptr;
 static const llama_vocab* g_vocab = nullptr;
 static std::atomic<bool> g_interrupt{false};
+// 卸载进行中：unload 会先置位再抢锁，生成线程拿到锁后看到它就直接退出，
+// 否则生成末尾的 g_interrupt.store(false) 会把 unload 的取消请求吃掉。
+static std::atomic<bool> g_unloading{false};
 static std::atomic<int>  g_ctx_used{0};
 // KV cache 中已 eval 的 token 数（用于增量 eval，避免每次都从头重新 tokenize+eval）
 static int g_n_past_total = 0;
@@ -93,6 +97,22 @@ static MemoryPool g_pool;
 
 // 后端字符串（仅供日志）
 static std::string g_backend_str = "cpu";
+
+// 最近一次加载失败的原始原因（C++ 异常文本），供 Kotlin 侧展示到「诊断」里。
+// llama.cpp 在 Vulkan 设备初始化失败、KV 量化与 FA 冲突等场景下会 throw，
+// 这些异常如果跨过 JNI 边界就会直接 abort（表现为闪退），所以必须就地捕获。
+static std::mutex g_err_mutex;
+static std::string g_last_error;
+
+static void set_last_error(const std::string& msg) {
+    std::lock_guard<std::mutex> lk(g_err_mutex);
+    g_last_error = msg;
+}
+
+static std::string get_last_error() {
+    std::lock_guard<std::mutex> lk(g_err_mutex);
+    return g_last_error;
+}
 
 // ---------- 后端可用性 ----------
 extern "C" JNIEXPORT jboolean JNICALL
@@ -192,6 +212,13 @@ static std::string detect_model_arch(const llama_model* model) {
     return "unknown";
 }
 
+// 最近一次加载/解码失败的原因（空字符串表示没有错误）。
+// 之前这类错误只打 logcat，用户只看到「闪退」；现在可以直接显示在设置页的诊断里。
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_aibox_infra_jni_NativeBridge_nativeLastError(JNIEnv* env, jclass) {
+    return env->NewStringUTF(get_last_error().c_str());
+}
+
 // ---------- 加载 ----------
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
@@ -236,11 +263,47 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     g_ctx_used.store(0);
 
     llama_backend_init();
+    set_last_error("");
+
+    // ---- 参数合法性校正 ----
+    // llama.cpp 对非法参数是 throw / GGML_ABORT，而不是返回错误码；跨过 JNI 就会 abort，
+    // 在用户看来就是「闪退」。所以这里先钳制到合法区间。
+    const int ctx_len = ctxLen < 256 ? 256 : ctxLen;
+    int n_batch  = batch > 0 ? batch : 2048;
+    int n_ubatch = physicalBatch > 0 ? physicalBatch : 512;
+    if (n_ubatch > n_batch) {
+        LOGI("llamaLoad: n_ubatch(%d) > n_batch(%d), clamp to n_batch", n_ubatch, n_batch);
+        n_ubatch = n_batch;
+    }
+    if (n_batch > ctx_len) {
+        LOGI("llamaLoad: n_batch(%d) > n_ctx(%d), clamp to n_ctx", n_batch, ctx_len);
+        n_batch = ctx_len;
+        if (n_ubatch > n_batch) n_ubatch = n_batch;
+    }
+
+    // 该 .so 里到底有没有可用的 GPU 后端（Vulkan/OpenCL 没编进来时 ggml 会静默忽略层数，
+    // 但某些驱动初始化失败会直接抛异常）
+    int n_gpu_layers = nGpuLayers;
+    if (n_gpu_layers > 0 && !llama_supports_gpu_offload()) {
+        LOGI("llamaLoad: backend=%s 但本库未注册 GPU 后端，n_gpu_layers 置 0", backend);
+        n_gpu_layers = 0;
+    }
 
     llama_model_params mp = llama_model_default_params();
-    mp.n_gpu_layers = nGpuLayers;
+    mp.n_gpu_layers = n_gpu_layers;
 
-    g_model = llama_model_load_from_file(path, mp);
+    try {
+        g_model = llama_model_load_from_file(path, mp);
+    } catch (const std::exception& e) {
+        // Vulkan/Metal 设备初始化失败时走这里，之前会直接 abort 掉进程
+        set_last_error(std::string("model_load: ") + e.what());
+        LOGE("llama_model_load_from_file threw: %s", e.what());
+        g_model = nullptr;
+    } catch (...) {
+        set_last_error("model_load: unknown exception");
+        LOGE("llama_model_load_from_file threw unknown exception");
+        g_model = nullptr;
+    }
     if (!g_model) {
         LOGE("llama_model_load_from_file failed: %s", path);
         // 不能用 goto(后面有 std::string 局部变量,跨 scope 跳转会编译失败)
@@ -296,9 +359,9 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
 
     {
         llama_context_params cp = llama_context_default_params();
-        cp.n_ctx        = ctxLen;
-        cp.n_batch      = batch;
-        cp.n_ubatch     = physicalBatch;
+        cp.n_ctx        = ctx_len;
+        cp.n_batch      = n_batch;
+        cp.n_ubatch     = n_ubatch;
         cp.n_threads    = threads > 0 ? threads : 4;
         cp.n_threads_batch = threads > 0 ? threads : 4;
         // 关键修复: 只在 effectiveFa=true 时启用 FlashAttention
@@ -309,12 +372,30 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         }
         cp.no_perf      = false;
 
-        const std::string kvq_str(kvq);
+        std::string kvq_str(kvq);
+        // llama.cpp v1.0.0 起：量化 V cache 必须先开 FlashAttention，否则
+        // llama-context.cpp 直接 throw std::runtime_error → 跨 JNI abort（闪退）。
+        // 非 Transformer 架构又不能开 FA，所以这里降级成 f16 而不是硬开 FA。
+        if (kvq_str != "f16" && kvq_str != "fp16" && !effectiveFa) {
+            LOGI("llamaLoad: kv=%s 需要 FlashAttention，本模型未启用 FA → 降级为 f16",
+                 kvq_str.c_str());
+            kvq_str = "f16";
+        }
         if (kvq_str == "q8_0")       cp.type_k = cp.type_v = GGML_TYPE_Q8_0;
         else if (kvq_str == "q4_0")  cp.type_k = cp.type_v = GGML_TYPE_Q4_0;
         else                         cp.type_k = cp.type_v = GGML_TYPE_F16;
 
-        g_ctx = llama_init_from_model(g_model, cp);
+        try {
+            g_ctx = llama_init_from_model(g_model, cp);
+        } catch (const std::exception& e) {
+            set_last_error(std::string("context_init: ") + e.what());
+            LOGE("llama_init_from_model threw: %s", e.what());
+            g_ctx = nullptr;
+        } catch (...) {
+            set_last_error("context_init: unknown exception");
+            LOGE("llama_init_from_model threw unknown exception");
+            g_ctx = nullptr;
+        }
     }
     if (!g_ctx) {
         LOGE("llama_init_from_model failed");
@@ -323,7 +404,8 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         goto fail;
     }
 
-    g_pool.warmup(ctxLen, physicalBatch, batch, std::string(kvq));
+    g_pool.warmup(ctx_len, n_ubatch, n_batch, std::string(kvq));
+
 
     ok = true;
     LOGI("loaded via %s, ctx=%d, threads=%d, kv=%s", g_backend_str.c_str(), ctxLen, threads, kvq);
@@ -337,6 +419,10 @@ fail:
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_aibox_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
+    // 先置中断标志，再抢锁：否则生成线程会一直持有 g_mutex 跑到 EOG，
+    // 切模型时主线程卡住 → ANR（用户同样感知为「闪退」）。
+    g_unloading.store(true);
+    g_interrupt.store(true);
     std::lock_guard<std::mutex> lk(g_mutex);
     if (g_ctx)   { llama_free(g_ctx); g_ctx = nullptr; }
     if (g_model) { llama_model_free(g_model); g_model = nullptr; }
@@ -346,6 +432,7 @@ Java_com_aibox_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
     g_n_past_total = 0;
     g_last_prompt.clear();
     g_pool.releaseAll();
+    g_unloading.store(false);
     LOGI("unloaded");
 }
 
@@ -429,14 +516,27 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletion(
         return;
     }
     std::string sp(prompt);
+    env->ReleaseStringUTFChars(jprompt, prompt);
+
+    // 锁住全局状态，避免 unload 与生成并发（use-after-free → SIGSEGV）
+    std::lock_guard<std::mutex> lk(g_mutex);
+    // 上面的空指针检查是无锁的快速失败；拿到锁后必须再检查一次，
+    // 因为 close() 可能刚好在两次检查之间把 g_ctx 释放掉。
+    if (!g_ctx || !g_model || !g_vocab) {
+        LOGE("llamaCompletion: model unloaded during start");
+        call_string_cb(env, stopCb, "no_model");
+        return;
+    }
+    if (g_unloading.load()) {
+        LOGE("llamaCompletion: unloading in progress, abort");
+        call_string_cb(env, stopCb, "no_model");
+        return;
+    }
     LOGI("llamaCompletion: prompt_len=%zu  ctx=%p  n_past_total=%d  last_len=%zu",
          sp.size(), (void*)g_ctx, g_n_past_total, g_last_prompt.size());
 
-    // 锁住全局状态，避免 unload 与生成并发
-    std::lock_guard<std::mutex> lk(g_mutex);
-    env->ReleaseStringUTFChars(jprompt, prompt);
-
     g_interrupt.store(false);
+
 
     // 判断是否需要清空 KV cache 重头 eval：
     // 1. 当前 prompt 不是上次 prompt 的前缀扩展（即前缀变化或缩短）
@@ -507,7 +607,17 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletion(
         if (g_interrupt.load()) { stop_reason = "interrupted"; stopped = true; break; }
         int n = std::min((int)256, (int)(tokens.size() - i));
         llama_batch batch = llama_batch_get_one(&tokens[i], n);
-        int rc = llama_decode(g_ctx, batch);
+        int rc = -1;
+        try {
+            rc = llama_decode(g_ctx, batch);
+        } catch (const std::exception& e) {
+            // Vulkan 设备/显存异常会以 C++ 异常形式抛出，跨 JNI 就是 abort（闪退）
+            set_last_error(std::string("decode: ") + e.what());
+            LOGE("llamaCompletion: prompt decode threw: %s", e.what());
+        } catch (...) {
+            set_last_error("decode: unknown exception");
+            LOGE("llamaCompletion: prompt decode threw unknown exception");
+        }
         if (rc != 0) {
             LOGE("llamaCompletion: prompt decode failed rc=%d at i=%zu", rc, i);
             stop_reason = "decode_failed"; stopped = true; break;
@@ -538,7 +648,19 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletion(
             gen_count++;
 
             llama_batch batch = llama_batch_get_one(&id, 1);
-            if (llama_decode(g_ctx, batch) != 0) {
+            int rc = 0;
+            try {
+                rc = llama_decode(g_ctx, batch);
+            } catch (const std::exception& e) {
+                set_last_error(std::string("decode: ") + e.what());
+                LOGE("llamaCompletion: gen decode threw: %s", e.what());
+                rc = -1;
+            } catch (...) {
+                set_last_error("decode: unknown exception");
+                LOGE("llamaCompletion: gen decode threw unknown exception");
+                rc = -1;
+            }
+            if (rc != 0) {
                 LOGE("llamaCompletion: gen decode failed at i=%d", i);
                 stop_reason = "decode_failed"; break;
             }
@@ -674,6 +796,17 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
 
     // 4. 锁 + 增量 eval + 生成（复用 llamaCompletion 逻辑）
     std::lock_guard<std::mutex> lk(g_mutex);
+    // 与 llamaCompletion 相同的二次检查：tokenize 期间模型可能已被 close()
+    if (!g_ctx || !g_model || !g_vocab) {
+        LOGE("llamaCompletionChat: model unloaded during start");
+        call_string_cb(env, stopCb, "no_model");
+        return;
+    }
+    if (g_unloading.load()) {
+        LOGE("llamaCompletionChat: unloading in progress, abort");
+        call_string_cb(env, stopCb, "no_model");
+        return;
+    }
     g_interrupt.store(false);
 
     // 增量 eval 判断

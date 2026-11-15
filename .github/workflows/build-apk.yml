@@ -27,7 +27,7 @@ jobs:
     env:
       NDK_VERSION: 26.1.10909125
       CMAKE_VERSION: 3.22.1
-      LLAMA_REF: v0.4.1
+      LLAMA_REF: v1.0.0
     steps:
       - name: Checkout project
         uses: actions/checkout@v4

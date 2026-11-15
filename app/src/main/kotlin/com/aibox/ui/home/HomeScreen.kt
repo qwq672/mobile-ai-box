@@ -1,5 +1,6 @@
 package com.aibox.ui.home
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,16 +19,23 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -42,6 +50,7 @@ import com.aibox.ui.thermal.ThermalMonitorCard
 import com.aibox.ui.theme.Colors
 import com.aibox.ui.theme.DesignTokens
 import com.aibox.ui.theme.Type
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -132,6 +141,13 @@ fun HomeScreen(
             contentPadding = PaddingValues(vertical = DesignTokens.spacing12),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing16)
         ) {
+            // ============== 0. 实时设备状态 ==============
+            item(key = "live_status") {
+                LiveDeviceStatus(
+                    modifier = Modifier.padding(horizontal = DesignTokens.spacing16)
+                )
+            }
+
             // ============== 1. 快捷方式区 ==============
             item(key = "section_shortcuts_header") {
                 SectionHeader(title = "快捷方式")
@@ -357,3 +373,88 @@ private data class FunctionTileData(
     val subtitle: String,
     val onClick: () -> Unit
 )
+
+/**
+ * 首页实时设备状态条：温度 / CPU / GPU / 内存 / 电量。
+ *
+ * 数据全部来自 [com.aibox.util.ThermalMonitor] 的 StateFlow，采样周期由设置页控制（默认 2s）。
+ * 右上角显示「x 秒前」，超过 2 个周期没更新会变红 —— 用户能一眼看出是数据没动还是界面卡了。
+ */
+@Composable
+private fun LiveDeviceStatus(modifier: Modifier = Modifier) {
+    val monitor = AIBoxApp.instance.container.thermalMonitor
+    val celsius by monitor.celsius.collectAsStateWithLifecycle()
+    val cpuUsage by monitor.cpuUsage.collectAsStateWithLifecycle()
+    val cpuFreqKhz by monitor.cpuFreqKhz.collectAsStateWithLifecycle()
+    val gpuUsage by monitor.gpuUsage.collectAsStateWithLifecycle()
+    val memUsage by monitor.memUsage.collectAsStateWithLifecycle()
+    val batteryLevel by monitor.batteryLevel.collectAsStateWithLifecycle()
+    val lastUpdate by monitor.lastUpdateMs.collectAsStateWithLifecycle()
+    val interval by monitor.intervalMs.collectAsStateWithLifecycle()
+
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    val agoSec = if (lastUpdate > 0L) ((nowMs - lastUpdate) / 1000).coerceAtLeast(0) else -1L
+    val stale = agoSec < 0 || agoSec > (interval / 1000 + 2)
+
+    UnifiedCard(modifier = modifier, tone = UnifiedCardTone.SURFACE_LOW) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (stale) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary
+                    )
+            )
+            Spacer(Modifier.size(DesignTokens.spacing8))
+            Text(
+                "设备实时状态",
+                style = Type.labelLarge,
+                color = Colors.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (agoSec < 0) "采样中…" else "${agoSec}s 前",
+                style = Type.labelSmall,
+                color = if (stale) MaterialTheme.colorScheme.error else Colors.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.height(DesignTokens.spacing8))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            LiveMetric("温度", if (celsius > 0) String.format("%.1f°C", celsius) else "--")
+            LiveMetric("CPU", if (cpuUsage in 0..100) "$cpuUsage%" else "--", cpuFreqKhz)
+            LiveMetric("GPU", if (gpuUsage in 0..100) "$gpuUsage%" else "--")
+            LiveMetric("内存", if (memUsage in 0..100) "$memUsage%" else "--")
+            LiveMetric("电量", if (batteryLevel in 0..100) "$batteryLevel%" else "--")
+        }
+    }
+}
+
+@Composable
+private fun LiveMetric(title: String, value: String, freqKhz: Long = 0L) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = Type.labelLarge, color = Colors.onSurface)
+        if (freqKhz > 0) {
+            Text(
+                String.format("%.1fGHz", freqKhz / 1_000_000f),
+                style = Type.labelSmall,
+                color = Colors.onSurfaceVariant
+            )
+        }
+        Text(title, style = Type.labelSmall, color = Colors.onSurfaceVariant)
+    }
+}
+

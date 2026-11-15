@@ -18,7 +18,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -34,6 +38,7 @@ import com.aibox.ui.components.unified.UnifiedCardTone
 import com.aibox.ui.theme.Colors
 import com.aibox.ui.theme.DesignTokens
 import com.aibox.ui.theme.Type
+import kotlinx.coroutines.delay
 import com.aibox.util.ThermalLevel
 import com.aibox.util.ThermalSample
 
@@ -147,8 +152,28 @@ fun ThermalMonitorCard(
                 style = Type.bodySmall,
                 color = Colors.onSurfaceVariant
             )
-            Spacer(Modifier.height(DesignTokens.spacing8))
         }
+
+        // ============== 实时心跳：「x 秒前更新」==============
+        // 每秒重绘一次，即使读不到传感器也能看出采样循环还在跑（而不是界面卡死）。
+        val lastUpdate by monitor.lastUpdateMs.collectAsStateWithLifecycle()
+        val interval by monitor.intervalMs.collectAsStateWithLifecycle()
+        var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(Unit) {
+            while (true) {
+                nowMs = System.currentTimeMillis()
+                delay(1000)
+            }
+        }
+        val agoSec = if (lastUpdate > 0L) ((nowMs - lastUpdate) / 1000).coerceAtLeast(0) else -1L
+        val stale = agoSec < 0 || agoSec > (interval / 1000 + 3)
+        Text(
+            text = if (agoSec < 0) "等待首次采样…" else "${agoSec}s 前更新 · 每 ${interval / 1000}s 采样",
+            style = Type.labelSmall,
+            color = if (stale) MaterialTheme.colorScheme.error else Colors.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(DesignTokens.spacing8))
 
         // ============== 中部:历史曲线 ==============
         HistorySparkline(

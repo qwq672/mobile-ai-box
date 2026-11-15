@@ -34,6 +34,9 @@ class NativeBridge {
     external fun openclAvailable(): Boolean
     external fun nativeVersion(): String
 
+    /** 最近一次原生加载/解码失败的原因；空串表示无错误。用于设置页诊断。 */
+    external fun nativeLastError(): String
+
     // -------- 模型加载 --------
     external fun llamaLoad(
         modelPath: String,

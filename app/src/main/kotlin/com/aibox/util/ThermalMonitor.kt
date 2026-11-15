@@ -91,6 +91,14 @@ class ThermalMonitor {
     private val _state = MutableStateFlow(ThermalLevel.UNKNOWN)
     val state: StateFlow<ThermalLevel> = _state.asStateFlow()
 
+    /** 最近一次采样完成的时间戳(ms)。0 表示还没采过样。 */
+    private val _lastUpdateMs = MutableStateFlow(0L)
+    val lastUpdateMs: StateFlow<Long> = _lastUpdateMs.asStateFlow()
+
+    /** 当前采样周期(ms)。设置页可切 1s / 2s / 5s。 */
+    private val _intervalMs = MutableStateFlow(DEFAULT_INTERVAL_MS)
+    val intervalMs: StateFlow<Int> = _intervalMs.asStateFlow()
+
     private var job: Job? = null
     private var sysfsPaths: List<String> = emptyList()
     private var cpuFreqPath: String? = null
@@ -118,8 +126,22 @@ class ThermalMonitor {
         job = CoroutineScope(Dispatchers.IO).launch {
             while (true) {
                 tick()
-                delay(2000)  // 2 秒一次,温度更实时
+                delay(_intervalMs.value.toLong())  // 默认 2 秒一次,可在设置页调整
             }
+        }
+    }
+
+    /**
+     * 调整采样周期。会重启采样循环,下一次 tick 立即执行(不用等旧周期跑完)。
+     */
+    fun setInterval(ms: Int) {
+        val clamped = ms.coerceIn(500, 10_000)
+        if (_intervalMs.value == clamped) return
+        _intervalMs.value = clamped
+        if (job?.isActive == true) {
+            job?.cancel()
+            job = null
+            start()
         }
     }
 
@@ -193,6 +215,9 @@ class ThermalMonitor {
 
         // 8. 推导 ThermalLevel
         _state.value = ThermalLevel.fromPercent(pct)
+
+        // 9. 打上采样时间戳，UI 据此显示「x 秒前更新」，也用于判断数据是否卡住
+        _lastUpdateMs.value = System.currentTimeMillis()
     }
 
     /**
@@ -442,6 +467,9 @@ class ThermalMonitor {
 
         /** 历史采样最大条数:60 秒 / 2 秒间隔 = 30 条。 */
         const val HISTORY_MAX = 30
+
+        /** 默认采样周期:2 秒。设置页可切 1s / 2s / 5s。 */
+        const val DEFAULT_INTERVAL_MS = 2000
     }
 }
 

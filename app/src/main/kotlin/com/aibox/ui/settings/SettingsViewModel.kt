@@ -28,6 +28,10 @@ class SettingsViewModel : ViewModel() {
         val loggingEnabled: Boolean = true,
         val logFilePath: String? = null,
         val thinkingMode: Boolean = true,
+        // 设备状态采样周期（ms），设置页可切 1s/2s/5s
+        val thermalIntervalMs: Int = 2000,
+        // 原生层最近一次加载/解码失败的原因（空串 = 无错误）
+        val lastNativeError: String = "",
         // 可用后端
         val vulkanAvailable: Boolean = false,
         val npuAvailable: Boolean = false,
@@ -75,8 +79,15 @@ class SettingsViewModel : ViewModel() {
         _ui.value = _ui.value.copy(
             socName = CpuInfo.socName,
             bigCores = CpuInfo.bigCores,
-            logFilePath = LogSystem.getLogDirPath()
+            logFilePath = LogSystem.getLogDirPath(),
+            thermalIntervalMs = container.thermalMonitor.intervalMs.value
         )
+        // 诊断信息持续跟随：原生错误可能在加载模型后才出现
+        viewModelScope.launch {
+            container.thermalMonitor.intervalMs.collectLatest {
+                _ui.value = _ui.value.copy(thermalIntervalMs = it)
+            }
+        }
         // 探测后端可用性（加日志便于诊断 N/A 问题）
         viewModelScope.launch {
             val b = container.nativeBridge
@@ -122,5 +133,19 @@ class SettingsViewModel : ViewModel() {
 
     fun clearLog() {
         LogSystem.clearAll()
+    }
+
+    /** 切换设备状态采样周期，立即生效（不需重启 App）。 */
+    fun onThermalIntervalChange(ms: Int) {
+        container.thermalMonitor.setInterval(ms)
+        _ui.value = _ui.value.copy(thermalIntervalMs = container.thermalMonitor.intervalMs.value)
+    }
+
+    /** 手动刷新诊断信息：原生版本 + 最近一次原生错误。 */
+    fun refreshDiagnostics() {
+        val b = container.nativeBridge
+        val version = runCatching { b.nativeVersion() }.getOrDefault("native not loaded")
+        val err = runCatching { b.nativeLastError() }.getOrDefault("")
+        _ui.value = _ui.value.copy(nativeVersion = version, lastNativeError = err)
     }
 }
