@@ -945,7 +945,8 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     strings.reserve(n_msg);
 
     bool thinkingMode = (jThinkingMode == JNI_TRUE);
-    const std::string think_flag = thinkingMode ? "/think" : "/no_think";
+    // 只在关闭思考时注入标记；开启时依赖模板默认行为，不注入 /think。
+    const std::string think_flag = "/no_think";
 
     for (jsize i = 0; i < n_msg; i++) {
         jobject msg = env->GetObjectArrayElement(jMessages, i);
@@ -972,9 +973,19 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     }
     env->DeleteLocalRef(msgCls);
 
-    // 把 /think 或 /no_think 追加到最后一条 user message（与 Qwen3 官方用法一致）；
-    // 如果整段对话没有 user，则退回追加到最后一条消息。
-    if (!strings.empty()) {
+    // 2. 拿模型内置 chat template（同时用它判断是否支持思考开关）
+    const char* tmpl = llama_model_chat_template(g_model, nullptr);
+
+    // 只有模板本身带思考逻辑（Qwen3 的 enable_thinking / no_think）时才注入标记。
+    // LFM / Llama / Bonsai 等没有思考模式的模型，注入 /no_think 只会污染用户输入。
+    const bool template_supports_thinking =
+        tmpl && (strstr(tmpl, "no_think") != nullptr ||
+                 strstr(tmpl, "enable_thinking") != nullptr ||
+                 strstr(tmpl, "think") != nullptr);
+
+    // 关闭思考时把 /no_think 追加到最后一条 user message（与 Qwen3 官方用法一致）；
+    // 开启思考时不注入 /think：思考模型默认就是开启，注入反而污染 prompt。
+    if (!thinkingMode && template_supports_thinking && !strings.empty()) {
         int target = -1;
         for (int i = (int) strings.size() - 1; i >= 0; --i) {
             if (strings[i].first == "user") { target = i; break; }
@@ -990,10 +1001,9 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     for (auto& p : strings) {
         chat.push_back({p.first.c_str(), p.second.c_str()});
     }
-    LOGI("llamaCompletionChat: n_msg=%zu  thinking=%d", chat.size(), thinkingMode ? 1 : 0);
+    LOGI("llamaCompletionChat: n_msg=%zu  thinking=%d template_think=%d",
+         chat.size(), thinkingMode ? 1 : 0, template_supports_thinking ? 1 : 0);
 
-    // 2. 拿模型内置 chat template
-    const char* tmpl = llama_model_chat_template(g_model, nullptr);
     if (!tmpl) {
         LOGE("llamaCompletionChat: model has no chat template, fallback to llamaCompletion");
         // 拼简化 prompt

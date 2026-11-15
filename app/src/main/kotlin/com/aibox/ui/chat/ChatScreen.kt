@@ -625,7 +625,7 @@ private fun ThermalPill(percent: Int) {
 
 /**
  * 顶栏的思考档位胶囊：点击切换 关 / 低 / 中 / 高。
- * 该设置同时作用于本地模型（/think 与提示词）和云端模型（reasoning 参数）。
+ * 本地模型按 chat template 注入 /no_think；云端按供应商下发 thinking / enable_thinking / reasoning_effort。
  */
 @Composable
 private fun ThinkingPill(level: String, onChange: (String) -> Unit) {

@@ -647,7 +647,7 @@ fun SettingsScreen(
                             }
                             Spacer(Modifier.size(4.dp))
                             Text(
-                                "关闭思考更快；低/中/高会让模型在回答前先推理（本地 /think 与云端 reasoning 参数同时生效）。",
+                                "仅对支持思考的模型生效：本地需 Qwen3 等带思考模板的模型，云端按供应商下发（DeepSeek thinking / 通义 enable_thinking / OpenAI reasoning_effort）。普通对话模型无论选哪档都不会有变化。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

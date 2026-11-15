@@ -477,11 +477,12 @@ class ChatViewModel : ViewModel() {
      * - systemPrompt 非空时作为 system message（为空则不加，native 会把 /think
      *   或 /no_think 追加到最后一条 user message）
      * - 文本附件正文拼进 user content；图片通过 [NativeBridge.ChatMsg.images] 交给云端多模态
-     * - 思考档位 low / high 追加提示词，作为本地与云端的通用兜底
+     * - 思考档位 off / low / high 追加提示词，作为本地与云端的通用兜底
      */
     private fun buildChatMessages(msgs: List<ChatMessage>): List<NativeBridge.ChatMsg> {
         val list = mutableListOf<NativeBridge.ChatMsg>()
         val levelHint = when (_ui.value.thinkingLevel) {
+            "off" -> "请直接给出答案，不要输出思考过程。"
             "low" -> "请先做简短思考（1~3 句）再给出结论，保持简洁。"
             "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
             else -> ""

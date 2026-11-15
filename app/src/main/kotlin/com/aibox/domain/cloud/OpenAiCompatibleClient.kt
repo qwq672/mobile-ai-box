@@ -5,6 +5,7 @@ import com.aibox.util.log.LogSystem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -65,8 +66,7 @@ class OpenAiCompatibleClient {
                 put("stream", true)
                 put("temperature", config.temperature.toDouble())
                 if (config.maxTokens > 0) put("max_tokens", config.maxTokens)
-                val effort = normalizeEffort(config.model, reasoningEffort)
-                if (effort != null) put("reasoning_effort", effort)
+                reasoningEffort?.lowercase()?.let { applyThinkingParams(config.model, it) }
                 putJsonArray("messages") {
                     messages.forEach { m -> add(msgToJson(m)) }
                 }
@@ -231,17 +231,39 @@ class OpenAiCompatibleClient {
     }
 
     /**
-     * 只对明确支持 reasoning_effort 的模型下发该参数，避免第三方网关因未知字段报 400。
-     * off → null；medium → null（服务端默认即中等）。
+     * 按供应商下发思考开关（不同家的字段完全不同）：
+     * - DeepSeek：`thinking.type` 开关 + `reasoning_effort`（只认 low/high/max）
+     * - 通义千问 / DashScope：`enable_thinking`
+     * - OpenAI o 系列 / gpt-5：`reasoning_effort`
+     * 其他模型不下发，避免第三方网关因未知字段报 400；此时只剩 system 提示词兜底。
      */
-    private fun normalizeEffort(model: String, effort: String?): String? {
-        val e = effort?.lowercase() ?: return null
-        if (e != "off" && e != "low" && e != "high") return null
+    private fun JsonObjectBuilder.applyThinkingParams(model: String, level: String) {
         val m = model.lowercase()
-        val capable = m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") ||
-            m.contains("gpt-5") || m.contains("reason")
-        if (!capable) return null
-        return if (e == "off") "minimal" else e
+        val on = level != "off"
+        when {
+            m.contains("deepseek") -> {
+                putJsonObject("thinking") { put("type", if (on) "enabled" else "disabled") }
+                if (on) {
+                    // DeepSeek 官方映射：medium → high；high 档给到 max 才有明显差别
+                    put("reasoning_effort", when (level) {
+                        "low" -> "low"
+                        "high" -> "max"
+                        else -> "high"
+                    })
+                }
+                LogSystem.info(TAG, "thinking(deepseek): level=$level enabled=$on")
+            }
+            m.contains("qwen") || m.contains("qvq") || m.contains("qwq") -> {
+                put("enable_thinking", on)
+                LogSystem.info(TAG, "thinking(qwen): level=$level enabled=$on")
+            }
+            m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") ||
+                m.contains("gpt-5") -> {
+                put("reasoning_effort", if (on) level else "minimal")
+                LogSystem.info(TAG, "thinking(openai): level=$level enabled=$on")
+            }
+            else -> LogSystem.info(TAG, "thinking: model=$model 无已知开关，仅用提示词")
+        }
     }
 
     private class ToolCallAccumulator {
