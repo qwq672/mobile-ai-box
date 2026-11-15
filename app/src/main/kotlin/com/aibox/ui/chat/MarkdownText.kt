@@ -748,11 +748,11 @@ private fun latexToAnnotated(tex: String): AnnotatedString {
     s = s.replace("\\,", " ").replace("\\;", " ").replace("\\!", "")
         .replace("\\quad", "  ").replace("\\qquad", "    ")
         .replace("\\\\", "\n")
-    s = Regex("""\\text\{([^{}]*)}""").replace(s) { it.groupValues[1] }
-    s = Regex("""\\mathrm\{([^{}]*)}""").replace(s) { it.groupValues[1] }
+    s = Regex("""\\text\{([^{}]*)\}""").replace(s) { it.groupValues[1] }
+    s = Regex("""\\mathrm\{([^{}]*)\}""").replace(s) { it.groupValues[1] }
     // 嵌套分式按由内向外替换三轮
     repeat(3) {
-        s = Regex("""\\frac\{([^{}]*)\}\{([^{}]*)}""").replace(s) { m ->
+        s = Regex("""\\frac\{([^{}]*)\}\{([^{}]*)\}""").replace(s) { m ->
             val a = m.groupValues[1]
             val b = m.groupValues[2]
             val an = if (a.length <= 1) a else "($a)"
@@ -760,7 +760,7 @@ private fun latexToAnnotated(tex: String): AnnotatedString {
             "$an⁄$bn"
         }
     }
-    s = Regex("""\\sqrt\{([^{}]*)}""").replace(s) { "√(${it.groupValues[1]})" }
+    s = Regex("""\\sqrt\{([^{}]*)\}""").replace(s) { "√(${it.groupValues[1]})" }
     // 长命令优先替换，避免 \le 先吃掉 \leq、\in 先吃掉 \infty / \int
     latexSymbols.entries.sortedByDescending { it.key.length }
         .forEach { (cmd, sym) -> s = s.replace(cmd, sym) }
