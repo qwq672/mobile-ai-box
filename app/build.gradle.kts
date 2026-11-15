@@ -9,9 +9,10 @@ plugins {
 }
 
 /**
- * Hexagon / QNN 实验构建开关。
+ * Hexagon（ggml-hexagon）实验构建开关。
  *
- * 默认关闭：需要高通 Hexagon SDK + QNN SDK 才能编译出可用的 HTP 后端，
+ * 默认关闭：只需要 Hexagon SDK（HEXAGON_SDK_ROOT / HEXAGON_TOOLS_ROOT），
+ * 不需要 QNN SDK；零售机还需要 HEXAGON_HTP_CERT 给 HTP skel 签名。
  * 普通 CI 不会触发。开启方式：`./gradlew assembleRelease -Paibox.npu=true`。
  */
 val aiboxNpu = providers.gradleProperty("aibox.npu")

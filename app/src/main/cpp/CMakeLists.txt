@@ -10,10 +10,16 @@ option(AIBOX_OPENCL  "Enable OpenCL backend"  ON)
 option(AIBOX_NPU     "Enable Hexagon NPU"     OFF)
 
 if(AIBOX_NPU)
-    if(NOT DEFINED ENV{HEXAGON_SDK_ROOT} AND NOT DEFINED ENV{QNN_SDK_ROOT})
+    # ggml-hexagon 走 FastRPC + 自建 HTP skel，不依赖 QNN SDK；
+    # 但 HEXAGON_SDK_ROOT 是硬性要求（hexagon-clang / QAIC / IDL / FastRPC 头与库）。
+    if(NOT DEFINED ENV{HEXAGON_SDK_ROOT})
         message(WARNING
-            "AIBOX_NPU=ON 但未检测到 HEXAGON_SDK_ROOT / QNN_SDK_ROOT，"
-            "ggml-hexagon 很可能编译失败。请先安装 Hexagon SDK 或改用默认构建。")
+            "AIBOX_NPU=ON 但未检测到 HEXAGON_SDK_ROOT。ggml-hexagon 不需要 QNN SDK，"
+            "但必须安装 Hexagon SDK（含 HEXAGON_TOOLS_ROOT，通常由 hexagon_sdk.json 自动解析）。")
+    endif()
+    if(NOT DEFINED ENV{HEXAGON_HTP_CERT})
+        message(WARNING
+            "未设置 HEXAGON_HTP_CERT：已签名的零售机可能拒绝加载未签名的 HTP skel。")
     endif()
     message(STATUS "AIBOX_NPU=ON: 启用 ggml-hexagon（仅部分高通 SoC 可用，skel 需放到 assets/hexagon/）")
 endif()
