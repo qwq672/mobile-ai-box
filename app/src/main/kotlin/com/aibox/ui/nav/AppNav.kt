@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -99,6 +100,8 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object Modules : Dest("modules", R.string.nav_settings, Icons.Filled.Apps)
     // 基准测试：独立路由（从 Home "基准测试" tile 进入）
     data object Benchmark : Dest("benchmark", R.string.nav_settings, Icons.Filled.Analytics)
+    // 自动调优：批量对比候选配置并写回设置（从基准测试右上角进入）
+    data object AutoTune : Dest("autotune", R.string.nav_settings, Icons.Filled.Tune)
     // 翻译：独立路由（从 Home "翻译" tile 进入；目前占位跳 Chat,后续接 Translate 模块）
     data object Translate : Dest("translate", R.string.nav_settings, Icons.Filled.Public)
     // 图像生成：占位路由（等 ImageGen 模块开发）
@@ -407,6 +410,14 @@ fun AppNav() {
                 }
                 composable(Dest.Benchmark.route) {
                     BenchmarkScreen(
+                        onBack = { nav.popBackStack() },
+                        onOpenAutoTune = {
+                            nav.navigate(Dest.AutoTune.route) { launchSingleTop = true }
+                        }
+                    )
+                }
+                composable(Dest.AutoTune.route) {
+                    com.aibox.ui.autotune.AutoTuneScreen(
                         onBack = { nav.popBackStack() }
                     )
                 }
