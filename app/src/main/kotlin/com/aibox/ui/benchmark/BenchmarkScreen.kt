@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -36,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.aibox.domain.inference.QuantType
 import com.aibox.infra.plugin.FieldType
 import com.aibox.infra.plugin.SettingField
 import com.aibox.infra.plugin.SettingOption
@@ -72,6 +72,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun BenchmarkScreen(
     onBack: (() -> Unit)? = null,
+    onOpenAutoTune: (() -> Unit)? = null,
     vm: BenchmarkViewModel = viewModel()
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -103,7 +104,14 @@ fun BenchmarkScreen(
                         }
                     }
                 },
-                title = { Text("基准测试", style = Type.titleLarge) }
+                title = { Text("基准测试", style = Type.titleLarge) },
+                actions = {
+                    if (onOpenAutoTune != null) {
+                        IconButton(onClick = onOpenAutoTune) {
+                            Icon(Icons.Outlined.Tune, contentDescription = "自动调优")
+                        }
+                    }
+                }
             )
         },
         snackbarHost = { SnackbarHost(snackbarHost) }
@@ -159,10 +167,10 @@ fun BenchmarkScreen(
                 }
             }
 
-            // ===== Section 3: 测试矩阵（SettingsListRenderer） =====
+            // ===== Section 3: 测试场景（SettingsListRenderer） =====
             item {
-                UnifiedSection(title = "测试矩阵") {
-                    val fields = buildMatrixSettings(ui.preciseCurrentConfig)
+                UnifiedSection(title = "测试场景") {
+                    val fields = buildMatrixSettings()
                     val currentValues = buildCurrentValues(ui)
                     SettingsListRenderer(
                         fields = fields,
@@ -197,11 +205,7 @@ fun BenchmarkScreen(
                             )
                             if (!ui.running) {
                                 Text(
-                                    text = if (ui.preciseCurrentConfig) {
-                                        "以当前配置精准测试（PP=512 · TG=128 · 至少 5 次）"
-                                    } else {
-                                        "按上方矩阵执行 ${describeMatrix(ui.matrix)}"
-                                    },
+                                    text = "按当前推理配置执行${describeMatrix(ui.matrix)}",
                                     style = Type.bodySmall,
                                     color = Colors.onPrimaryContainer
                                 )
@@ -532,31 +536,21 @@ private fun MetricCard(title: String, lines: List<String>) {
  *
  * 字段 key 与 [handleSettingChange] 的 dispatch 表一一对应。
  */
-private fun buildMatrixSettings(precise: Boolean): List<SettingField> = listOf(
+private fun buildMatrixSettings(): List<SettingField> = listOf(
     SettingField(
         key = "benchmark.group.matrix",
         type = FieldType.GROUP,
-        title = "矩阵选择",
+        title = "场景选择",
         defaultValue = ""
-    ),
-    SettingField(
-        key = "benchmark.preciseCurrentConfig",
-        type = FieldType.SWITCH,
-        title = "以当前配置进行精准测试",
-        description = "读取「设置 → 推理」里的线程 / KV 量化 / 上下文 / batch，只跑一组中型负载并至少重复 5 次；开启后忽略下方矩阵与覆盖项",
-        defaultValue = false
     ),
     SettingField(
         key = "benchmark.matrix",
         type = FieldType.DROPDOWN,
-        title = "测试矩阵",
-        description = "BASIC：3 档负载 · THREAD_SCAN：1/2/4/6 线程 · KV_QUANT_SCAN：F16/Q8_0/Q4_0 · COMPARISON：跨后端对比 · COLD_START / MULTI_TURN / SMOOTHNESS：高级场景",
+        title = "测试场景",
+        description = "只改变测试负载，不改推理配置；线程 / KV 量化 / batch / 上下文均取自「设置 → 推理」当前值。配置扫描与自动改配置请用右上角「自动调优」",
         defaultValue = "BASIC",
-        enabled = !precise,
         options = listOf(
             SettingOption("BASIC", "基础三档（PP=64/512/1024）"),
-            SettingOption("THREAD_SCAN", "线程扫描（1/2/4/6）"),
-            SettingOption("KV_QUANT_SCAN", "KV 量化扫描（F16/Q8_0/Q4_0）"),
             SettingOption("COMPARISON", "跨后端对比"),
             SettingOption("COLD_START", "高级：冷启动"),
             SettingOption("MULTI_TURN", "高级：多轮累积"),
@@ -573,7 +567,7 @@ private fun buildMatrixSettings(precise: Boolean): List<SettingField> = listOf(
         key = "benchmark.repCount",
         type = FieldType.SLIDER,
         title = "重复次数",
-        description = "取中位数；最低 3 次以稳定结果",
+        description = "取中位数；次数越多结果越稳",
         defaultValue = 3,
         min = 1, max = 10, step = 1
     ),
@@ -584,35 +578,6 @@ private fun buildMatrixSettings(precise: Boolean): List<SettingField> = listOf(
         description = "预热不计入统计；避免首次推理的 mmap / 编译开销污染结果",
         defaultValue = 1,
         min = 0, max = 5, step = 1
-    ),
-    SettingField(
-        key = "benchmark.threadsOverride",
-        type = FieldType.DROPDOWN,
-        title = "线程覆盖",
-        description = "覆盖 config.threads；Auto = 由后端按大核数自动决定",
-        defaultValue = "auto",
-        enabled = !precise,
-        options = listOf(
-            SettingOption("auto", "Auto（后端决定）"),
-            SettingOption("1", "1 线程"),
-            SettingOption("2", "2 线程"),
-            SettingOption("4", "4 线程"),
-            SettingOption("6", "6 线程")
-        )
-    ),
-    SettingField(
-        key = "benchmark.kvQuantOverride",
-        type = FieldType.DROPDOWN,
-        title = "KV 量化覆盖",
-        description = "覆盖 config.kvQuant；默认 = 不覆盖（按基线配置）",
-        defaultValue = "default",
-        enabled = !precise,
-        options = listOf(
-            SettingOption("default", "默认（按基线）"),
-            SettingOption("F16", "F16（最高精度）"),
-            SettingOption("Q8_0", "Q8_0（中等压缩）"),
-            SettingOption("Q4_0", "Q4_0（最大压缩）")
-        )
     )
 )
 
@@ -622,12 +587,9 @@ private fun buildMatrixSettings(precise: Boolean): List<SettingField> = listOf(
  * key 必须与 [buildMatrixSettings] 中字段的 key 完全一致。
  */
 private fun buildCurrentValues(ui: BenchmarkViewModel.UiState): Map<String, Any> = mapOf(
-    "benchmark.preciseCurrentConfig" to ui.preciseCurrentConfig,
     "benchmark.matrix" to ui.matrix.name,
     "benchmark.repCount" to ui.repCount.toFloat(),
-    "benchmark.warmup" to ui.warmup.toFloat(),
-    "benchmark.threadsOverride" to (ui.threadsOverride?.toString() ?: "auto"),
-    "benchmark.kvQuantOverride" to (ui.kvQuantOverride?.name ?: "default")
+    "benchmark.warmup" to ui.warmup.toFloat()
 )
 
 /**
@@ -635,35 +597,17 @@ private fun buildCurrentValues(ui: BenchmarkViewModel.UiState): Map<String, Any>
  */
 private fun handleSettingChange(key: String, value: Any, vm: BenchmarkViewModel) {
     when (key) {
-        "benchmark.preciseCurrentConfig" -> vm.setPreciseCurrentConfig(value as? Boolean ?: false)
         "benchmark.matrix" -> {
             val m = runCatching { BenchmarkViewModel.Matrix.valueOf(value.toString()) }.getOrNull()
             if (m != null) vm.selectMatrix(m)
         }
         "benchmark.repCount" -> vm.setRepCount((value as? Number)?.toInt() ?: 3)
         "benchmark.warmup" -> vm.setWarmup((value as? Number)?.toInt() ?: 1)
-        "benchmark.threadsOverride" -> {
-            val s = value.toString()
-            vm.setThreadsOverride(if (s == "auto") null else s.toIntOrNull())
-        }
-        "benchmark.kvQuantOverride" -> {
-            val s = value.toString()
-            vm.setKvQuantOverride(
-                when (s) {
-                    "F16" -> QuantType.F16
-                    "Q8_0" -> QuantType.Q8_0
-                    "Q4_0" -> QuantType.Q4_0
-                    else -> null  // "default"
-                }
-            )
-        }
     }
 }
 
 private fun describeMatrix(m: BenchmarkViewModel.Matrix): String = when (m) {
     BenchmarkViewModel.Matrix.BASIC -> "3 档基础负载"
-    BenchmarkViewModel.Matrix.THREAD_SCAN -> "1/2/4/6 线程扫描"
-    BenchmarkViewModel.Matrix.KV_QUANT_SCAN -> "F16 / Q8_0 / Q4_0 量化扫描"
     BenchmarkViewModel.Matrix.COMPARISON -> "跨后端对比 + 自动推荐"
     BenchmarkViewModel.Matrix.COLD_START -> "冷启动场景"
     BenchmarkViewModel.Matrix.MULTI_TURN -> "多轮累积上下文（10 轮）"

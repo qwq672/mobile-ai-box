@@ -45,14 +45,16 @@ class BenchmarkViewModel : ViewModel() {
     private val container get() = AIBoxApp.instance.container
     private val system get() = container.benchmarkSystem
 
-    /** 测试矩阵类型。 */
+    /**
+     * 基准测试场景。
+     *
+     * 这里只描述「用什么负载测」，不包含任何配置扫描：所有场景都使用
+     * 「设置 → 推理」里当前生效的线程 / KV / batch / 上下文。
+     * 配置对比与自动改配置属于独立的自动调优模块。
+     */
     enum class Matrix {
         /** 基础三档负载（PP=64/32, PP=512/128, PP=1024/256）。 */
         BASIC,
-        /** 线程扫描（1/2/4/6 线程，轻负载）。 */
-        THREAD_SCAN,
-        /** KV 量化扫描（F16 / Q8_0 / Q4_0，中负载）。 */
-        KV_QUANT_SCAN,
         /** 跨后端对比（同模型 + 多后端，自动推荐最优）。 */
         COMPARISON,
         /** 高级：冷启动场景。 */
@@ -71,10 +73,6 @@ class BenchmarkViewModel : ViewModel() {
         val matrix: Matrix = Matrix.BASIC,
         val repCount: Int = 3,
         val warmup: Int = 1,
-        /** 以「设置 → 推理」里的当前配置跑单组负载，并提高重复次数，不扫描矩阵。 */
-        val preciseCurrentConfig: Boolean = false,
-        val threadsOverride: Int? = null,
-        val kvQuantOverride: QuantType? = null,
         val running: Boolean = false,
         val progress: ComparisonProgress? = null,
         val latestResults: List<BenchmarkResult> = emptyList(),
@@ -154,18 +152,6 @@ class BenchmarkViewModel : ViewModel() {
         _ui.value = _ui.value.copy(warmup = value.coerceIn(0, 5))
     }
 
-    fun setPreciseCurrentConfig(value: Boolean) {
-        _ui.value = _ui.value.copy(preciseCurrentConfig = value)
-    }
-
-    fun setThreadsOverride(value: Int?) {
-        _ui.value = _ui.value.copy(threadsOverride = value)
-    }
-
-    fun setKvQuantOverride(value: QuantType?) {
-        _ui.value = _ui.value.copy(kvQuantOverride = value)
-    }
-
     fun dismissInfo() {
         _ui.value = _ui.value.copy(infoMessage = null)
     }
@@ -179,8 +165,7 @@ class BenchmarkViewModel : ViewModel() {
     /**
      * 根据当前选择启动基准测试。
      *
-     * - [Matrix.BASIC] / [Matrix.THREAD_SCAN] / [Matrix.KV_QUANT_SCAN]：
-     *   对每个选中的后端跑基础矩阵，结果存历史。
+     * - [Matrix.BASIC]：按当前配置跑三档负载，结果存历史。
      * - [Matrix.COMPARISON]：跑 [BackendComparison.compareBackends]，自动推荐最优后端。
      * - [Matrix.COLD_START] / [Matrix.MULTI_TURN] / [Matrix.SMOOTHNESS]：跑对应 [AdvancedBenchmark]。
      */
@@ -208,10 +193,8 @@ class BenchmarkViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                if (_ui.value.preciseCurrentConfig) {
-                    runBasicMatrix(modelPath)
-                } else when (_ui.value.matrix) {
-                    Matrix.BASIC, Matrix.THREAD_SCAN, Matrix.KV_QUANT_SCAN -> runBasicMatrix(modelPath)
+                when (_ui.value.matrix) {
+                    Matrix.BASIC -> runBasicMatrix(modelPath)
                     Matrix.COMPARISON -> runComparison(modelPath)
                     Matrix.COLD_START -> runColdStart(modelPath)
                     Matrix.MULTI_TURN -> runMultiTurn(modelPath)
@@ -227,37 +210,18 @@ class BenchmarkViewModel : ViewModel() {
         }
     }
 
-    /** 跑基础矩阵（BASIC / THREAD_SCAN / KV_QUANT_SCAN），对每个选中后端跑一组 spec。 */
+    /** 按当前配置跑基础三档负载。 */
     private suspend fun runBasicMatrix(modelPath: String) {
         val backends = _ui.value.selectedBackendNames
-        val precise = _ui.value.preciseCurrentConfig
-        val baseConfig = if (precise) currentSettingsConfig() else buildConfig()
-        val repCount = if (precise) maxOf(_ui.value.repCount, 5) else _ui.value.repCount
-        val warmup = if (precise) maxOf(_ui.value.warmup, 1) else _ui.value.warmup
+        val baseConfig = buildConfig()
+        val repCount = _ui.value.repCount
+        val warmup = _ui.value.warmup
 
-        val specs: List<BenchmarkSpec> = if (precise) {
-            // 精准模式：完全按用户当前的推理配置跑一组中等负载，多次重复取中位数
-            listOf(
-                BenchmarkSpec(
-                    modelPath, baseConfig.copy(maxTokens = 128),
-                    ppSize = 512, tgSize = 128, repCount = repCount, warmup = warmup
-                )
-            )
-        } else when (_ui.value.matrix) {
-            Matrix.BASIC -> listOf(
-                BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 32),  ppSize = 64,   tgSize = 32,  repCount = repCount, warmup = warmup),
-                BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 128), ppSize = 512,  tgSize = 128, repCount = repCount, warmup = warmup),
-                BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 256), ppSize = 1024, tgSize = 256, repCount = repCount, warmup = warmup)
-            )
-            Matrix.THREAD_SCAN -> listOf(1, 2, 4, 6).map { t ->
-                BenchmarkSpec(modelPath, baseConfig.copy(threads = t, maxTokens = 32), ppSize = 64, tgSize = 32, repCount = repCount, warmup = warmup)
-            }
-            Matrix.KV_QUANT_SCAN -> listOf(QuantType.F16, QuantType.Q8_0, QuantType.Q4_0).map { q ->
-                BenchmarkSpec(modelPath, baseConfig.copy(kvQuant = q, maxTokens = 128), ppSize = 512, tgSize = 128, repCount = repCount, warmup = warmup)
-            }
-            else -> emptyList()
-        }
-        if (specs.isEmpty()) return
+        val specs: List<BenchmarkSpec> = listOf(
+            BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 32),  ppSize = 64,   tgSize = 32,  repCount = repCount, warmup = warmup),
+            BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 128), ppSize = 512,  tgSize = 128, repCount = repCount, warmup = warmup),
+            BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = 256), ppSize = 1024, tgSize = 256, repCount = repCount, warmup = warmup)
+        )
 
         val allResults = mutableListOf<BenchmarkResult>()
         val totalTasks = backends.size * specs.size
@@ -410,19 +374,13 @@ class BenchmarkViewModel : ViewModel() {
 
     // ============== helpers ==============
 
-    private fun buildConfig(): InferenceConfigV2 {
-        val base = InferenceConfigV2()
-        return base.copy(
-            threads = _ui.value.threadsOverride ?: base.threads,
-            kvQuant = _ui.value.kvQuantOverride ?: base.kvQuant
-        )
-    }
-
     /**
-     * 读取「设置 → 推理」当前生效的配置，供精准测试使用。
-     * 线程 0（自动）转成 null，与后端约定一致。
+     * 读取「设置 → 推理」当前生效的配置。
+     *
+     * 基准测试只测量用户当前配置，不提供任何覆盖项；线程 0（自动）转成 null，
+     * 与后端约定一致。
      */
-    private suspend fun currentSettingsConfig(): InferenceConfigV2 {
+    private suspend fun buildConfig(): InferenceConfigV2 {
         val cfg = withContext(Dispatchers.IO) {
             container.settingsRepository.config.firstOrNull()
         } ?: com.aibox.domain.inference.InferenceConfig()
@@ -431,7 +389,7 @@ class BenchmarkViewModel : ViewModel() {
             "q4_0" -> QuantType.Q4_0
             else -> QuantType.Q8_0
         }
-        return buildConfig().copy(
+        return InferenceConfigV2().copy(
             threads = cfg.cpuThreads.takeIf { it > 0 },
             batchSize = cfg.physicalBatch,
             contextLength = cfg.contextLength,
