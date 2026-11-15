@@ -88,3 +88,6 @@ app/src/main/assets/hexagon/
 
 # 误提交的 skills 快照（体积大、且含大量 html，会污染 GitHub 语言统计）
 skills/
+
+# 用户上传的临时文件
+.uploads/
