@@ -480,12 +480,20 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     bool name_non_transformer = name_hybrid || name_has("mamba") ||
                                 name_has("rwkv") || name_has("ssm") ||
                                 name_has("jamba");
+    // 注意：NPU（Hexagon）是 hybrid 模型的官方推荐路径，不能一刀切降级 CPU。
+    // 只有 Vulkan/OpenCL/CPU 这些路径才对 hybrid 强制 CPU。
+    bool npu_backend = (std::string(backend) == "npu");
+    bool npu_hybrid = name_hybrid && npu_backend;
     if (name_non_transformer) {
-        if (n_gpu_layers > 0) {
-            LOGI("llamaLoad: 文件名显示是 non-transformer/hybrid，强制 CPU（ngl -> 0）");
+        if (npu_hybrid) {
+            LOGI("llamaLoad: hybrid 模型 + NPU 后端，保留 HTP 卸载");
+        } else {
+            if (n_gpu_layers > 0) {
+                LOGI("llamaLoad: 文件名显示是 non-transformer/hybrid，强制 CPU（ngl -> 0）");
+            }
+            n_gpu_layers = 0;
+            g_backend_str = "cpu";
         }
-        n_gpu_layers = 0;
-        g_backend_str = "cpu";
     }
 
     llama_model_params mp = llama_model_default_params();
@@ -623,7 +631,8 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     }
     // 文件名没提示、但实际架构是 hybrid/non-transformer：模型此时已经按 GPU 放置了，
     // 必须重新以 CPU 加载，否则会出现「日志说 CPU、权重却在 Vulkan_Host」的崩溃。
-    if ((is_non_transformer || is_hybrid_arch) && n_gpu_layers > 0) {
+    if ((is_non_transformer || is_hybrid_arch) && n_gpu_layers > 0 &&
+        !(is_hybrid_arch && npu_backend)) {
         LOGI("llamaLoad: arch '%s' 必须走 CPU，重新加载且不卸载到 GPU", model_arch.c_str());
         llama_model_free(g_model);
         g_model = nullptr;
