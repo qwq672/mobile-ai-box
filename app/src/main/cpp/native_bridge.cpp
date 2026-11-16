@@ -118,6 +118,8 @@ static MemoryPool g_pool;
 
 // 后端字符串（仅供日志）
 static std::string g_backend_str = "cpu";
+// 当前模型是否为 hybrid（SSM + attention）架构；影响 prompt 分块大小等保守策略
+static bool g_hybrid_arch = false;
 
 // APK 的 nativeLibraryDir。ggml 的默认搜索路径是 /system/bin 和 cwd（Android 上
 // 分别是 /system/bin 和 /），找不到 app 自带的 libggml-*.so；所以由 Kotlin 侧
@@ -463,8 +465,37 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         n_gpu_layers = 0;
     }
 
+    // ---- 加载前的保守架构判断（只能看文件名）----
+    // 真正的 general.architecture 要 load 之后才能读到，但 GPU 层数 / host buffer
+    // / repack 这些决策必须在 load 之前定下来，否则模型已经被放到 GPU 上再改就晚了
+    // （这正是之前 mamba/rwkv「回退 CPU」只改了日志、实际权重仍在 Vulkan_Host 的原因）。
+    std::string low_name = path_str;
+    for (auto& c : low_name) c = (char)tolower((unsigned char)c);
+    auto name_has = [&low_name](const char* s) {
+        return low_name.find(s) != std::string::npos;
+    };
+    bool name_hybrid = name_has("qwen3.5") || name_has("qwen35") ||
+                       name_has("qwen3next") || name_has("qwen3-next") ||
+                       name_has("lfm2") || name_has("clef");
+    bool name_non_transformer = name_hybrid || name_has("mamba") ||
+                                name_has("rwkv") || name_has("ssm") ||
+                                name_has("jamba");
+    if (name_non_transformer) {
+        if (n_gpu_layers > 0) {
+            LOGI("llamaLoad: 文件名显示是 non-transformer/hybrid，强制 CPU（ngl -> 0）");
+        }
+        n_gpu_layers = 0;
+        g_backend_str = "cpu";
+    }
+
     llama_model_params mp = llama_model_default_params();
     mp.n_gpu_layers = n_gpu_layers;
+    // hybrid / SSM 关掉 repack 额外 buffer：
+    // arm64 上 qwen35 系模型 + repack 会在 graph 调度阶段 GGML_ASSERT（上游 issue #30583），
+    // 而且这批模型常见的 Q4_K_M 本来也吃不到 repack 收益。
+    if (name_non_transformer) {
+        mp.use_extra_bufts = false;
+    }
 
     // Hexagon 和 Vulkan 在 ggml 里都注册为 GPU 类型。如果不显式指定设备，
     // llama.cpp 会把所有 GPU 设备都纳入默认列表，模型可能被拆到 NPU 上
@@ -476,6 +507,7 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     else if (g_backend_str == "vulkan") want_dev = "Vulkan";
     else if (g_backend_str == "opencl") want_dev = "OpenCL";
 
+    s_selected[1] = nullptr;
     if (want_dev != nullptr) {
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t d = ggml_backend_dev_get(i);
@@ -506,6 +538,26 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
                 env->ReleaseStringUTFChars(jkvq, kvq);
                 return JNI_FALSE;
             }
+            // 用户选的后端没有可用设备：退到纯 CPU，避免 llama.cpp 自行挑一个 GPU
+            ggml_backend_dev_t fallback_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (fallback_cpu != nullptr) {
+                s_selected[0] = fallback_cpu;
+                mp.devices = s_selected;
+                mp.no_host = true;
+                LOGI("llamaLoad: no %s device, fallback to CPU only", want_dev);
+            }
+        }
+    } else {
+        // backend=cpu 时也要显式钉住 CPU 设备，否则 llama.cpp 会把第一个 GPU
+        // （Vulkan）当作 host buffer：权重被放进 Vulkan_Host 的显存映射里，
+        // CPU 每次矩阵乘都要读 Adreno 驱动分配的内存，prompt eval 时直接闪退。
+        // 日志证据：offloaded 0/25 layers，但 Vulkan_Host model buffer = 813MB。
+        ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (cpu_dev != nullptr) {
+            s_selected[0] = cpu_dev;
+            mp.devices = s_selected;
+            mp.no_host = true;
+            LOGI("llamaLoad: backend=cpu -> 仅使用 CPU 设备（禁用 Vulkan host buffer）");
         }
     }
 
@@ -549,20 +601,70 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         else if (low_path.find("jamba") != std::string::npos)  model_arch = "mamba";
         LOGI("llamaLoad: metadata arch unknown, fallback to filename heuristic: '%s'", model_arch.c_str());
     }
+    // Qwen3.5 / Qwen3-Next 这类 hybrid（SSM + full attention）架构：
+    // 部分层带 recurrent state，与 GPU 部分卸载混跑时容易在 prompt eval 阶段
+    // 直接 SIGSEGV（Adreno 驱动连异常都不给）。稳定优先，统一走 CPU。
+    bool is_hybrid_arch = (model_arch == "qwen35" ||
+                           model_arch == "qwen35moe" ||
+                           model_arch == "qwen3next" ||
+                           model_arch == "lfm2" ||
+                           model_arch == "clef");
     bool is_non_transformer = (model_arch == "mamba" ||
                                 model_arch == "rwkv6" ||
                                 model_arch == "rwkv" ||
                                 model_arch == "ssm" ||
                                 model_arch == "jamba" ||
-                                model_arch == "gemma2" /* gemma2 也偶有 FA 兼容问题 */);
+                                model_arch == "gemma2" /* gemma2 也偶有 FA 兼容问题 */ ||
+                                is_hybrid_arch);
+    g_hybrid_arch = is_hybrid_arch || name_hybrid;
     if (is_non_transformer) {
-        LOGI("llamaLoad: detected non-transformer arch '%s', FA forced off", model_arch.c_str());
+        LOGI("llamaLoad: detected non-transformer/hybrid arch '%s', FA forced off",
+             model_arch.c_str());
+    }
+    // 文件名没提示、但实际架构是 hybrid/non-transformer：模型此时已经按 GPU 放置了，
+    // 必须重新以 CPU 加载，否则会出现「日志说 CPU、权重却在 Vulkan_Host」的崩溃。
+    if ((is_non_transformer || is_hybrid_arch) && n_gpu_layers > 0) {
+        LOGI("llamaLoad: arch '%s' 必须走 CPU，重新加载且不卸载到 GPU", model_arch.c_str());
+        llama_model_free(g_model);
+        g_model = nullptr;
+        g_vocab = nullptr;
+        bridge_set_vocab(nullptr);
+        n_gpu_layers = 0;
+        g_backend_str = "cpu";
+        mp.n_gpu_layers = 0;
+        mp.use_extra_bufts = false;
+        ggml_backend_dev_t reload_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (reload_cpu != nullptr) {
+            s_selected[0] = reload_cpu;
+            s_selected[1] = nullptr;
+            mp.devices = s_selected;
+            mp.no_host = true;
+        }
+        try {
+            g_model = llama_model_load_from_file(path, mp);
+        } catch (const std::exception& e) {
+            set_last_error(std::string("model_reload: ") + e.what());
+            LOGE("llamaLoad: CPU reload threw: %s", e.what());
+            g_model = nullptr;
+        } catch (...) {
+            set_last_error("model_reload: unknown exception");
+            g_model = nullptr;
+        }
+        if (!g_model) {
+            // 这里不能用 goto fail：会跨过下面 effectiveFa 的初始化
+            env->ReleaseStringUTFChars(jpath, path);
+            env->ReleaseStringUTFChars(jbackend, backend);
+            env->ReleaseStringUTFChars(jkvq, kvq);
+            return JNI_FALSE;
+        }
+        g_vocab = llama_model_get_vocab(g_model);
+        bridge_set_vocab(g_vocab);
     }
     bool effectiveFa = is_non_transformer ? false : forceFa;
 
-    // 若架构是 Mamba/RWKV/SSM 且 backend 是 vulkan/opencl,强制改为 cpu
+    // 若架构是 Mamba/RWKV/SSM/hybrid 且 backend 是 vulkan/opencl,强制改为 cpu
     // (在 native 层修改 g_backend_str + 后续逻辑用 cpu 路径)
-    bool need_fallback_to_cpu = is_non_transformer &&
+    bool need_fallback_to_cpu = (is_non_transformer || is_hybrid_arch) &&
                                  (std::string(backend) == "vulkan" ||
                                   std::string(backend) == "opencl");
     if (need_fallback_to_cpu) {
@@ -626,6 +728,9 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
 
     ok = true;
     LOGI("loaded via %s, ctx=%d, threads=%d, kv=%s", g_backend_str.c_str(), ctxLen, threads, kvq);
+    LOGI("llamaLoad: ready arch=%s backend=%s n_ctx=%d n_batch=%d n_ubatch=%d ngl=%d hybrid=%d",
+         model_arch.c_str(), g_backend_str.c_str(), ctx_len, n_batch, n_ubatch, n_gpu_layers,
+         g_hybrid_arch ? 1 : 0);
 
 fail:
     env->ReleaseStringUTFChars(jpath, path);
@@ -1085,9 +1190,10 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
         if (actual < 0) actual = -actual;
         tokens.resize((size_t)actual);
     }
-    LOGI("llamaCompletionChat: tokens=%zu skip=%d eval=%zu",
+    LOGI("llamaCompletionChat: tokens=%zu skip=%d eval=%zu arch_backend=%s",
          tokens.size(), g_n_past_total,
-         (size_t)(tokens.size() > (size_t)g_n_past_total ? tokens.size() - g_n_past_total : 0));
+         (size_t)(tokens.size() > (size_t)g_n_past_total ? tokens.size() - g_n_past_total : 0),
+         g_backend_str.c_str());
     if (tokens.empty()) {
         call_string_cb(env, stopCb, "empty_tokens");
         return;
@@ -1107,9 +1213,16 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     int n_past = g_n_past_total;
 
     // prompt eval
-    for (size_t i = (size_t)g_n_past_total; i < tokens.size(); i += 256) {
+    // hybrid(SSM) 模型用更小的 prefill 分块：这类架构的 recurrent state
+    // 在大 ubatch 下更容易触发驱动/内核问题，宁可慢一点也要稳。
+    const int prompt_chunk = g_hybrid_arch ? 64 : 256;
+    LOGI("llamaCompletionChat: prompt chunk=%d hybrid=%d", prompt_chunk, g_hybrid_arch ? 1 : 0);
+    for (size_t i = (size_t)g_n_past_total; i < tokens.size(); i += prompt_chunk) {
         if (g_interrupt.load()) { stop_reason = "interrupted"; stopped = true; break; }
-        int n = std::min((int)256, (int)(tokens.size() - i));
+        int n = std::min(prompt_chunk, (int)(tokens.size() - i));
+        // 分块日志：native 崩溃时能看出是在第几块、第几个 token 挂掉的
+        LOGI("llamaCompletionChat: prompt eval chunk i=%zu/%zu n=%d n_past=%d",
+             i, tokens.size(), n, n_past);
         llama_batch batch = llama_batch_get_one(&tokens[i], n);
         int rc = llama_decode(g_ctx, batch);
         if (rc != 0) {
@@ -1118,6 +1231,7 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
         }
         n_past += n;
         g_ctx_used.store(n_past);
+        LOGI("llamaCompletionChat: chunk done n_past=%d", n_past);
     }
     g_n_past_total = n_past;
     LOGI("llamaCompletionChat: prompt eval done, n_past=%d", n_past);

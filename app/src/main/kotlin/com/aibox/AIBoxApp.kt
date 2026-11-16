@@ -120,8 +120,15 @@ class AIBoxApp : Application(), Configuration.Provider {
             crashHandler.install()
 
             // 2. Native 崩溃捕获
-            val crashDir = cacheDir.absolutePath + "/native_crashes"
-            NativeCrashHandler.install(crashDir)
+            //    写到外部 files 目录（和日志同处 Android/data/com.aibox/files/aibox/logs/crashes），
+            //    这样用户可以直接把 native 崩溃栈导出给我们；之前写在 cacheDir 里，非 root 拿不到。
+            val crashDir = runCatching {
+                val ext = getExternalFilesDir(null)
+                if (ext != null) java.io.File(ext, "aibox/logs/crashes")
+                else java.io.File(cacheDir, "native_crashes")
+            }.getOrElse { java.io.File(cacheDir, "native_crashes") }
+            runCatching { crashDir.mkdirs() }
+            NativeCrashHandler.install(crashDir.absolutePath)
 
             LogSystem.info(TAG, "Crash handlers installed (java + native)")
         } catch (e: Throwable) {
