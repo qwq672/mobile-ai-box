@@ -11,19 +11,29 @@ on:
       - '**.md'
       - '.gitignore'
   workflow_dispatch:
+    inputs:
+      build_npu:
+        description: '同时构建 Hexagon NPU 版（需要自托管 runner 在线）'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
+# 注意：NPU job 需要一台已配置 Hexagon SDK 6.7.0.0 的自托管 runner：
+#   runs-on 标签：self-hosted, linux, x64, hexagon
+#   环境变量：HEXAGON_SDK_ROOT（可选 HEXAGON_TOOLS_ROOT）、ANDROID_HOME
+#   依赖：NDK 26.1.10909125、cmake 3.31.6、vulkan/vulkan.hpp、qaic 已 make
+# 普通 push 不会触发 NPU job；只有 workflow_dispatch 勾选 build_npu 才会排队。
 
 jobs:
   build:
     name: Assemble arm64-v8a Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    concurrency:
+      group: apk-${{ github.ref }}
+      cancel-in-progress: true
     env:
       NDK_VERSION: 26.1.10909125
       CMAKE_VERSION: 3.22.1
@@ -171,4 +181,131 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
           retention-days: 30
+
+  # ============================================================
+  # Hexagon NPU 版（手动触发；需要自托管 runner）
+  # 合并自原 hexagon-npu.yml：普通 push 不会跑到这里，
+  # 只有 workflow_dispatch 勾选 build_npu 且 runner 在线时才执行。
+  # ============================================================
+  build-npu:
+    name: Hexagon NPU APK
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_npu == 'true'
+    runs-on: [self-hosted, linux, x64, hexagon]
+    timeout-minutes: 360
+    concurrency:
+      group: npu-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      NDK_VERSION: 26.1.10909125
+      CMAKE_VERSION: 3.31.6
+      LLAMA_REF: v1.0.0
+      HTP_ARCHS: v73 v75 v79 v81 v85
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Check runner prerequisites
+        run: |
+          set -euo pipefail
+          : "${HEXAGON_SDK_ROOT:?runner 未设置 HEXAGON_SDK_ROOT}"
+          test -d "$HEXAGON_SDK_ROOT" || { echo "::error::HEXAGON_SDK_ROOT 不存在"; exit 1; }
+          echo "HEXAGON_SDK_ROOT=$HEXAGON_SDK_ROOT"
+          cat "$HEXAGON_SDK_ROOT/hexagon_sdk.json" 2>/dev/null | head -20 || true
+          echo "::notice::Android 构建产出的 HTP skel 未签名，能否加载取决于设备 FastRPC unsigned PD 策略"
+          : "${ANDROID_HOME:?runner 未设置 ANDROID_HOME}"
+          test -d "$ANDROID_HOME/ndk/$NDK_VERSION" || {
+            echo "::error::缺少 NDK $NDK_VERSION"; exit 1; }
+          test -d "$ANDROID_HOME/cmake/$CMAKE_VERSION" || {
+            echo "::error::缺少 cmake $CMAKE_VERSION"; exit 1; }
+          VK_HPP="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/vulkan/vulkan.hpp"
+          test -f "$VK_HPP" || {
+            echo "::error::缺少 $VK_HPP（ggml-vulkan 必需）"; exit 1; }
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "$ANDROID_HOME/ndk/$NDK_VERSION/shader-tools/linux-x86_64" >> "$GITHUB_PATH"
+          make -C "$HEXAGON_SDK_ROOT/ipc/fastrpc/qaic" >/dev/null
+          test -x "$HEXAGON_SDK_ROOT/ipc/fastrpc/qaic/bin/qaic" || {
+            echo "::error::qaic 准备失败"; exit 1; }
+          for v in $HTP_ARCHS; do
+            test -d "$HEXAGON_SDK_ROOT/rtos/qurt/compute$v" || {
+              echo "::error::SDK 缺少 compute$v（$v 需要 Hexagon SDK 6.7.0.0）"; exit 1; }
+            test -d "$HEXAGON_SDK_ROOT/tools/HEXAGON_Tools/21.0.04/Tools/target/hexagon/lib/$v" || {
+              echo "::warning::未找到 $v 的工具链库，编译可能失败"; }
+          done
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Fetch llama.cpp (pinned ${{ env.LLAMA_REF }})
+        run: |
+          mkdir -p app/src/main/cpp
+          git clone --depth 1 --branch "${LLAMA_REF}" \
+            https://github.com/ggml-org/llama.cpp app/src/main/cpp/llama.cpp
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-hexagon-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}-v1
+
+      # 第一遍：编译 host 端 libggml-hexagon / libllama 等。
+      # AGP 只构建主工程目标，ExternalProject 的 htp-vXX 不会自动编译，下面单独编译 skel。
+      - name: Build native (host)
+        run: ./gradlew :app:assembleRelease -Paibox.npu=true --no-daemon --stacktrace
+
+      - name: Build HTP skels
+        run: |
+          set -euo pipefail
+          BD=$(dirname "$(find app/.cxx/Release -maxdepth 3 -name CMakeCache.txt | head -1)")
+          test -f "$BD/CMakeCache.txt" || { echo "::error::找不到 CMake 构建目录"; exit 1; }
+          echo "CMake build dir: $BD"
+          "$ANDROID_HOME/cmake/$CMAKE_VERSION/bin/cmake" --build "$BD" --target \
+            htp-v73 htp-v75 htp-v79 htp-v81 htp-v85
+          ls -lh "$BD/llama_build/ggml/src/ggml-hexagon/"libggml-htp-*.so
+
+      - name: Collect HTP skels into assets
+        run: |
+          set -euo pipefail
+          BD=$(dirname "$(find app/.cxx/Release -maxdepth 3 -name CMakeCache.txt | head -1)")
+          SRC="$BD/llama_build/ggml/src/ggml-hexagon"
+          mkdir -p app/src/main/assets/hexagon
+          for v in $HTP_ARCHS; do
+            src="$SRC/libggml-htp-$v.so"
+            if [ ! -f "$src" ]; then
+              echo "::error::没有生成 libggml-htp-$v.so（检查 Hexagon SDK 是否支持 $v）"
+              exit 1
+            fi
+            cp -f "$src" app/src/main/assets/hexagon/
+          done
+          ls -lh app/src/main/assets/hexagon/
+
+      # 第二遍：assets 变了，mergeAssets 会重新打包；native 部分命中缓存。
+      - name: Repackage APK with skels
+        run: ./gradlew :app:assembleRelease -Paibox.npu=true --no-daemon --stacktrace
+
+      - name: Verify APK contents
+        run: |
+          set -euo pipefail
+          apk=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          test -n "$apk" || { echo "::error::没有找到 APK"; exit 1; }
+          echo "APK: $apk"
+          unzip -l "$apk" | grep -E 'assets/hexagon/libggml-htp-v' || {
+            echo "::error::APK 里没有 HTP skel"; exit 1; }
+          unzip -l "$apk" | grep -E 'libggml-hexagon|libggml-vulkan|libaibox' || true
+          out="aibox-hexagon-${GITHUB_RUN_NUMBER}.apk"
+          cp "$apk" "$out"
+          sha256sum "$out" | tee "$out.sha256"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aibox-hexagon-apk
+          path: |
+            aibox-hexagon-*.apk
+            aibox-hexagon-*.apk.sha256
+          retention-days: 14
 
