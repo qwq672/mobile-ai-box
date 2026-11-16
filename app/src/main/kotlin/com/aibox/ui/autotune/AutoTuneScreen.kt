@@ -195,6 +195,19 @@ fun AutoTuneScreen(
             }
 
             item {
+                UnifiedSection(title = "本次计划") {
+                    Text(
+                        text = "已选 ${ui.selectedBackendNames.size} 个后端 · ${ui.level.label}档 · " +
+                            "预计 ${vm.plannedSteps()} 步（每步加载模型并实测一次）。" +
+                            "运行中会显示「第 i/N 步 + 当前动作 + 已用时间」，不会停在准备阶段。",
+                        style = Type.bodySmall,
+                        color = Colors.onSurfaceVariant,
+                        modifier = Modifier.padding(DesignTokens.spacing16)
+                    )
+                }
+            }
+
+            item {
                 UnifiedCard(
                     tone = if (ui.running) UnifiedCardTone.SURFACE_LOW else UnifiedCardTone.PRIMARY_CONTAINER,
                     onClick = if (ui.running) null else ({ vm.run() }),
@@ -232,9 +245,16 @@ fun AutoTuneScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                         Text(
-                            text = ui.progressText,
+                            text = "第 ${ui.stepIndex}/${ui.stepTotal} 步 · 已用 ${ui.elapsedMs / 1000}s · " +
+                                "${(ui.progress * 100).toInt()}%",
                             style = Type.labelSmall,
                             color = Colors.onSurfaceVariant,
+                            modifier = Modifier.padding(top = DesignTokens.spacing4)
+                        )
+                        Text(
+                            text = ui.progressText,
+                            style = Type.bodySmall,
+                            color = Colors.onSurface,
                             modifier = Modifier.padding(top = DesignTokens.spacing4)
                         )
                     }
@@ -325,8 +345,28 @@ private fun CandidateRow(r: AutoTuneViewModel.CandidateResult, isBest: Boolean) 
                 )
             } else {
                 Text(
-                    text = "TG ${"%.2f".format(r.tgTps)} t/s · PP ${"%.2f".format(r.ppTps)} t/s · 得分 ${"%.3f".format(r.score)}",
+                    text = "TG ${"%.2f".format(r.tgTps)} t/s · PP ${"%.2f".format(r.ppTps)} t/s · " +
+                        "TTFT ${r.ttftMs}ms · 得分 ${"%.3f".format(r.score)}",
                     style = Type.bodySmall,
+                    color = if (isBest) Colors.onPrimaryContainer else Colors.onSurfaceVariant
+                )
+                Text(
+                    text = buildString {
+                        append("温度 ").append(
+                            when (r.thermal) {
+                                "COOL" -> "常温"
+                                "WARM" -> "温热"
+                                "HOT" -> "偏热"
+                                "CRITICAL" -> "过热"
+                                else -> r.thermal
+                            }
+                        )
+                        if (r.memPercent in 0..100) append(" · 内存 ${r.memPercent}%")
+                        if (r.cpuPercent in 0..100) append(" · CPU ${r.cpuPercent}%")
+                        if (r.batteryDelta > 0) append(" · 电量 -${r.batteryDelta}%")
+                        r.energyMj?.takeIf { it > 0 }?.let { append(" · 能耗 ${it / 1000.0}J") }
+                    },
+                    style = Type.labelSmall,
                     color = if (isBest) Colors.onPrimaryContainer else Colors.onSurfaceVariant
                 )
             }

@@ -167,10 +167,16 @@ fun BenchmarkScreen(
                 }
             }
 
-            // ===== Section 3: 测试场景（SettingsListRenderer） =====
+            // ===== Section 3: 测试参数（自定义 PP / TG） =====
             item {
-                UnifiedSection(title = "测试场景") {
-                    val fields = buildMatrixSettings()
+                UnifiedSection(title = "测试参数") {
+                    Text(
+                        text = "只做一次基础测量：用当前推理配置跑一遍，不做场景矩阵、不做跨后端对比。",
+                        style = Type.bodySmall,
+                        color = Colors.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing4)
+                    )
+                    val fields = buildParameterSettings()
                     val currentValues = buildCurrentValues(ui)
                     SettingsListRenderer(
                         fields = fields,
@@ -205,7 +211,7 @@ fun BenchmarkScreen(
                             )
                             if (!ui.running) {
                                 Text(
-                                    text = "按当前推理配置执行${describeMatrix(ui.matrix)}",
+                                    text = "PP=${ui.ppSize} · TG=${ui.tgSize} · ${if (ui.repCount > 1) "重复 ${ui.repCount} 次" else "单次"}",
                                     style = Type.bodySmall,
                                     color = Colors.onPrimaryContainer
                                 )
@@ -250,86 +256,7 @@ fun BenchmarkScreen(
                 }
             }
 
-            // ===== Section 6: 推荐报告（仅 COMPARISON） =====
-            ui.latestReport?.let { report ->
-                item {
-                    UnifiedCard(
-                        tone = UnifiedCardTone.SURFACE_HIGH,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Bolt,
-                                contentDescription = null,
-                                tint = Colors.primary
-                            )
-                            Column {
-                                Text(
-                                    text = "推荐后端：${report.recommendedBackend.ifBlank { "（无可用后端）" }}",
-                                    style = Type.titleMedium,
-                                    color = Colors.onSurface,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = report.recommendation,
-                                    style = Type.bodyMedium,
-                                    color = Colors.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ===== Section 7: 高级结果（COLD_START / MULTI_TURN / SMOOTHNESS） =====
-            ui.latestAdvanced?.let { adv ->
-                item {
-                    UnifiedSection(title = "高级结果") {
-                        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)) {
-                            adv.coldStart?.let { cs ->
-                                MetricCard(
-                                    title = "冷启动",
-                                    lines = listOf(
-                                        "模型加载 ${cs.loadTimeMs}ms",
-                                        "首 token ${cs.firstTokenMs}ms",
-                                        "总响应 ${cs.totalResponseMs}ms"
-                                    )
-                                )
-                            }
-                            adv.multiTurn?.let { mt ->
-                                MetricCard(
-                                    title = "多轮累积（${mt.ttftPerTurn.size} 轮）",
-                                    lines = buildList {
-                                        if (mt.ttftPerTurn.isNotEmpty()) {
-                                            add("平均 TTFT ${mt.ttftPerTurn.average().toLong()}ms")
-                                            add("最大 TTFT ${mt.ttftPerTurn.max()}ms")
-                                            add("上下文峰值 ${mt.contextGrowth.maxOrNull() ?: 0} tokens")
-                                            val avgTg = if (mt.tgTpsPerTurn.isNotEmpty()) mt.tgTpsPerTurn.average() else 0.0
-                                            add("平均 TG ${"%.2f".format(avgTg)} t/s")
-                                        }
-                                    }
-                                )
-                            }
-                            adv.smoothness?.let { sm ->
-                                MetricCard(
-                                    title = "流式平滑度",
-                                    lines = listOf(
-                                        "间隔均值 ${sm.meanIntervalMs}ms",
-                                        "方差 ${sm.varianceMs2}",
-                                        "最大间隔 ${sm.maxIntervalMs}ms @ token #${sm.maxIntervalPosition}",
-                                        "总 tokens ${sm.tokenIntervals.size + 1}"
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ===== Section 8: 历史 =====
+            // ===== Section 6: 历史 =====
             item {
                 UnifiedSection(title = "历史结果（${ui.history.size}）") {
                     if (ui.history.isEmpty()) {
@@ -509,107 +436,61 @@ private fun HistoryCard(entity: BenchmarkResultEntity) {
     }
 }
 
-@Composable
-private fun MetricCard(title: String, lines: List<String>) {
-    UnifiedCard(
-        tone = UnifiedCardTone.SURFACE,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing4)) {
-            Text(
-                text = title,
-                style = Type.titleSmall,
-                color = Colors.primary,
-                fontWeight = FontWeight.SemiBold
-            )
-            lines.forEach { line ->
-                Text(text = line, style = Type.bodyMedium, color = Colors.onSurface)
-            }
-        }
-    }
-}
-
 // ============== SettingField 工具 ==============
 
 /**
- * 构造"测试矩阵"区块的 [SettingField] 列表，供 [SettingsListRenderer] 渲染。
- *
- * 字段 key 与 [handleSettingChange] 的 dispatch 表一一对应。
+ * 基础测试参数：自定义 PP / TG，加上重复与预热。
+ * 不做场景选择——基准测试就是"跑一次看数字"。
  */
-private fun buildMatrixSettings(): List<SettingField> = listOf(
+private fun buildParameterSettings(): List<SettingField> = listOf(
     SettingField(
-        key = "benchmark.group.matrix",
-        type = FieldType.GROUP,
-        title = "场景选择",
-        defaultValue = ""
+        key = "benchmark.pp",
+        type = FieldType.SLIDER,
+        title = "提示词长度 PP（tokens）",
+        description = "模拟提示词长度；默认 512，接近一段带历史上下文的真实提问",
+        defaultValue = BenchmarkViewModel.DEFAULT_PP,
+        min = 32, max = 4096, step = 32
     ),
     SettingField(
-        key = "benchmark.matrix",
-        type = FieldType.DROPDOWN,
-        title = "测试场景",
-        description = "只改变测试负载，不改推理配置；线程 / KV 量化 / batch / 上下文均取自「设置 → 推理」当前值。配置扫描与自动改配置请用右上角「自动调优」",
-        defaultValue = "BASIC",
-        options = listOf(
-            SettingOption("BASIC", "基础三档（PP=64/512/1024）"),
-            SettingOption("COMPARISON", "跨后端对比"),
-            SettingOption("COLD_START", "高级：冷启动"),
-            SettingOption("MULTI_TURN", "高级：多轮累积"),
-            SettingOption("SMOOTHNESS", "高级：流式平滑度")
-        )
-    ),
-    SettingField(
-        key = "benchmark.group.params",
-        type = FieldType.GROUP,
-        title = "通用参数",
-        defaultValue = ""
+        key = "benchmark.tg",
+        type = FieldType.SLIDER,
+        title = "生成长度 TG（tokens）",
+        description = "默认 64；生成太短会被首 token 开销影响，太长则耗时增加",
+        defaultValue = BenchmarkViewModel.DEFAULT_TG,
+        min = 8, max = 1024, step = 8
     ),
     SettingField(
         key = "benchmark.repCount",
         type = FieldType.SLIDER,
         title = "重复次数",
-        description = "取中位数；次数越多结果越稳",
-        defaultValue = 3,
-        min = 1, max = 10, step = 1
+        description = "默认 1 次即可；想减少偶然波动可调到 3 次取中位数",
+        defaultValue = 1,
+        min = 1, max = 3, step = 1
     ),
     SettingField(
         key = "benchmark.warmup",
         type = FieldType.SLIDER,
         title = "预热次数",
-        description = "预热不计入统计；避免首次推理的 mmap / 编译开销污染结果",
+        description = "预热不计入统计，避免首次推理的 mmap / 编译开销污染结果",
         defaultValue = 1,
-        min = 0, max = 5, step = 1
+        min = 0, max = 2, step = 1
     )
 )
 
-/**
- * 把 [BenchmarkViewModel.UiState] 折算成"当前值"Map，供 [SettingsListRenderer] 渲染。
- *
- * key 必须与 [buildMatrixSettings] 中字段的 key 完全一致。
- */
+/** 把 UiState 折算成"当前值"Map，key 必须与 [buildParameterSettings] 一致。 */
 private fun buildCurrentValues(ui: BenchmarkViewModel.UiState): Map<String, Any> = mapOf(
-    "benchmark.matrix" to ui.matrix.name,
+    "benchmark.pp" to ui.ppSize.toFloat(),
+    "benchmark.tg" to ui.tgSize.toFloat(),
     "benchmark.repCount" to ui.repCount.toFloat(),
     "benchmark.warmup" to ui.warmup.toFloat()
 )
 
-/**
- * SettingsListRenderer 的回调派发：把 `(key, value)` 转成对 ViewModel 的 typed setter 调用。
- */
+/** SettingsListRenderer 回调派发。 */
 private fun handleSettingChange(key: String, value: Any, vm: BenchmarkViewModel) {
     when (key) {
-        "benchmark.matrix" -> {
-            val m = runCatching { BenchmarkViewModel.Matrix.valueOf(value.toString()) }.getOrNull()
-            if (m != null) vm.selectMatrix(m)
-        }
-        "benchmark.repCount" -> vm.setRepCount((value as? Number)?.toInt() ?: 3)
+        "benchmark.pp" -> vm.setPpSize((value as? Number)?.toInt() ?: BenchmarkViewModel.DEFAULT_PP)
+        "benchmark.tg" -> vm.setTgSize((value as? Number)?.toInt() ?: BenchmarkViewModel.DEFAULT_TG)
+        "benchmark.repCount" -> vm.setRepCount((value as? Number)?.toInt() ?: 1)
         "benchmark.warmup" -> vm.setWarmup((value as? Number)?.toInt() ?: 1)
     }
-}
-
-private fun describeMatrix(m: BenchmarkViewModel.Matrix): String = when (m) {
-    BenchmarkViewModel.Matrix.BASIC -> "3 档基础负载"
-    BenchmarkViewModel.Matrix.COMPARISON -> "跨后端对比 + 自动推荐"
-    BenchmarkViewModel.Matrix.COLD_START -> "冷启动场景"
-    BenchmarkViewModel.Matrix.MULTI_TURN -> "多轮累积上下文（10 轮）"
-    BenchmarkViewModel.Matrix.SMOOTHNESS -> "流式平滑度（100 tokens）"
 }

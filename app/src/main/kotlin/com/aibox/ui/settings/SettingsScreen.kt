@@ -277,7 +277,15 @@ fun SettingsScreen(
                 ) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         BackendSelector(cfg.backend, vm::onBackendChange, ui)
-                        HelpText("仅 Vulkan / NPU / OpenCL 后端可调节 GPU 层数。不可用的后端会自动回退到 CPU。")
+                        HelpText(
+                            buildString {
+                                append("仅 Vulkan / NPU / OpenCL 后端可调节 GPU 层数。")
+                                if (!ui.npuAvailable) {
+                                    append(" NPU 需要 Hexagon 专用构建（普通 CI 包不含 ggml-hexagon 与 skel）；")
+                                }
+                                append("不可用的后端会禁用。")
+                            }
+                        )
                         SliderWithLabel(
                             title = "GPU/NPU 层数",
                             value = cfg.nGpuLayers.toFloat(),
@@ -413,6 +421,12 @@ fun SettingsScreen(
                                 append(if (ui.openclAvailable) "✓" else "✗")
                             }
                         )
+                        if (!ui.npuAvailable) {
+                            DiagnosticRow(
+                                "NPU 说明",
+                                "当前安装包未包含 ggml-hexagon 后端（普通 CI 包）。NPU 版需要在装有 Hexagon SDK 的自托管 runner 上构建。"
+                            )
+                        }
                         if (ui.lastNativeError.isNotBlank()) {
                             Text(
                                 "最近一次原生错误",
