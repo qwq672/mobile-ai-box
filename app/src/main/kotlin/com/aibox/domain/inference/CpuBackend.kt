@@ -37,7 +37,8 @@ class CpuBackend(
             physicalBatch = config.physicalBatch,
             batch = config.batch,
             contextLength = config.contextLength,
-            kvQuant = config.kvQuant
+            kvQuant = config.kvQuant,
+            forceFa = config.forceFlashAttention
         )
         loaded = ok
         if (ok) {

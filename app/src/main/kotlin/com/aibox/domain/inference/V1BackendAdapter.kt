@@ -77,7 +77,8 @@ class V1BackendAdapter(
                 contextLength = config.contextLength,
                 cpuThreads = config.threads ?: 0,  // 0 = 让 V1 自动决定
                 physicalBatch = config.batchSize,
-                kvQuant = config.kvQuant.name.lowercase()
+                kvQuant = config.kvQuant.name.lowercase(),
+                forceFlashAttention = config.optimizations.forceFlashAttention
                 // V1 无 flashAttn 字段,优化通过 OptimizationFlags 传入
             )
             val success = kotlinx.coroutines.runBlocking { backend.load(modelPath, v1Config) }

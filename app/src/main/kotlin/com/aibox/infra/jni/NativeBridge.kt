@@ -110,6 +110,10 @@ class NativeBridge {
     external fun setAdspLibraryPath(dir: String)
 
     // -------- 状态查询 --------
+    /** 实际生效的 KV 量化（请求 q8_0 但未开 FA 时会降级成 f16）。 */
+    external fun llamaEffectiveKv(): String
+    external fun llamaEffectiveFlashAttn(): Boolean
+    external fun llamaEffectiveThreads(): Int
     external fun llamaTokensPerSecond(): Float
     external fun llamaContextUsed(): Int
     external fun llamaContextMax(): Int

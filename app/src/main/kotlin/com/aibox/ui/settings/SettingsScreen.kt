@@ -98,7 +98,9 @@ fun SettingsScreen(
     // G-settings-fix：新增入口跳转到推理优化设置页（开关式优化统一归口处）
     onOpenOptimization: () -> Unit = {},
     // 调试：纯净聊天（不注入任何提示词 / 工具，用于定位幻觉与复读来源）
-    onOpenDebugChat: () -> Unit = {}
+    onOpenDebugChat: () -> Unit = {},
+    // 运行日志查看器
+    onOpenLogs: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val cfg = ui.config
@@ -426,6 +428,27 @@ fun SettingsScreen(
                                 append(if (ui.openclAvailable) "✓" else "✗")
                             }
                         )
+                        HorizontalDivider()
+                        DiagnosticRow("当前模型", ui.runtimeModel.ifBlank { "未加载" })
+                        DiagnosticRow("生效后端", ui.runtimeBackend.ifBlank { "--" })
+                        DiagnosticRow(
+                            "KV 请求 → 实际",
+                            "${ui.requestedKv} → ${ui.effectiveKv}" +
+                                if (ui.requestedKv != ui.effectiveKv &&
+                                    ui.effectiveKv != "unknown"
+                                ) "（已降级）" else ""
+                        )
+                        DiagnosticRow("FlashAttention", if (ui.effectiveFlashAttn) "开" else "关")
+                        DiagnosticRow("实际线程", if (ui.effectiveThreads > 0) ui.effectiveThreads.toString() else "--")
+                        DiagnosticRow("上下文", if (ui.runtimeContextMax > 0) ui.runtimeContextMax.toString() else "--")
+                        if (ui.requestedKv != ui.effectiveKv && ui.effectiveKv != "unknown") {
+                            Text(
+                                "KV 量化请求 ${ui.requestedKv}，实际生效 ${ui.effectiveKv}：量化 V cache 需要 FlashAttention；" +
+                                    "当前模型或后端未启用 FA，已自动降级以保证能加载。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         if (!ui.npuAvailable) {
                             DiagnosticRow(
                                 "NPU 说明",
@@ -505,6 +528,30 @@ fun SettingsScreen(
                                 )
                             },
                             modifier = Modifier.clickable { onOpenDebugChat() }
+                        )
+                        HorizontalDivider()
+                        ListItem(
+                            leadingContent = {
+                                Icon(
+                                    Icons.Outlined.FormatAlignLeft,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            headlineContent = { Text("运行日志") },
+                            supportingContent = {
+                                Text("实时查看推理 / 工具 / 插件 / 模块日志，可按级别与 tag 过滤、复制")
+                            },
+                            trailingContent = {
+                                Icon(
+                                    androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier.clickable { onOpenLogs() }
                         )
                     }
                 }
@@ -612,6 +659,7 @@ fun SettingsScreen(
                             valueText = "%.2f".format(cfg.temperature),
                             onValueChange = { vm.update(cfg.copy(temperature = it)) }
                         )
+                        HelpText("越高越发散、越低越保守。小模型（≤2B）建议 0.6~0.8，过高更容易胡编。")
                         SliderWithLabel(
                             title = "Top-K",
                             value = cfg.topK.toFloat(),
@@ -619,6 +667,7 @@ fun SettingsScreen(
                             valueText = cfg.topK.toString(),
                             onValueChange = { vm.update(cfg.copy(topK = it.toInt())) }
                         )
+                        HelpText("每步只保留概率最高的 K 个候选；40 是通用默认值。")
                         SliderWithLabel(
                             title = "Top-P",
                             value = cfg.topP,
@@ -626,6 +675,7 @@ fun SettingsScreen(
                             valueText = "%.2f".format(cfg.topP),
                             onValueChange = { vm.update(cfg.copy(topP = it)) }
                         )
+                        HelpText("累积概率阈值；0.9~0.95 通常足够，越低越保守。")
                         SliderWithLabel(
                             title = "Repeat Penalty",
                             value = cfg.repeatPenalty,
@@ -633,6 +683,33 @@ fun SettingsScreen(
                             valueText = "%.2f".format(cfg.repeatPenalty),
                             onValueChange = { vm.update(cfg.copy(repeatPenalty = it)) }
                         )
+                        HelpText(
+                            "对最近 256 个 token 做重复惩罚。1.1 是通用值；调太高会让小模型用词变怪，" +
+                                "调太低容易复读。改动即时生效，无需重新加载模型。"
+                        )
+                        HorizontalDivider()
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "当前生效：temp=${"%.2f".format(cfg.temperature)} · " +
+                                    "top_k=${cfg.topK} · top_p=${"%.2f".format(cfg.topP)} · " +
+                                    "repeat=${"%.2f".format(cfg.repeatPenalty)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedButton(
+                                onClick = {
+                                    vm.update(
+                                        cfg.copy(
+                                            temperature = 0.8f,
+                                            topK = 40,
+                                            topP = 0.95f,
+                                            repeatPenalty = 1.1f
+                                        )
+                                    )
+                                }
+                            ) { Text("恢复推荐值") }
+                        }
                     }
                 }
             }

@@ -69,6 +69,7 @@ import com.aibox.ui.audio.TtsScreen
 import com.aibox.ui.debug.DebugChatScreen
 import com.aibox.ui.history.HistoryScreen
 import com.aibox.ui.home.HomeScreen
+import com.aibox.ui.logviewer.LogScreen
 import com.aibox.ui.models.ModelsScreen
 import com.aibox.ui.optimization.OptimizationSettingsScreen
 import com.aibox.ui.roleplay.RoleplayLauncher
@@ -113,6 +114,8 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object Roleplay : Dest("roleplay", R.string.nav_settings, Icons.Filled.Apps)
     // 调试：纯净聊天（无提示词注入，用于定位幻觉 / 复读来源）
     data object DebugChat : Dest("debug_chat", R.string.nav_settings, Icons.Filled.Tune)
+    // 运行日志查看器
+    data object Logs : Dest("logs", R.string.nav_settings, Icons.Outlined.History)
 }
 
 /** 抽屉菜单项（不含 History，History 是独立入口） */
@@ -399,7 +402,8 @@ fun AppNav() {
                         onOpenToolSettings = { nav.navigate(Dest.ToolSettings.route) },
                         // G-settings-fix：传递推理优化页跳转回调
                         onOpenOptimization = { nav.navigate(Dest.Optimization.route) },
-                        onOpenDebugChat = { nav.navigate(Dest.DebugChat.route) }
+                        onOpenDebugChat = { nav.navigate(Dest.DebugChat.route) },
+                        onOpenLogs = { nav.navigate(Dest.Logs.route) }
                     )
                 }
                 composable(Dest.Search.route) {
@@ -475,6 +479,9 @@ fun AppNav() {
                 }
                 composable(Dest.DebugChat.route) {
                     DebugChatScreen(onBack = { nav.popBackStack() })
+                }
+                composable(Dest.Logs.route) {
+                    LogScreen(onBack = { nav.popBackStack() })
                 }
             }
         }

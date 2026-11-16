@@ -57,7 +57,8 @@ class VulkanBackend(
                 physicalBatch = config.physicalBatch,
                 batch = config.batch,
                 contextLength = config.contextLength,
-                kvQuant = config.kvQuant
+                kvQuant = config.kvQuant,
+                forceFa = config.forceFlashAttention
             )
         } catch (e: Throwable) {
             // Vulkan 加载崩溃（SIGSEGV 在某些设备上会发生）

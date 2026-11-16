@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.infra.plugin.FieldType
@@ -62,6 +63,7 @@ fun OptimizationSettingsScreen(
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val currentPreset by vm.currentPreset.collectAsStateWithLifecycle()
+    val runtime by vm.runtime.collectAsStateWithLifecycle()
     val drawerState = com.aibox.ui.nav.LocalDrawerState.current
     val scope = rememberCoroutineScope()
     val snackbarHost = remember { SnackbarHostState() }
@@ -86,6 +88,33 @@ fun OptimizationSettingsScreen(
             contentPadding = PaddingValues(vertical = DesignTokens.spacing16),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
         ) {
+            // ============== 顶部：当前实际生效 ==============
+            item {
+                UnifiedSection(title = "当前生效（实际）", showTopDivider = false) {
+                    androidx.compose.foundation.layout.Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "模型：${runtime.model.ifBlank { "未加载" }}",
+                            style = Type.bodySmall
+                        )
+                        Text(
+                            "后端：${runtime.backend.ifBlank { "--" }} · 线程：${if (runtime.threads > 0) runtime.threads else "--"} · 上下文：${if (runtime.contextMax > 0) runtime.contextMax else "--"}",
+                            style = Type.bodySmall
+                        )
+                        Text(
+                            "KV：${runtime.kv} · FlashAttention：${if (runtime.flashAttn) "开" else "关"}",
+                            style = Type.bodySmall
+                        )
+                        Text(
+                            "标有「加载时生效」的开关需要重新加载模型才会应用；其余开关即时生效。",
+                            style = Type.labelSmall,
+                            color = com.aibox.ui.theme.Colors.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             // ============== 顶部：优化预置 ==============
             item {
                 UnifiedSection(title = "优化预置", showTopDivider = false) {
@@ -128,15 +157,16 @@ fun OptimizationSettingsScreen(
                     )
                     SwitchRow(
                         key = "opt.preallocateKV",
-                        title = "KV cache 预分配",
-                        description = "加载时按 contextLength 一次性分配 KV cache，避免逐 token 增长触发 realloc",
+                        title = "KV cache 预分配（加载时生效）",
+                        description = "按 contextLength 一次性分配 KV cache；llama.cpp 后端本身即一次性分配，" +
+                            "该开关主要预留给插件后端",
                         value = settings.preallocateKV,
                         onValueChange = { v -> vm.update { s -> s.copy(preallocateKV = v) } }
                     )
                     SwitchRow(
                         key = "opt.prebuildSampler",
-                        title = "采样器预构造",
-                        description = "加载时即构建采样器对象，避免首次推理时重建",
+                        title = "采样器预构造（加载时生效）",
+                        description = "加载时预构建采样器；当前 llama.cpp 路径每轮自行构建，该开关暂未消费",
                         value = settings.prebuildSampler,
                         onValueChange = { v -> vm.update { s -> s.copy(prebuildSampler = v) } }
                     )
@@ -155,43 +185,44 @@ fun OptimizationSettingsScreen(
                 UnifiedSection(title = "TG 优化（生成速度）") {
                     SwitchRow(
                         key = "opt.forceFlashAttention",
-                        title = "强制 Flash Attention",
-                        description = "Flash Attention 2 / 3；后端不支持则静默忽略",
+                        title = "强制 Flash Attention（加载时生效）",
+                        description = "仅 Transformer 模型有效；打开后量化 KV（q8_0/q4_0）才不会被降级为 f16。" +
+                            "非 Transformer（Mamba/RWKV）会被强制关闭",
                         value = settings.forceFlashAttention,
                         onValueChange = { v -> vm.update { s -> s.copy(forceFlashAttention = v) } }
                     )
                     SwitchRow(
                         key = "opt.aggressiveGraphOpt",
-                        title = "激进算子融合",
-                        description = "启用激进的算子融合 / 常量折叠（增加编译时间换推理速度）",
+                        title = "激进算子融合（加载时生效）",
+                        description = "算子融合 / 常量折叠；当前 llama.cpp 后端暂未消费，预留给插件后端",
                         value = settings.aggressiveGraphOpt,
                         onValueChange = { v -> vm.update { s -> s.copy(aggressiveGraphOpt = v) } }
                     )
                     SwitchRow(
                         key = "opt.continuousKVLayout",
                         title = "KV cache 连续布局",
-                        description = "使用连续 KV 内存布局（vs 分块），提速但占内存更整块",
+                        description = "连续 KV 内存布局；当前 llama.cpp 后端暂未消费，预留给插件后端",
                         value = settings.continuousKVLayout,
                         onValueChange = { v -> vm.update { s -> s.copy(continuousKVLayout = v) } }
                     )
                     SwitchRow(
                         key = "opt.reuseSampler",
                         title = "采样器复用",
-                        description = "同会话内复用 sampler 实例，避免每个 token 重建",
+                        description = "同会话复用 sampler；当前 llama.cpp 路径每轮构建，暂未消费",
                         value = settings.reuseSampler,
                         onValueChange = { v -> vm.update { s -> s.copy(reuseSampler = v) } }
                     )
                     SwitchRow(
                         key = "opt.zeroCopyStream",
                         title = "流式输出 zero-copy",
-                        description = "流式输出走零拷贝路径（如 mmap 出来的 buffer 直接引用）",
+                        description = "零拷贝流式输出；当前 llama.cpp 后端暂未消费，预留给插件后端",
                         value = settings.zeroCopyStream,
                         onValueChange = { v -> vm.update { s -> s.copy(zeroCopyStream = v) } }
                     )
                     SwitchRow(
                         key = "opt.enableGraphCache",
-                        title = "推理图缓存",
-                        description = "缓存编译后的计算图，加速同模型二次加载",
+                        title = "推理图缓存（加载时生效）",
+                        description = "缓存编译后的计算图；当前 llama.cpp 后端暂未消费，预留给插件后端",
                         value = settings.enableGraphCache,
                         onValueChange = { v -> vm.update { s -> s.copy(enableGraphCache = v) } }
                     )

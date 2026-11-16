@@ -103,6 +103,40 @@ fun ToolSettingsScreen(
             contentPadding = PaddingValues(vertical = DesignTokens.spacing16),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
         ) {
+            // ============== 总览（少黑盒：到底注入了多少工具） ==============
+            item {
+                val enabledBasic = basicTools.count { it.id in enabledIds }
+                val enabledAdvanced = advancedTools.count { it.id in enabledIds }
+                UnifiedSection(title = "当前生效", showTopDivider = false) {
+                    UnifiedCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.spacing16),
+                        tone = UnifiedCardTone.SURFACE_LOW
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing4)) {
+                            Text(
+                                "已启用 ${enabledIds.size} / ${tools.size} 个工具" +
+                                    "（基础 $enabledBasic · 高级 $enabledAdvanced）",
+                                style = Type.bodySmall,
+                                color = Colors.onSurface
+                            )
+                            Text(
+                                "本地 GGUF 通过文本协议把工具清单注入 prompt；云端走原生 function calling。" +
+                                    "未启用的工具不会出现在清单里，模型无法调用。",
+                                style = Type.labelSmall,
+                                color = Colors.onSurfaceVariant
+                            )
+                            Text(
+                                "执行记录：设置 → 调试 → 运行日志，选 tag「工具」。",
+                                style = Type.labelSmall,
+                                color = Colors.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
             // ============== 基础工具 ==============
             item {
                 UnifiedSection(title = "基础工具（自动执行）", showTopDivider = false) {
@@ -381,6 +415,18 @@ private fun ToolDetailCard(tool: Tool) {
         if (optionalNames.isNotEmpty()) {
             Text(
                 text = "可选参数: $optionalNames",
+                style = Type.labelSmall,
+                color = Colors.onSurfaceVariant
+            )
+        }
+        // 参数语义：只列名字仍然偏黑盒，把类型和说明也展示出来
+        (schema.required + schema.optional).forEach { p ->
+            val extra = buildString {
+                p.enum?.let { append(" 可选值: ${it.joinToString("/")}") }
+                p.default?.let { append(" 默认: $it") }
+            }
+            Text(
+                text = "· ${p.name}: ${p.type.name.lowercase()}$extra — ${p.description}",
                 style = Type.labelSmall,
                 color = Colors.onSurfaceVariant
             )

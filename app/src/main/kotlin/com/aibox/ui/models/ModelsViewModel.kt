@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,6 +102,14 @@ class ModelsViewModel : ViewModel() {
             unloadCurrentSilently()
 
             val config = settings.config.firstOrNull() ?: InferenceConfig()
+            // 推理优化页的「强制 FlashAttention」是唯一需要传入加载流程的 TG 开关：
+            // 只有 FA 打开时，量化 KV（q8_0/q4_0）才不会被 native 降级成 f16。
+            val opt = runCatching {
+                withContext(Dispatchers.IO) { container.optimizationSettingsRepository.settingsFlow.first() }
+            }.getOrNull()
+            val effectiveConfig = if (opt != null) {
+                config.copy(forceFlashAttention = opt.forceFlashAttention)
+            } else config
             // 插件可能刚安装，或启动时的后台同步还没跑完；加载前再同步一次，
             // 避免「已安装 LiteRT 插件却提示未安装」。
             withContext(Dispatchers.IO) {
@@ -115,7 +124,7 @@ class ModelsViewModel : ViewModel() {
                 when (route) {
                     is ModelFormatRouter.RouteResult.V1Path -> {
                         LogSystem.info("aibox.ui.models", "ModelsVM: route to V1 (format=${route.format})")
-                        loadV1(m, config, id)
+                        loadV1(m, effectiveConfig, id)
                     }
                     is ModelFormatRouter.RouteResult.V2Path -> {
                         LogSystem.info("aibox.ui.models", "ModelsVM: route to V2 backend '${route.backendName}' (format=${route.format})")

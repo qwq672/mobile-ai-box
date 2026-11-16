@@ -33,6 +33,13 @@ data class InferenceConfig(
     val topK: Int = 40,
     val topP: Float = 0.95f,
     val repeatPenalty: Float = 1.1f,
+    /**
+     * 是否强制开启 FlashAttention。
+     *
+     * 只对 Transformer 架构生效；非 Transformer（Mamba/RWKV/SSM）会被 native 强制关闭。
+     * 开启后量化 KV（q8_0/q4_0）才可能真正生效，否则会被降级为 f16。
+     */
+    val forceFlashAttention: Boolean = false,
     // 注：autoLoadModel 字段已删除（G-settings-fix）
     // "模型预加载" 开关归 OptimizationSettings.preloadModel 统一管理
     // （开关式优化 → OptimizationSettings；本字段原属 V1 dead code 无消费方）

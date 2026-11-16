@@ -43,6 +43,16 @@ class SettingsViewModel : ViewModel() {
         val thermalIntervalMs: Int = 2000,
         // 原生层最近一次加载/解码失败的原因（空串 = 无错误）
         val lastNativeError: String = "",
+        // ---- 实际生效的运行时状态（少黑盒）----
+        val runtimeModel: String = "",
+        val runtimeBackend: String = "",
+        /** 请求的 KV 量化（来自设置）。 */
+        val requestedKv: String = "q8_0",
+        /** 真正生效的 KV 量化（可能被降级成 f16）。 */
+        val effectiveKv: String = "unknown",
+        val effectiveFlashAttn: Boolean = false,
+        val effectiveThreads: Int = 0,
+        val runtimeContextMax: Int = 0,
         // 可用后端
         val vulkanAvailable: Boolean = false,
         val npuAvailable: Boolean = false,
@@ -60,7 +70,21 @@ class SettingsViewModel : ViewModel() {
     init {
         viewModelScope.launch {
             container.settingsRepository.config.collectLatest { c ->
-                _ui.value = _ui.value.copy(config = c)
+                _ui.value = _ui.value.copy(config = c, requestedKv = c.kvQuant)
+            }
+        }
+        // 运行时状态：模型 / 后端变化后刷新"实际生效"参数
+        viewModelScope.launch {
+            container.inferenceEngine.state.collectLatest {
+                refreshRuntime()
+            }
+        }
+        viewModelScope.launch {
+            container.inferenceEngine.stats.collectLatest { s ->
+                _ui.value = _ui.value.copy(
+                    runtimeBackend = s.backend.displayNameZh,
+                    runtimeContextMax = s.contextMax
+                )
             }
         }
         viewModelScope.launch {
@@ -160,7 +184,21 @@ class SettingsViewModel : ViewModel() {
     }
 
     fun update(c: InferenceConfig) {
-        viewModelScope.launch { container.settingsRepository.save(c) }
+        viewModelScope.launch {
+            container.settingsRepository.save(c)
+            // 采样参数即时生效：native 的 sampler 只在 load 时构建一次，
+            // 之前改设置必须重新加载模型才生效（很黑盒）。这里直接热更新。
+            runCatching {
+                container.nativeBridge.llamaSetSampler(
+                    temperature = c.temperature,
+                    topK = c.topK,
+                    topP = c.topP,
+                    repeatPenalty = c.repeatPenalty
+                )
+            }.onFailure {
+                LogSystem.warn("aibox.ui.settings", "llamaSetSampler hot update failed: ${it.message}")
+            }
+        }
     }
 
     fun onBackendChange(b: BackendType) {
@@ -244,11 +282,25 @@ class SettingsViewModel : ViewModel() {
         _ui.value = _ui.value.copy(thermalIntervalMs = container.thermalMonitor.intervalMs.value)
     }
 
-    /** 手动刷新诊断信息：原生版本 + 最近一次原生错误。 */
+    /** 手动刷新诊断信息：原生版本 + 最近一次原生错误 + 实际生效参数。 */
     fun refreshDiagnostics() {
         val b = container.nativeBridge
         val version = runCatching { b.nativeVersion() }.getOrDefault("native not loaded")
         val err = runCatching { b.nativeLastError() }.getOrDefault("")
         _ui.value = _ui.value.copy(nativeVersion = version, lastNativeError = err)
+        refreshRuntime()
+    }
+
+    /** 读取"真正生效"的加载参数（KV / FA / 线程 / 模型 / 后端）。 */
+    fun refreshRuntime() {
+        val b = container.nativeBridge
+        val st = container.inferenceEngine.state.value
+        _ui.value = _ui.value.copy(
+            runtimeModel = st.modelPath?.substringAfterLast('/') ?: "",
+            effectiveKv = runCatching { b.llamaEffectiveKv() }.getOrDefault("unknown"),
+            effectiveFlashAttn = runCatching { b.llamaEffectiveFlashAttn() }.getOrDefault(false),
+            effectiveThreads = runCatching { b.llamaEffectiveThreads() }.getOrDefault(0),
+            runtimeContextMax = container.inferenceEngine.stats.value.contextMax
+        )
     }
 }

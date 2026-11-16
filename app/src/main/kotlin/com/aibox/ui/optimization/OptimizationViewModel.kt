@@ -34,12 +34,25 @@ import kotlinx.coroutines.launch
  */
 class OptimizationViewModel : ViewModel() {
 
+    /** 运行时实际生效的快照（少黑盒）：模型、后端、KV、FA、线程、上下文。 */
+    data class RuntimeInfo(
+        val model: String = "",
+        val backend: String = "",
+        val kv: String = "unknown",
+        val flashAttn: Boolean = false,
+        val threads: Int = 0,
+        val contextMax: Int = 0
+    )
+
     private val container get() = AIBoxApp.instance.container
     private val repo get() = container.optimizationSettingsRepository
 
     /** UI 订阅的设置 StateFlow；5s 内无 collector 仍保留缓存，避免旋转屏闪回默认。 */
     val settings: StateFlow<OptimizationSettings> = repo.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OptimizationSettings.DEFAULT)
+
+    private val _runtime = MutableStateFlow(RuntimeInfo())
+    val runtime: StateFlow<RuntimeInfo> = _runtime.asStateFlow()
 
     /** 当前预置 ID，UI 顶部下拉显示。 */
     private val _currentPreset = MutableStateFlow("default")
@@ -52,6 +65,31 @@ class OptimizationViewModel : ViewModel() {
                 _currentPreset.value = OptimizationSettings.inferPresetId(s)
             }
         }
+        // 模型 / 后端变化 → 刷新实际生效参数
+        viewModelScope.launch {
+            container.inferenceEngine.state.collectLatest { refreshRuntime() }
+        }
+        viewModelScope.launch {
+            container.inferenceEngine.stats.collectLatest {
+                _runtime.value = _runtime.value.copy(
+                    backend = it.backend.displayNameZh,
+                    contextMax = it.contextMax
+                )
+            }
+        }
+    }
+
+    /** 读取 native 侧真正生效的加载参数。 */
+    fun refreshRuntime() {
+        val b = container.nativeBridge
+        val st = container.inferenceEngine.state.value
+        _runtime.value = _runtime.value.copy(
+            model = st.modelPath?.substringAfterLast('/') ?: "",
+            kv = runCatching { b.llamaEffectiveKv() }.getOrDefault("unknown"),
+            flashAttn = runCatching { b.llamaEffectiveFlashAttn() }.getOrDefault(false),
+            threads = runCatching { b.llamaEffectiveThreads() }.getOrDefault(0),
+            contextMax = container.inferenceEngine.stats.value.contextMax
+        )
     }
 
     /**

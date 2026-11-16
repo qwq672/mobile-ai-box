@@ -78,6 +78,7 @@ data class FrameworkOverride(
         topK            = topK            ?: base.topK,
         topP            = topP            ?: base.topP,
         repeatPenalty   = repeatPenalty   ?: base.repeatPenalty,
+        forceFlashAttention = base.forceFlashAttention,
         systemPrompt    = base.systemPrompt   // 框架覆盖不涉及 system prompt
     )
 }
