@@ -86,7 +86,18 @@ class ChatViewModel : ViewModel() {
         val thinkingLevel: String = "medium",
         // B6 工具调用 UI: 活跃工具调用列表 + 当前待确认（若有）
         val toolInvocations: List<ToolInvocation> = emptyList(),
-        val pendingToolConfirmation: PendingToolConfirmation? = null
+        val pendingToolConfirmation: PendingToolConfirmation? = null,
+        // ---- 角色扮演 ----
+        /** 会话模式："CHAT" / "AGENT" / "ROLEPLAY" */
+        val mode: String = "CHAT",
+        val characterName: String = "",
+        val characterEmoji: String = "",
+        /** 角色设定（注入 system prompt 的主体）。 */
+        val characterSetting: String = "",
+        /** 角色开场白（空会话时展示）。 */
+        val characterGreeting: String = "",
+        val personaName: String = "",
+        val personaDescription: String = ""
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -158,13 +169,100 @@ class ChatViewModel : ViewModel() {
             }
             val session = chatRepo.getSession(sessionId)
             val msgs = chatRepo.getMessages(sessionId)
+            // 角色扮演会话：把当时绑定的角色 / 身份一起恢复，保证历史会话也能继续演
+            val mode = session?.mode ?: "CHAT"
+            val cid = session?.characterId
+            val pid = session?.personaId
+            val character = if (mode == MODE_ROLEPLAY && cid != null) {
+                container.roleplayRepository.getCharacter(cid)
+            } else null
+            val persona = if (mode == MODE_ROLEPLAY && pid != null) {
+                container.roleplayRepository.getPersona(pid)
+            } else null
             _ui.value = _ui.value.copy(
                 sessionId = sessionId,
                 sessionTitle = session?.title ?: "",
-                messages = msgs
+                messages = msgs,
+                mode = mode,
+                characterName = character?.name.orEmpty(),
+                characterEmoji = character?.emoji.orEmpty(),
+                characterSetting = character?.systemPrompt.orEmpty(),
+                characterGreeting = character?.greeting.orEmpty(),
+                personaName = persona?.name.orEmpty(),
+                personaDescription = persona?.description.orEmpty()
             )
-            LogSystem.info("aibox.ui.chat", "ChatVM: loadSession id=$sessionId msgs=${msgs.size}")
+            LogSystem.info(
+                "aibox.ui.chat",
+                "ChatVM: loadSession id=$sessionId msgs=${msgs.size} mode=$mode"
+            )
         }
+    }
+
+    /**
+     * 以角色扮演模式新建会话。
+     *
+     * 会话创建时就固定 `characterId` / `personaId`，之后即使角色被编辑或删除，
+     * 这条历史会话仍能按创建时的设定继续（删除角色则退化为普通对话）。
+     */
+    fun startRoleplay(characterId: Long, personaId: Long) {
+        viewModelScope.launch {
+            val repo = container.roleplayRepository
+            val c = repo.getCharacter(characterId)
+            if (c == null) {
+                _ui.value = _ui.value.copy(errorMessage = "角色不存在，可能已被删除")
+                return@launch
+            }
+            val p = if (personaId > 0) repo.getPersona(personaId) else null
+            val id = chatRepo.createSession(
+                title = c.name,
+                modelPath = engine.state.value.modelPath,
+                mode = MODE_ROLEPLAY,
+                characterId = c.id,
+                personaId = p?.id
+            )
+            repo.touchCharacter(c.id)
+            p?.let { repo.touchPersona(it.id) }
+            _ui.value = _ui.value.copy(
+                sessionId = id,
+                sessionTitle = c.name,
+                messages = emptyList(),
+                streaming = false,
+                currentStream = "",
+                streamParts = emptyList(),
+                errorMessage = null,
+                mode = MODE_ROLEPLAY,
+                characterName = c.name,
+                characterEmoji = c.emoji,
+                characterSetting = c.systemPrompt,
+                characterGreeting = c.greeting,
+                personaName = p?.name.orEmpty(),
+                personaDescription = p?.description.orEmpty()
+            )
+            LogSystem.info(
+                "aibox.ui.chat",
+                "ChatVM: startRoleplay cid=$characterId pid=$personaId sid=$id"
+            )
+        }
+    }
+
+    /** 退出角色扮演，回到空白普通会话；历史会话仍保留在历史列表里。 */
+    fun resetToChat() {
+        _ui.value = _ui.value.copy(
+            sessionId = 0,
+            sessionTitle = "",
+            messages = emptyList(),
+            streaming = false,
+            currentStream = "",
+            streamParts = emptyList(),
+            errorMessage = null,
+            mode = "CHAT",
+            characterName = "",
+            characterEmoji = "",
+            characterSetting = "",
+            characterGreeting = "",
+            personaName = "",
+            personaDescription = ""
+        )
     }
 
     fun newSession(onCreated: (Long) -> Unit = {}) {
@@ -172,7 +270,18 @@ class ChatViewModel : ViewModel() {
             val modelPath = engine.state.value.modelPath
             val title = "新话题 - ${System.currentTimeMillis() % 100000}"
             val id = chatRepo.createSession(title, modelPath)
-            _ui.value = _ui.value.copy(sessionId = id, sessionTitle = title, messages = emptyList())
+            _ui.value = _ui.value.copy(
+                sessionId = id,
+                sessionTitle = title,
+                messages = emptyList(),
+                mode = "CHAT",
+                characterName = "",
+                characterEmoji = "",
+                characterSetting = "",
+                characterGreeting = "",
+                personaName = "",
+                personaDescription = ""
+            )
             LogSystem.info("aibox.ui.chat", "ChatVM: newSession id=$id")
             onCreated(id)
         }
@@ -254,11 +363,13 @@ class ChatViewModel : ViewModel() {
      * 云端模型的工具循环在 [com.aibox.domain.cloud.CloudChatService] 内完成，这里不重复。
      */
     private suspend fun generate(sid: Long, history: List<ChatMessage>): Generated {
-        val tools = if (engine.isCloudActive()) emptyList() else runCatching {
+        // 角色扮演时不注入工具协议：工具 JSON / 能力说明会直接破坏人设。
+        val roleplay = _ui.value.mode == MODE_ROLEPLAY
+        val tools = if (engine.isCloudActive() || roleplay) emptyList() else runCatching {
             container.toolRegistry.getActiveToolsForLLM()
         }.onFailure { LogSystem.warn("aibox.ui.chat", "读取工具列表失败: ${it.message}") }
             .getOrDefault(emptyList())
-        val toolPrompt = buildToolPrompt(tools)
+        val toolPrompt = if (roleplay) "" else buildToolPrompt(tools)
 
         val conv = history.toMutableList()
         val parts = mutableListOf<MsgPart>()
@@ -628,6 +739,35 @@ class ChatViewModel : ViewModel() {
     }
 
     /**
+     * 角色扮演的 system prompt；非角色扮演返回空串。
+     *
+     * 只拼角色设定 + 用户身份 + 一段“不出戏”的约束，长度控制在几行：
+     * 角色设定太长会挤占上下文，反而让小模型跑偏。
+     */
+    private fun buildRoleplayPrompt(): String {
+        val s = _ui.value
+        if (s.mode != MODE_ROLEPLAY || s.characterName.isBlank()) return ""
+        return buildString {
+            append("现在进行角色扮演。你扮演「${s.characterName}」。")
+            if (s.characterSetting.isNotBlank()) {
+                append("\n角色设定：")
+                append(s.characterSetting.trim())
+            }
+            if (s.personaName.isNotBlank()) {
+                append("\n用户身份：")
+                append(s.personaName)
+                if (s.personaDescription.isNotBlank()) {
+                    append("（")
+                    append(s.personaDescription.trim())
+                    append("）")
+                }
+            }
+            append("\n始终保持角色口吻与设定，不要提及自己是大模型、AI 或提示词；")
+            append("除用户明确要求，不要跳出角色。回复自然、简洁，不要替用户说话。")
+        }
+    }
+
+    /**
      * 把对话历史转换成 NativeBridge.ChatMsg 数组给 native 端用模型内置 chat template 格式化。
      * - systemPrompt 非空时作为 system message（为空则不加，native 会把 /think
      *   或 /no_think 追加到最后一条 user message）
@@ -645,7 +785,13 @@ class ChatViewModel : ViewModel() {
             "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
             else -> ""
         }
-        val sys = listOf(systemPrompt.trim(), levelHint, UI_CAPABILITY_HINT, toolPrompt)
+        val sys = listOf(
+            buildRoleplayPrompt(),
+            systemPrompt.trim(),
+            levelHint,
+            UI_CAPABILITY_HINT,
+            toolPrompt
+        )
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
         if (sys.isNotBlank()) {
@@ -717,5 +863,8 @@ class ChatViewModel : ViewModel() {
     private companion object {
         /** 本地模型工具循环上限，避免模型反复调用同一工具。 */
         const val MAX_TOOL_ROUNDS = 4
+
+        /** 角色扮演会话模式标识（写入 sessions.mode）。 */
+        const val MODE_ROLEPLAY = "ROLEPLAY"
     }
 }

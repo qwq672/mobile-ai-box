@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
@@ -107,6 +108,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -146,9 +148,15 @@ fun ChatScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val snackbarHost = remember { SnackbarHostState() }
 
-    // 当 sessionId 变化时加载该 session
+    // 当 sessionId 变化时加载该 session；若有角色扮演请求则优先新建角色会话
     LaunchedEffect(sessionId) {
-        if (sessionId != 0L) vm.loadSession(sessionId)
+        val req = com.aibox.ui.roleplay.RoleplayLauncher.consume()
+        when {
+            req == null -> if (sessionId != 0L) vm.loadSession(sessionId)
+            req.first > 0L -> vm.startRoleplay(req.first, req.second)
+            sessionId != 0L -> vm.loadSession(sessionId)
+            else -> vm.resetToChat()
+        }
     }
     val context = LocalContext.current
     val drawerState = com.aibox.ui.nav.LocalDrawerState.current
@@ -238,28 +246,40 @@ fun ChatScreen(
                 },
                 title = {
                     Column {
+                        val isRoleplay = ui.mode == "ROLEPLAY" && ui.characterName.isNotBlank()
+                        val title = if (isRoleplay) {
+                            "${ui.characterEmoji} ${ui.characterName}".trim()
+                        } else {
+                            ui.sessionTitle.ifBlank { "AIBox" }
+                        }
                         Text(
-                            ui.sessionTitle.ifBlank { "AIBox" },
+                            title,
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             fontWeight = FontWeight.SemiBold
                         )
-                        if (ui.modelName.isNotEmpty()) {
-                            Text(
-                                "${ui.modelName} · ${ui.backendName}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        } else {
-                            Text(
-                                "未加载模型",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
+                        val subtitle = buildString {
+                            if (isRoleplay && ui.personaName.isNotBlank()) {
+                                append("你 · ${ui.personaName} · ")
+                            }
+                            if (ui.modelName.isNotEmpty()) {
+                                append("${ui.modelName} · ${ui.backendName}")
+                            } else {
+                                append("未加载模型")
+                            }
                         }
+                        Text(
+                            subtitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (ui.modelName.isNotEmpty()) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 },
                 actions = {
@@ -285,6 +305,22 @@ fun ChatScreen(
                                     Toast.makeText(context, "请到「模型」页加载", Toast.LENGTH_SHORT).show()
                                 }
                             )
+                            if (ui.mode == "ROLEPLAY") {
+                                DropdownMenuItem(
+                                    text = { Text("退出角色扮演") },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Outlined.Close,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        vm.resetToChat()
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("保存为快捷方式") },
                                 leadingIcon = {
@@ -347,7 +383,11 @@ fun ChatScreen(
                     ui.messages.isEmpty() && ui.currentStream.isEmpty() && !ui.streaming -> {
                         EmptyChatState(
                             modifier = Modifier.fillMaxSize(),
-                            onSuggestion = { vm.send(it) }
+                            onSuggestion = { vm.send(it) },
+                            greeting = if (ui.mode == "ROLEPLAY") ui.characterGreeting else "",
+                            characterName = if (ui.mode == "ROLEPLAY") ui.characterName else "",
+                            characterEmoji = if (ui.mode == "ROLEPLAY") ui.characterEmoji else "",
+                            personaName = if (ui.mode == "ROLEPLAY") ui.personaName else ""
                         )
                     }
                     else -> {
@@ -861,6 +901,22 @@ private fun EmptyModelState() {
     }
 }
 
+/** 空会话问候池：轮换展示，避免每次进来都是同一句。 */
+private val CHAT_GREETINGS = listOf(
+    "嗨！今天想聊些什么？",
+    "聊点啥？",
+    "今天又想聊啥了？",
+    "有什么想说的？",
+    "我在，说说看？",
+    "想聊点正经的，还是随便扯扯？",
+    "今天想解决什么问题？",
+    "要不要聊聊你最近在想的事？",
+    "有需要我搭把手的地方吗？",
+    "来，随便开个头。",
+    "今天有什么新鲜事？",
+    "想聊什么都可以。"
+)
+
 /** 空会话建议池（18 条，每次展示 3 条并定时轮换）。 */
 private val CHAT_SUGGESTIONS = listOf(
     "用三句话介绍一下你自己",
@@ -888,9 +944,13 @@ private val CHAT_SUGGESTIONS = listOf(
 @Composable
 private fun EmptyChatState(
     modifier: Modifier = Modifier,
-    onSuggestion: (String) -> Unit
+    onSuggestion: (String) -> Unit,
+    greeting: String = "",
+    characterName: String = "",
+    characterEmoji: String = "",
+    personaName: String = ""
 ) {
-    // 每次进入空会话 / 每 12 秒换一组建议，避免永远是那三条。
+    // 每次进入空会话 / 每 12 秒换一次问候与建议，避免永远是那三条。
     var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -898,9 +958,21 @@ private fun EmptyChatState(
             tick++
         }
     }
-    val suggestions = remember(tick) {
-        List(3) { i -> CHAT_SUGGESTIONS[(tick * 3 + i) % CHAT_SUGGESTIONS.size] }
+    // 角色扮演时不推通用任务建议，改成不会出戏的开场白
+    val suggestions = remember(tick, characterName) {
+        if (characterName.isNotBlank()) {
+            listOf("你好呀", "我们聊聊吧", "今天过得怎么样？")
+        } else {
+            List(3) { i -> CHAT_SUGGESTIONS[(tick * 3 + i) % CHAT_SUGGESTIONS.size] }
+        }
     }
+    val title = greeting.ifBlank { CHAT_GREETINGS[tick % CHAT_GREETINGS.size] }
+    val subtitle = if (characterName.isNotBlank()) {
+        buildString {
+            append("正在扮演 $characterName")
+            if (personaName.isNotBlank()) append(" · 你是 $personaName")
+        }
+    } else ""
     Column(
         modifier = modifier.padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -913,19 +985,32 @@ private fun EmptyChatState(
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                Icons.Outlined.SmartToy,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(30.dp)
-            )
+            if (characterEmoji.isNotBlank()) {
+                Text(characterEmoji, style = MaterialTheme.typography.headlineSmall)
+            } else {
+                Icon(
+                    Icons.Outlined.SmartToy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(30.dp)
+                )
+            }
         }
         Spacer(Modifier.height(16.dp))
         Text(
-            "嗨！今天想聊些什么？",
+            title,
             style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center
         )
+        if (subtitle.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Spacer(Modifier.height(24.dp))
         suggestions.forEach { s ->
             Surface(

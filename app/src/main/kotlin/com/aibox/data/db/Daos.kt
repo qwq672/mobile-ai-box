@@ -87,6 +87,46 @@ interface MessageDao {
 }
 
 /**
+ * 角色扮演：AI 角色。
+ */
+@Dao
+interface CharacterDao {
+    @Query("SELECT * FROM characters ORDER BY lastUsedAt DESC, createdAt ASC")
+    fun observeAll(): Flow<List<CharacterEntity>>
+
+    @Query("SELECT * FROM characters WHERE id = :id")
+    suspend fun getById(id: Long): CharacterEntity?
+
+    @Query("SELECT COUNT(*) FROM characters")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(c: CharacterEntity): Long
+
+    @Delete
+    suspend fun delete(c: CharacterEntity)
+}
+
+/** 角色扮演：用户身份。 */
+@Dao
+interface PersonaDao {
+    @Query("SELECT * FROM personas ORDER BY lastUsedAt DESC, createdAt ASC")
+    fun observeAll(): Flow<List<PersonaEntity>>
+
+    @Query("SELECT * FROM personas WHERE id = :id")
+    suspend fun getById(id: Long): PersonaEntity?
+
+    @Query("SELECT COUNT(*) FROM personas")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(p: PersonaEntity): Long
+
+    @Delete
+    suspend fun delete(p: PersonaEntity)
+}
+
+/**
  * 基准测试结果 DAO（P2 benchmark system）。
  *
  * 支持按 modelPath / backendName / 时间范围查询历史记录，

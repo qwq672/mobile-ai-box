@@ -26,7 +26,13 @@ class ChatRepository(context: Context) {
     fun searchSessions(q: String): Flow<List<SessionEntity>> =
         if (q.isBlank()) sessionDao.observeAll() else sessionDao.searchByTitle(q.trim())
 
-    suspend fun createSession(title: String, modelPath: String?): Long {
+    suspend fun createSession(
+        title: String,
+        modelPath: String?,
+        mode: String = "CHAT",
+        characterId: Long? = null,
+        personaId: Long? = null
+    ): Long {
         val now = System.currentTimeMillis()
         val s = SessionEntity(
             title = title,
@@ -34,7 +40,10 @@ class ChatRepository(context: Context) {
             createdAt = now,
             lastUsedAt = now,
             messageCount = 0,
-            modelPath = modelPath
+            modelPath = modelPath,
+            mode = mode,
+            characterId = characterId,
+            personaId = personaId
         )
         return sessionDao.insert(s)
     }

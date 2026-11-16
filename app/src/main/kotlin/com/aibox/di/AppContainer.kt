@@ -4,6 +4,7 @@ import android.content.Context
 import com.aibox.BuildConfig
 import com.aibox.data.repo.ChatRepository
 import com.aibox.data.repo.ModelRepository
+import com.aibox.data.repo.RoleplayRepository
 import com.aibox.data.repo.SettingsRepository
 import com.aibox.domain.cloud.CloudChatService
 import com.aibox.domain.cloud.OpenAiCompatibleClient
@@ -63,6 +64,8 @@ class AppContainer(context: Context) {
     val modelRepository: ModelRepository = ModelRepository(appContext)
     val settingsRepository: SettingsRepository = SettingsRepository(appContext)
     val chatRepository: ChatRepository = ChatRepository(appContext)
+    /** 角色扮演：AI 角色 + 用户身份。 */
+    val roleplayRepository: RoleplayRepository = RoleplayRepository(appContext)
     val downloadManager: DownloadManager = DownloadManager(appContext)
 
     /** 三下载源 */

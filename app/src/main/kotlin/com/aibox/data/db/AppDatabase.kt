@@ -8,8 +8,11 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [ModelEntity::class, SessionEntity::class, MessageEntity::class, BenchmarkResultEntity::class],
-    version = 5,
+    entities = [
+        ModelEntity::class, SessionEntity::class, MessageEntity::class, BenchmarkResultEntity::class,
+        CharacterEntity::class, PersonaEntity::class
+    ],
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -17,6 +20,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionDao(): SessionDao
     abstract fun messageDao(): MessageDao
     abstract fun benchmarkResultDao(): BenchmarkResultDao
+    abstract fun characterDao(): CharacterDao
+    abstract fun personaDao(): PersonaDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -93,13 +98,47 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // v5 → v6: 角色扮演（会话模式 + AI 角色 + 用户身份）
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'CHAT'")
+                db.execSQL("ALTER TABLE sessions ADD COLUMN characterId INTEGER")
+                db.execSQL("ALTER TABLE sessions ADD COLUMN personaId INTEGER")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS characters (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        emoji TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        systemPrompt TEXT NOT NULL,
+                        greeting TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        lastUsedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS personas (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        lastUsedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun get(ctx: Context): AppDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(
                 ctx.applicationContext,
                 AppDatabase::class.java,
                 "aibox.db"
             )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .fallbackToDestructiveMigration()
             .build().also { INSTANCE = it }
         }

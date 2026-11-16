@@ -26,7 +26,46 @@ data class SessionEntity(
     val createdAt: Long,
     val lastUsedAt: Long = 0,
     val messageCount: Int = 0,
-    val modelPath: String? = null
+    val modelPath: String? = null,
+    /** 会话模式："CHAT" / "AGENT" / "ROLEPLAY"。 */
+    @ColumnInfo(defaultValue = "CHAT")
+    val mode: String = "CHAT",
+    /** 角色扮演绑定的 AI 角色 id；null = 非角色扮演。 */
+    val characterId: Long? = null,
+    /** 角色扮演绑定的用户身份 id；null = 未选身份。 */
+    val personaId: Long? = null
+)
+
+/**
+ * AI 角色（角色扮演）。
+ *
+ * 与 [PersonaEntity] 分开：一个是“模型扮演谁”，一个是“用户是谁”，
+ * 会话记得同时绑定两者，换角色不会污染用户身份。
+ */
+@Entity(tableName = "characters")
+data class CharacterEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    /** 头像 emoji（不引入图片资源，保持轻量）。 */
+    val emoji: String = "🙂",
+    /** 一句话简介，列表里展示。 */
+    val description: String = "",
+    /** 角色设定（system prompt 的主体）。 */
+    val systemPrompt: String = "",
+    /** 开场白 / 进入会话时的第一句话。 */
+    val greeting: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastUsedAt: Long = 0
+)
+
+/** 用户身份（角色扮演里的“我是谁”）。 */
+@Entity(tableName = "personas")
+data class PersonaEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val description: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastUsedAt: Long = 0
 )
 
 @Entity(tableName = "messages")

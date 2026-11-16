@@ -83,6 +83,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun HomeScreen(
     onOpenChat: (Shortcut?) -> Unit,
+    onOpenRoleplay: () -> Unit,
     onOpenImageGen: (Shortcut?) -> Unit,
     onOpenASR: () -> Unit,
     onOpenTTS: () -> Unit,
@@ -195,6 +196,7 @@ fun HomeScreen(
             // 功能区两列网格；用 item 块 + 手动两两分组（避免在 LazyColumn 内嵌 LazyVerticalGrid）
             val functionTiles = buildList {
                 add(FunctionTileData("聊天", "💬", "${stats.chatModelCount} 个模型") { onOpenChat(null) })
+                add(FunctionTileData("角色扮演", "🎭", "挑一个角色开聊", onOpenRoleplay))
                 add(FunctionTileData("图像生成", "🎨", "${stats.imageModelCount} 个模型") { onOpenImageGen(null) })
                 add(FunctionTileData("语音识别", "🗣️", "系统默认", onOpenASR))
                 add(FunctionTileData("语音合成", "📢", "系统默认", onOpenTTS))

@@ -70,6 +70,8 @@ import com.aibox.ui.history.HistoryScreen
 import com.aibox.ui.home.HomeScreen
 import com.aibox.ui.models.ModelsScreen
 import com.aibox.ui.optimization.OptimizationSettingsScreen
+import com.aibox.ui.roleplay.RoleplayLauncher
+import com.aibox.ui.roleplay.RoleplayScreen
 import com.aibox.ui.search.SearchScreen
 import com.aibox.ui.settings.SettingsScreen
 import com.aibox.ui.shortcut.ShortcutEditorScreen
@@ -106,6 +108,8 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object Translate : Dest("translate", R.string.nav_settings, Icons.Filled.Public)
     // 图像生成：占位路由（等 ImageGen 模块开发）
     data object ImageGen : Dest("image_gen", R.string.nav_settings, Icons.Filled.Add)
+    // 角色扮演：角色 / 身份管理 + 进入角色会话（MVP）
+    data object Roleplay : Dest("roleplay", R.string.nav_settings, Icons.Filled.Apps)
 }
 
 /** 抽屉菜单项（不含 History，History 是独立入口） */
@@ -159,10 +163,17 @@ fun AppNav() {
                         onClick = {
                             scope.launch { drawerState.close() }
                             if (currentRoute != d.route) {
+                                // 从抽屉进聊天 = 普通对话，避免沿用上次的角色扮演状态
+                                if (d.route == Dest.Chat.route) {
+                                    RoleplayLauncher.setPending(0L, 0L)
+                                }
                                 nav.navigate(d.route) {
                                     popUpTo(Dest.Home.route) { saveState = true }
                                     launchSingleTop = true
                                     restoreState = true
+                                }
+                                if (d.route == Dest.Chat.route) {
+                                    nav.currentBackStackEntry?.savedStateHandle?.set("sessionId", 0L)
                                 }
                             }
                         },
@@ -215,6 +226,8 @@ fun AppNav() {
                 composable(Dest.Home.route) {
                     HomeScreen(
                         onOpenChat = { shortcut ->
+                            // 明确进入普通对话：清掉可能残留的角色扮演请求
+                            RoleplayLauncher.setPending(0L, 0L)
                             // 通过 SavedStateHandle 传 shortcutId（ChatScreen 加载后应用预填；TODO）
                             nav.navigate(Dest.Chat.route) {
                                 popUpTo(Dest.Home.route) { saveState = true }
@@ -224,6 +237,15 @@ fun AppNav() {
                             val sid = shortcut?.id
                             if (sid != null) {
                                 nav.currentBackStackEntry?.savedStateHandle?.set("shortcutId", sid)
+                            }
+                            // 普通对话不沿用上一次的历史会话 id
+                            nav.currentBackStackEntry?.savedStateHandle?.set("sessionId", 0L)
+                        },
+                        onOpenRoleplay = {
+                            nav.navigate(Dest.Roleplay.route) {
+                                popUpTo(Dest.Home.route) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
                             }
                         },
                         onOpenImageGen = { shortcut ->
@@ -346,6 +368,8 @@ fun AppNav() {
                 composable(Dest.History.route)  {
                     HistoryScreen(
                         onOpenSession = { sid ->
+                            // 打开历史会话：清掉残留的角色请求，由 session.mode 决定会话形态
+                            RoleplayLauncher.setPending(0L, 0L)
                             // 跳转到 Chat 页，并把 sessionId 传给它
                             nav.navigate(Dest.Chat.route) {
                                 popUpTo(Dest.Home.route) { saveState = true }
@@ -356,6 +380,7 @@ fun AppNav() {
                             nav.currentBackStackEntry?.savedStateHandle?.set("sessionId", sid)
                         },
                         onCreateSession = { sid ->
+                            RoleplayLauncher.setPending(0L, 0L)
                             nav.navigate(Dest.Chat.route) {
                                 popUpTo(Dest.Home.route) { saveState = true }
                                 launchSingleTop = true
@@ -429,6 +454,20 @@ fun AppNav() {
                 composable(Dest.ImageGen.route) {
                     // 图像生成页占位:目前显示"需要安装图像生成模块"提示
                     ImageGenPlaceholderScreen(onBack = { nav.popBackStack() })
+                }
+                composable(Dest.Roleplay.route) {
+                    RoleplayScreen(
+                        onBack = { nav.popBackStack() },
+                        onStartChat = { characterId, personaId ->
+                            RoleplayLauncher.setPending(characterId, personaId)
+                            nav.navigate(Dest.Chat.route) {
+                                popUpTo(Dest.Home.route) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                            nav.currentBackStackEntry?.savedStateHandle?.set("sessionId", 0L)
+                        }
+                    )
                 }
             }
         }
@@ -669,6 +708,7 @@ private fun dispatchSearchClick(entity: SearchableEntity, nav: androidx.navigati
         SearchDomain.CHAT_CONVERSATION,
         SearchDomain.CHAT_MESSAGE -> {
             val sid = (data["sessionId"] as? Number)?.toLong() ?: 0L
+            RoleplayLauncher.setPending(0L, 0L)
             nav.navigate(Dest.Chat.route) {
                 popUpTo(Dest.Home.route) { saveState = true }
                 launchSingleTop = true
