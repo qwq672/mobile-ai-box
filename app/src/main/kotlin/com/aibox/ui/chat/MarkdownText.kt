@@ -379,8 +379,16 @@ private fun parseBlocks(src: String): List<MdBlock> {
             // 组件扩展：```aibox:choices
             if (lang == "choices" || lang == "aibox:choices") {
                 val options = code.toString().lineSequence()
-                    .map { it.trim().removePrefix("- ").removePrefix("* ").trim() }
+                    .map {
+                        it.trim()
+                            .removePrefix("- ").removePrefix("* ").trim()
+                            // 去掉 "A. " / "1、" 这类序号，按钮上只留用户口吻的正文
+                            .replace(Regex("^[A-Za-zＡ-Ｚ][.、:：)）]\\s*"), "")
+                            .replace(Regex("^\\d+[.、:：)）]\\s*"), "")
+                            .trim()
+                    }
                     .filter { it.isNotEmpty() }
+                    .take(4) // 选项过多会把整屏占满，也会诱导模型每轮都出菜单
                     .toList()
                 if (options.isNotEmpty()) blocks.add(MdBlock.Choices(options))
             } else {

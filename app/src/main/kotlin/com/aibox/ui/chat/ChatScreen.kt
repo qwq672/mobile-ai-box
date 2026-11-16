@@ -121,7 +121,6 @@ import com.aibox.data.model.MsgPart
 import com.aibox.ui.shortcut.ShortcutEditorLauncher
 import com.aibox.ui.theme.LocalCornerScale
 import com.aibox.ui.tool.ToolConfirmDialog
-import com.aibox.ui.tool.ToolInvocationBubble
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -164,7 +163,13 @@ fun ChatScreen(
 
     // 始终滚到「底部占位项」，而不是 messages.size（那里其实是流式项的开头，
     // 这正是之前流式时只能看到回复开头、划不到最底的原因）。
-    val listItemCount = ui.messages.size + ui.toolInvocations.size +
+    // 过滤掉空助手消息（旧数据里可能有 content="" 且无 parts 的记录），否则会渲染空气泡。
+    val visibleMessages = remember(ui.messages) {
+        ui.messages.filter { m ->
+            m.role != "assistant" || m.content.isNotBlank() || m.parts.isNotEmpty()
+        }
+    }
+    val listItemCount = visibleMessages.size +
         (if (ui.streaming) 1 else 0) + 1 // 最后一项是底部 spacer
     LaunchedEffect(listItemCount, ui.currentStream.length, ui.streamParts.size) {
         val info = listState.layoutInfo
@@ -397,9 +402,9 @@ fun ChatScreen(
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                             verticalArrangement = Arrangement.spacedBy(if (ui.docStyle) 18.dp else 8.dp)
                         ) {
-                            val lastAssistantIndex = ui.messages.indexOfLast { it.role == "assistant" }
+                            val lastAssistantIndex = visibleMessages.indexOfLast { it.role == "assistant" }
                             itemsIndexed(
-                                items = ui.messages,
+                                items = visibleMessages,
                                 key = { _, m -> "${m.id}-${m.ts}" }
                             ) { index, m ->
                                 MessageItem(
@@ -424,13 +429,9 @@ fun ChatScreen(
                                     } else null
                                 )
                             }
-                            // B6 工具调用 UI: 在消息后渲染活跃的工具调用列表
-                            items(items = ui.toolInvocations, key = { inv -> inv.id }) { inv ->
-                                ToolInvocationBubble(
-                                    invocation = inv,
-                                    onRetry = { vm.retryToolInvocation(inv.id) }
-                                )
-                            }
+                            // 工具调用不再单独渲染第二份：时间线里的 MsgPart.tool
+                            // 已经是唯一来源，额外的 ui.toolInvocations 列表会造成
+                            // “同一张工具卡出现两次、且一直残留在最底部”的问题。
                             if (ui.currentStream.isNotEmpty() || ui.streamParts.isNotEmpty()) {
                                 item(key = "stream") {
                                     MessageItem(

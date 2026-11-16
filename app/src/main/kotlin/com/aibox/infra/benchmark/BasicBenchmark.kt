@@ -123,6 +123,15 @@ class BasicBenchmark(
         val medianTotal = medianLong(validReps.map { it.totalTimeMs })
         val peakMem = reps.map { it.peakMem }.maxOrNull() ?: 0L
 
+        // 所有 rep 都没有产生 token：这不是「很快」，而是根本没跑推理。
+        // 明确标成 failed，避免把 0.00 当成有效测速结果存进历史 / 参与自动调优。
+        if (medianTgTps <= 0.0 && medianPpTps <= 0.0) {
+            val reason = "本次没有产生任何 token（模型/后端未真正推理）。" +
+                "请检查模型是否加载成功，以及 streamInfer 是否收到 token。"
+            LogSystem.error(tag, reason, sessionId = sessionId)
+            return BenchmarkResult.failed(spec, reason)
+        }
+
         // ---- 能耗 / 环境快照后 ----
         val energyAfter = energyProfiler.after()
         val energyMj = energyProfiler.computeMilliJoules(energyBefore, energyAfter)

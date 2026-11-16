@@ -60,7 +60,18 @@ class CalculatorTool : Tool {
     ): Outcome<ToolResult> {
         return try {
             val expression = (params["expression"] as? String)?.takeIf { it.isNotBlank() }
-                ?: return Outcome.Failure("Missing expression")
+                ?: return Outcome.Failure(
+                    "Missing expression：expression 必须是数学表达式，例如 1+2、sqrt(16)"
+                )
+
+            // 小模型常把「请告诉我你想算什么」整句塞进 expression。
+            // 这里提前拦下并给出可执行的纠错提示，比抛解析异常更有用。
+            if (expression.any { it.code in 0x4E00..0x9FFF }) {
+                return Outcome.Failure(
+                    "expression 不能包含自然语言：'$expression'。请改成算式（如 1+2、sqrt(16)、sin(pi/2)）；" +
+                        "如果还不知道要算什么，先用一句话向用户确认，不要调用工具。"
+                )
+            }
 
             val calculator = ExpressionParser()
             val raw = calculator.evaluate(expression)

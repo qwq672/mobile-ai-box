@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 助手消息的时间线解析。
@@ -186,9 +187,9 @@ fun encodeToolPartMarker(part: MsgPart): String {
 fun buildToolPrompt(tools: List<ToolFunctionSchema>): String {
     if (tools.isEmpty()) return ""
     val lines = tools.joinToString("\n") { t ->
-        val params = parameterKeys(t.parameters)
+        val params = parameterSummary(t.parameters)
         val desc = t.description.lineSequence().firstOrNull()?.trim()?.take(60).orEmpty()
-        if (params.isBlank()) "- ${t.name}：$desc" else "- ${t.name}（参数：$params）：$desc"
+        if (params.isBlank()) "- ${t.name}：$desc" else "- ${t.name}（$params）：$desc"
     }
     return """可调用工具（按需使用，一次只调用一个）：
 $lines
@@ -197,14 +198,25 @@ $lines
 ```aibox:tool
 {"name":"工具名","arguments":{...}}
 ```
-执行结果会以「工具执行结果」消息返回，不要编造结果。"""
+参数必须符合上面声明的类型；不确定参数该怎么填时先问用户，不要凭猜测调用。执行结果会以「工具执行结果」消息返回，不要编造结果。"""
 }
 
-/** 从 JSON Schema 里取参数名列表（只取键名，不展开类型 / 描述）。 */
-private fun parameterKeys(schema: String): String = runCatching {
-    markerJson.parseToJsonElement(schema).jsonObject["properties"]
-        ?.jsonObject?.keys?.joinToString(", ")
-        ?: ""
+/**
+ * 从 JSON Schema 提取「参数名: 类型 - 说明」。
+ *
+ * 只给参数名是不够的：小模型不知道 `expression` 期待的是算式，
+ * 会把「请告诉我你想算什么」整句塞进去，导致工具直接失败。
+ */
+private fun parameterSummary(schema: String): String = runCatching {
+    val props = markerJson.parseToJsonElement(schema).jsonObject["properties"]?.jsonObject
+        ?: return@runCatching ""
+    props.entries.joinToString(", ") { (name, element) ->
+        val obj = runCatching { element.jsonObject }.getOrNull()
+        val type = obj?.get("type")?.jsonPrimitive?.content ?: "string"
+        val desc = obj?.get("description")?.jsonPrimitive?.content
+            ?.lineSequence()?.firstOrNull()?.trim()?.take(36)
+        if (desc.isNullOrBlank()) "$name: $type" else "$name: $type - $desc"
+    }
 }.getOrDefault("")
 
 // ---------------- 内部实现 ----------------

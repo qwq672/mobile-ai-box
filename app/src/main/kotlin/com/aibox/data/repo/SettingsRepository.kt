@@ -83,7 +83,7 @@ class SettingsRepository(private val context: Context) {
     val lastModelId: Flow<Long> = context.dataStore.data.map { (it[Keys.LAST_MODEL_ID] ?: -1L).toLong() }
     /** 思考强度："off" / "low" / "medium" / "high"。旧数据回退到 thinking_mode 开关。 */
     val thinkingLevel: Flow<String> = context.dataStore.data.map { p ->
-        p[Keys.THINKING_LEVEL] ?: if (p[Keys.THINKING_MODE] == false) "off" else "medium"
+        p[Keys.THINKING_LEVEL] ?: if (p[Keys.THINKING_MODE] == false) "off" else "low"
     }
     val thinkingMode: Flow<Boolean> = thinkingLevel.map { it != "off" }
 

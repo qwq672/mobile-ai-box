@@ -4,8 +4,12 @@ import com.aibox.data.repo.SettingsRepository
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * V1 → V2 适配器：把现有的 V1 Backend（CpuBackend / VulkanBackend / OpenClBackend / NpuBackend）
@@ -125,32 +129,65 @@ class V1BackendAdapter(
     override fun streamInfer(
         request: InferenceRequest,
         loadedModel: LoadedModel
-    ): Flow<InferenceResult.StreamChunk> = flow {
+    ): Flow<InferenceResult.StreamChunk> = callbackFlow {
         if (request.taskType != TaskType.TEXT_GENERATION) {
-            emit(InferenceResult.StreamChunk(ModalityOutput.Text("[error] V1 adapter only supports TEXT_GENERATION"), done = true))
-            return@flow
+            trySend(
+                InferenceResult.StreamChunk(
+                    ModalityOutput.Text("[error] V1 adapter only supports TEXT_GENERATION"),
+                    done = true
+                )
+            )
+            close()
+            return@callbackFlow
         }
         val textInput = request.inputs.filterIsInstance<ModalityInput.Text>().firstOrNull()
         if (textInput == null) {
-            emit(InferenceResult.StreamChunk(ModalityOutput.Text("[error] Missing text input"), done = true))
-            return@flow
+            trySend(InferenceResult.StreamChunk(ModalityOutput.Text("[error] Missing text input"), done = true))
+            close()
+            return@callbackFlow
         }
-        try {
-            kotlinx.coroutines.runBlocking {
+
+        // 真正把 token 转成 chunk 推给收集方。
+        // 之前这里 onToken 是空的、成功路径也不 emit，导致基准测试永远数到 0 个 token，
+        // PP/TG 全显示 0.00（看起来像测速完成，实际什么都没测）。
+        val completed = AtomicBoolean(false)
+        val job = launch(Dispatchers.IO) {
+            try {
                 backend.completion(
                     prompt = textInput.content,
                     onToken = { token ->
-                        // 同步流式：在 V1 completion 协程内通过 emit 推到 V2 flow
-                        // 注意：runBlocking 内 emit 会被 suspend 阻塞,这是简化方案
+                        if (token.isNotEmpty()) {
+                            trySend(
+                                InferenceResult.StreamChunk(
+                                    ModalityOutput.Text(token),
+                                    done = false
+                                )
+                            )
+                        }
                     },
-                    onStopReason = { /* ignored */ }
+                    onStopReason = { /* 终态在 completion 返回后统一发 done */ }
                 )
+                completed.set(true)
+                trySend(InferenceResult.StreamChunk(ModalityOutput.Text(""), done = true))
+                close()
+            } catch (t: Throwable) {
+                LogSystem.error(TAG, "V1 adapter streamInfer failed: ${t.message}", t)
+                trySend(
+                    InferenceResult.StreamChunk(
+                        ModalityOutput.Text("[error] ${t.message ?: t.javaClass.simpleName}"),
+                        done = true
+                    )
+                )
+                close()
             }
-            // 简化版：V1 不支持真流式跨协程,这里只 emit 一次完整结果
-            // 完整流式需要 V1 completion 改用 callbackFlow 包装,后续优化
-            // 当前先 emit 一个 done chunk 让 benchmark / 简单调用可用
-        } catch (e: Throwable) {
-            emit(InferenceResult.StreamChunk(ModalityOutput.Text("[error] ${e.message}"), done = true))
+        }
+
+        awaitClose {
+            job.cancel()
+            // 只有被收集方提前取消时才中断推理；正常结束不要误伤下一轮
+            if (!completed.get()) {
+                runCatching { backend.interrupt() }
+            }
         }
     }
 

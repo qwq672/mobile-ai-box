@@ -36,9 +36,10 @@ import kotlinx.coroutines.launch
  * 告诉模型回复会经过 Markdown 扩展渲染。
  *
  * 刻意压成一行：小模型上下文宝贵，长篇能力说明反而会提高复读 / 幻觉概率。
+ * 同时对 choices 做了硬约束：只在真正需要二选一时用，且不能代替正文。
  */
 private const val UI_CAPABILITY_HINT =
-    "回复用 Markdown，数学用 \$...\$ 或 \$\$...\$\$；需要用户选择时输出 ```aibox:choices 代码块（每行一个选项）。"
+    "回复用 Markdown。只有确实需要用户在 2~4 个方案中做选择时，才输出 ```aibox:choices 代码块：每行一条、用用户口吻、最多 4 条；不要每轮都给选项，不要用选项代替回答。"
 
 class ChatViewModel : ViewModel() {
 
@@ -162,6 +163,8 @@ class ChatViewModel : ViewModel() {
     }
 
     fun loadSession(sessionId: Long) {
+        // 切换会话时清掉上一个会话遗留的工具卡片
+        toolInvocationViewModel.clearHistory()
         viewModelScope.launch {
             if (sessionId == 0L) {
                 _ui.value = _ui.value.copy(messages = emptyList(), sessionId = 0, sessionTitle = "")
@@ -205,6 +208,7 @@ class ChatViewModel : ViewModel() {
      * 这条历史会话仍能按创建时的设定继续（删除角色则退化为普通对话）。
      */
     fun startRoleplay(characterId: Long, personaId: Long) {
+        toolInvocationViewModel.clearHistory()
         viewModelScope.launch {
             val repo = container.roleplayRepository
             val c = repo.getCharacter(characterId)
@@ -247,6 +251,7 @@ class ChatViewModel : ViewModel() {
 
     /** 退出角色扮演，回到空白普通会话；历史会话仍保留在历史列表里。 */
     fun resetToChat() {
+        toolInvocationViewModel.clearHistory()
         _ui.value = _ui.value.copy(
             sessionId = 0,
             sessionTitle = "",
@@ -266,6 +271,7 @@ class ChatViewModel : ViewModel() {
     }
 
     fun newSession(onCreated: (Long) -> Unit = {}) {
+        toolInvocationViewModel.clearHistory()
         viewModelScope.launch {
             val modelPath = engine.state.value.modelPath
             val title = "新话题 - ${System.currentTimeMillis() % 100000}"
@@ -322,6 +328,9 @@ class ChatViewModel : ViewModel() {
         )
         LogSystem.info("aibox.ui.chat", "ChatViewModel: send ${text.length} chars, ${attachments.size} attachments (sid=$sid)")
 
+        // 新一轮开始：清掉上一轮遗留的工具调用卡片（进行中的会保留）
+        toolInvocationViewModel.clearHistory()
+
         viewModelScope.launch {
             runCatching { chatRepo.addMessage(sid, msg) }
                 .onSuccess { newId -> setPersistedId(msg.ts, msg.role, newId) }
@@ -330,6 +339,19 @@ class ChatViewModel : ViewModel() {
 
         viewModelScope.launch {
             val gen = generate(sid, _ui.value.messages)
+            // 空回复不落库、不渲染：之前会生成一条 content="" 的助手消息，
+            // 在气泡模式下表现为“空气泡”，用户只能继续发「？」追问。
+            if (gen.text.isBlank()) {
+                _ui.value = _ui.value.copy(
+                    streaming = false,
+                    currentStream = "",
+                    streamParts = emptyList(),
+                    errorMessage = gen.error
+                        ?: "模型本轮没有产生可见文本（可能立即结束，或只调用了工具）。可以重试一次。"
+                )
+                LogSystem.warn("aibox.ui.chat", "ChatViewModel: empty assistant output, skipped")
+                return@launch
+            }
             val assistant = ChatMessage(
                 role = "assistant",
                 content = gen.text,
@@ -477,7 +499,15 @@ class ChatViewModel : ViewModel() {
         val text = parts.filter { it.kind == MsgPart.KIND_TEXT && it.text.isNotBlank() }
             .joinToString("\n\n") { it.text.trim() }
             .trim()
-            .ifBlank { rawAll.toString().trim() }
+            .ifBlank {
+                // 兜底：只有没有正文 part 时才回退到原始输出，并且去掉思考块与工具代码块，
+                // 否则「只调用了工具」的回合会把 JSON 当成正文塞进气泡。
+                rawAll.toString()
+                    .replace(Regex("<think>[\\s\\S]*?</think>"), "")
+                    .replace(Regex("```aibox:tool[\\s\\S]*?```"), "")
+                    .replace(Regex("```aibox:tool[\\s\\S]*$"), "")
+                    .trim()
+            }
         val genMs = if (firstTokMs > 0) (System.currentTimeMillis() - firstTokMs).coerceAtLeast(1) else 0L
         val tps = if (tokCount > 0 && genMs > 0) tokCount * 1000f / genMs else 0f
         return Generated(text, parts, error, tps)

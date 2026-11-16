@@ -40,10 +40,10 @@ llama_sampler* bridge_build_sampler() {
     auto chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
     // (n_vocab, penalty_last_n, penalty_repeat, penalty_freq, penalty_present)
     //
-    // penalty_last_n 从 64 提到 512：长回答里 64 token 的窗口太短，
-    // 循环往往在间隔上百 token 后才复现，短窗口完全管不住；512 覆盖常见
-    // 段落级复读，同时不改变用户滑块的 repeat penalty 强度。
-    llama_sampler_chain_add(chain, llama_sampler_init_penalties(n_vocab, 512, s.repeat_penalty, 0.0f, 0.0f));
+    // penalty_last_n 64 → 256：64 的窗口太短，段落级复读管不住；
+    // 512 对 2B 小模型又偏强，会把它推离正常措辞（表现为“越罚越怪”）。
+    // 256 覆盖常见复读距离，同时不改变用户滑块的 repeat penalty 强度。
+    llama_sampler_chain_add(chain, llama_sampler_init_penalties(n_vocab, 256, s.repeat_penalty, 0.0f, 0.0f));
     llama_sampler_chain_add(chain, llama_sampler_init_top_k(s.top_k));
     llama_sampler_chain_add(chain, llama_sampler_init_top_p(s.top_p, 1));
     llama_sampler_chain_add(chain, llama_sampler_init_temp (s.temperature));
