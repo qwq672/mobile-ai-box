@@ -1,0 +1,46 @@
+name: NPU toolchain probe
+
+# 临时工作流：验证公开的 Snapdragon 工具链容器能否在托管 runner 上完成 NPU 构建。
+# 只在 npu-probe 分支触发，不参与 main 构建。
+on:
+  push:
+    branches: [ npu-probe ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    container: ghcr.io/snapdragon-toolchain/arm64-android:v0.8
+    timeout-minutes: 30
+    steps:
+      - name: Probe environment
+        run: |
+          set -x
+          uname -a
+          head -3 /etc/os-release
+          echo "HEXAGON_SDK_ROOT=$HEXAGON_SDK_ROOT"
+          ls -la "$HEXAGON_SDK_ROOT" | head -20
+          echo "=== qurt arches ==="
+          ls "$HEXAGON_SDK_ROOT/rtos/qurt" 2>/dev/null | head -20
+          echo "=== hexagon tool libs ==="
+          ls "$HEXAGON_SDK_ROOT/tools/HEXAGON_Tools/21.0.04/Tools/target/hexagon/lib" 2>/dev/null | head -20
+          echo "=== java / cmake / ninja / make ==="
+          which java || true; java -version 2>&1 | head -2 || true
+          which cmake || true; cmake --version 2>&1 | head -1 || true
+          which ninja make gcc g++ || true
+          echo "=== ndk ==="
+          ls /opt/android-ndk-r29 2>/dev/null | head
+          echo "=== android sdk / sdkmanager ==="
+          find / -maxdepth 4 -name sdkmanager 2>/dev/null | head
+          ls /opt/android-sdk 2>/dev/null | head
+          echo "=== qaic ==="
+          which qaic || true
+          ls "$HEXAGON_SDK_ROOT/ipc/fastrpc/qaic/bin" 2>/dev/null | head
+          echo "=== vulkan / glslc ==="
+          ls /usr/include/vulkan/vulkan.hpp 2>/dev/null || true
+          which glslc glslangValidator 2>/dev/null || true
+          echo "=== disk ==="
+          df -h / | tail -1
