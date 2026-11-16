@@ -33,18 +33,12 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * 告诉模型回复会经过 Markdown 扩展渲染，让数学公式 / 图片 / 任务清单 /
- * 选择按钮这些能力真正被用起来。保持简短，避免小模型被提示词带偏。
+ * 告诉模型回复会经过 Markdown 扩展渲染。
+ *
+ * 刻意压成一行：小模型上下文宝贵，长篇能力说明反而会提高复读 / 幻觉概率。
  */
-private const val UI_CAPABILITY_HINT = """你的回复会以 Markdown 渲染，按需使用以下扩展，不要滥用：
-1. 数学公式：行内 $...$，独立公式 $$...$$
-2. 图片：![说明](https://...)（只使用可直接访问的 https 图片地址）
-3. 任务清单：- [ ] 待办 / - [x] 已完成
-4. 需要用户做选择时，用 aibox:choices 代码块输出 2~4 个选项（每行一个），客户端会渲染成按钮，用户点击后该选项会作为下一条消息发给你：
-```aibox:choices
-选项一
-选项二
-```"""
+private const val UI_CAPABILITY_HINT =
+    "回复用 Markdown，数学用 \$...\$ 或 \$\$...\$\$；需要用户选择时输出 ```aibox:choices 代码块（每行一个选项）。"
 
 class ChatViewModel : ViewModel() {
 
@@ -271,6 +265,7 @@ class ChatViewModel : ViewModel() {
         val rawAll = StringBuilder()
         var firstTokMs = 0L
         var tokCount = 0
+        var lastUiPushMs = 0L
         var error: String? = null
         var rounds = 0
 
@@ -284,11 +279,16 @@ class ChatViewModel : ViewModel() {
                         if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
                         tokCount++
                         turn.append(tok)
-                        // 实时解析：思考块 / 工具块随 token 增长即时切换成对应样式
-                        _ui.value = _ui.value.copy(
-                            currentStream = rawAll.toString() + turn,
-                            streamParts = parts + parseTimeline(turn.toString())
-                        )
+                        // 流式 UI 按 ~30fps 合批更新：逐 token 触发 Compose 重组 + Markdown
+                        // 全量解析会把 CPU 一直顶在高位，明显增加发热。
+                        val now = System.currentTimeMillis()
+                        if (now - lastUiPushMs >= 33L) {
+                            lastUiPushMs = now
+                            _ui.value = _ui.value.copy(
+                                currentStream = rawAll.toString() + turn,
+                                streamParts = parts + parseTimeline(turn.toString())
+                            )
+                        }
                     },
                     onStop = { reason ->
                         if (reason == "decode_failed" || reason == "callback_error" || reason.startsWith("exception")) {
@@ -300,6 +300,11 @@ class ChatViewModel : ViewModel() {
                 rawAll.append(roundText)
                 val call = if (tools.isNotEmpty()) extractToolCall(roundText) else null
                 val parsed = parseTimeline(roundText)
+                // 收尾补一次完整状态，避免合批把最后不足 33ms 的 token 丢在界面上
+                _ui.value = _ui.value.copy(
+                    currentStream = rawAll.toString(),
+                    streamParts = parts + parsed
+                )
 
                 if (call == null) {
                     parts += parsed

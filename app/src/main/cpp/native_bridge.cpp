@@ -1139,16 +1139,17 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     }
     std::string sp(buf.data(), needed);
 
-    // 思考关：assistant 起始后预填空的思考块，让模型直接回答。
+    // 思考关：assistant 起始后预填一个“空思考块”，等价于 enable_thinking=false。
+    // 只写 </think> 时部分模型会把它当普通文本继续“思考”，必须给成完整空块。
     // （llama_chat_apply_template 不走 Jinja，无法传 enable_thinking，只能用预填实现硬开关）
     if (!thinkingMode && template_supports_thinking) {
-        const std::string tail = sp.size() > 24 ? sp.substr(sp.size() - 24) : sp;
+        const std::string tail = sp.size() > 32 ? sp.substr(sp.size() - 32) : sp;
         const bool already_closed = tail.find("</think>") != std::string::npos ||
-                                    tail.find("") != std::string::npos;
+                                    tail.find("<|/think|>") != std::string::npos;
         if (!already_closed) {
             if (!sp.empty() && sp.back() != '\n') sp += "\n";
-            sp += "</think>\n\n";
-            LOGI("llamaCompletionChat: thinking off, prefilled </think>");
+            sp += "<think>\n\n</think>\n\n";
+            LOGI("llamaCompletionChat: thinking off, prefilled empty think block");
         }
     }
     LOGI("llamaCompletionChat: formatted prompt_len=%zu", sp.size());
@@ -1188,14 +1189,28 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
     g_last_prompt = sp;
 
     // tokenize
+    // 模板可能已经自带 BOS（Llama3 的 <|begin_of_text|>、ChatML 的 <|im_start|>、
+    // Gemma 的 <bos> 等），这时再让 tokenizer 加一次就会重复起始符，部分模型
+    // 会因此复读或答非所问；只有模板没带起始标记时才按模型默认补。
+    const bool prompt_has_bos =
+        sp.rfind("<s>", 0) == 0 ||
+        sp.rfind("<bos>", 0) == 0 ||
+        sp.rfind("<|begin_of_text|>", 0) == 0 ||
+        sp.rfind("<|startoftext|>", 0) == 0 ||
+        sp.rfind("<|im_start|>", 0) == 0 ||
+        sp.rfind("<|start_header_id|>", 0) == 0 ||
+        sp.rfind("<|start|>", 0) == 0;
+    const bool add_special = !prompt_has_bos;
+    LOGI("llamaCompletionChat: prompt_has_bos=%d add_special=%d",
+         prompt_has_bos ? 1 : 0, add_special ? 1 : 0);
     std::vector<llama_token> tokens;
     {
         int32_t n = llama_tokenize(g_vocab, sp.c_str(), (int32_t)sp.size(),
-                                   nullptr, 0, true, true);
+                                   nullptr, 0, add_special, true);
         if (n < 0) n = -n;
         tokens.resize((size_t)n);
         int32_t actual = llama_tokenize(g_vocab, sp.c_str(), (int32_t)sp.size(),
-                                        tokens.data(), n, true, true);
+                                        tokens.data(), n, add_special, true);
         if (actual < 0) actual = -actual;
         tokens.resize((size_t)actual);
     }
@@ -1247,16 +1262,50 @@ Java_com_aibox_infra_jni_NativeBridge_llamaCompletionChat(
 
     // generation
     if (!stopped) {
+        // 只统计“本次生成”：prefill 的 n_eval 会把 t/s 拉高，UI 上看到的
+        // 就不是真实出字速度了。生成结束后由外部读取 llama_perf_context。
+        llama_perf_context_reset(g_ctx);
         llama_sampler* s = bridge_build_sampler();
         char piece_buf[256];
         int gen_count = 0;
+        std::vector<llama_token> recent;
+        recent.reserve(64);
         for (int i = 0; i < 2048; i++) {
             if (g_interrupt.load()) { stop_reason = "interrupted"; break; }
             llama_token id = llama_sampler_sample(s, g_ctx, -1);
             if (llama_vocab_is_eog(g_vocab, id)) { stop_reason = "stop"; break; }
 
+            // 退化复读检测：连续 8 个 token 原样重复 3 次即判定为循环。
+            // 比字符串级检测更早、更省，也不会被空格 / 标点变化绕过。
+            recent.push_back(id);
+            if (recent.size() > 24) recent.erase(recent.begin());
+            if (recent.size() == 24) {
+                bool repeated = true;
+                for (int k = 0; k < 8; k++) {
+                    if (recent[8 + k] != recent[k] || recent[16 + k] != recent[k]) {
+                        repeated = false;
+                        break;
+                    }
+                }
+                if (repeated) { stop_reason = "repetition"; break; }
+            }
+
             int r = llama_token_to_piece(g_vocab, id, piece_buf, sizeof(piece_buf), 0, true);
             std::string piece(r > 0 ? piece_buf : "", r > 0 ? (size_t)r : 0);
+
+            // 部分模型的结束符没有被 vocab 标成 EOG（或模板把结束符当文本输出），
+            // 做一层字符串兜底：命中就截断并结束，避免 <|im_end|> 泄漏到气泡里。
+            size_t cut = std::string::npos;
+            for (const char* eog : {"<|im_end|>", "<|endoftext|>", "<|eot_id|>", "<|eom_id|>"}) {
+                size_t p = piece.find(eog);
+                if (p != std::string::npos && (cut == std::string::npos || p < cut)) cut = p;
+            }
+            if (cut != std::string::npos) {
+                if (cut > 0) call_string_cb(env, tokenCb, piece.substr(0, cut));
+                stop_reason = "stop";
+                break;
+            }
+
             if (!call_string_cb(env, tokenCb, piece)) {
                 stop_reason = "callback_error"; break;
             }

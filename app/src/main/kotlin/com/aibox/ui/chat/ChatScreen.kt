@@ -89,6 +89,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -119,6 +120,7 @@ import com.aibox.ui.shortcut.ShortcutEditorLauncher
 import com.aibox.ui.theme.LocalCornerScale
 import com.aibox.ui.tool.ToolConfirmDialog
 import com.aibox.ui.tool.ToolInvocationBubble
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -859,6 +861,28 @@ private fun EmptyModelState() {
     }
 }
 
+/** 空会话建议池（18 条，每次展示 3 条并定时轮换）。 */
+private val CHAT_SUGGESTIONS = listOf(
+    "用三句话介绍一下你自己",
+    "帮我列出今天的待办清单",
+    "用通俗的话解释一下 MoE 模型",
+    "把这段话改写得更简洁",
+    "帮我写一段周末出行计划",
+    "翻译成英文并润色",
+    "总结一下这段文字的要点",
+    "给我三个标题选项",
+    "用一个比喻解释注意力机制",
+    "帮我写一封请假邮件",
+    "这段代码可能哪里有问题",
+    "推荐三本入门书",
+    "我想练口语，陪我聊两句",
+    "把这段需求拆成任务列表",
+    "帮我想几个产品名字",
+    "用表格对比一下 A 和 B",
+    "帮我安排一个番茄钟计划",
+    "解释一下这件事为什么会这样"
+)
+
 /** 空会话：居中问候 + 建议提问（参考 Gemini / DeepSeek 的起始页）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -866,11 +890,17 @@ private fun EmptyChatState(
     modifier: Modifier = Modifier,
     onSuggestion: (String) -> Unit
 ) {
-    val suggestions = listOf(
-        "用三句话介绍一下你自己",
-        "帮我列出今天的待办清单",
-        "用通俗的话解释一下 MoE 模型"
-    )
+    // 每次进入空会话 / 每 12 秒换一组建议，避免永远是那三条。
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(12_000)
+            tick++
+        }
+    }
+    val suggestions = remember(tick) {
+        List(3) { i -> CHAT_SUGGESTIONS[(tick * 3 + i) % CHAT_SUGGESTIONS.size] }
+    }
     Column(
         modifier = modifier.padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1126,6 +1156,15 @@ private fun MessageItem(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
+            // 单条消息的真实生成速度（Kotlin 侧按首 token→结束的墙钟时间算）
+            if (m.tokensPerSecond > 0f) {
+                Text(
+                    text = "%.1f t/s".format(m.tokensPerSecond),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+            }
             MiniAction(Icons.Outlined.ContentCopy, "复制", onCopy)
             if (onRegenerate != null) {
                 MiniAction(Icons.Outlined.Refresh, "重新生成", onRegenerate)

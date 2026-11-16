@@ -29,7 +29,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "v261116-5"
+        versionName = "v261116-6"
 
         ndk {
             // 手机几乎都是 arm64；缩小体积只打这一个

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -142,14 +144,19 @@ fun HomeScreen(
             contentPadding = PaddingValues(vertical = DesignTokens.spacing12),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing16)
         ) {
-            // ============== 0. 实时设备状态 ==============
+            // ============== 0. 问候卡片（时段问候 + 子问候 + 轮换建议） ==============
+            item(key = "greeting") {
+                GreetingCard(modifier = Modifier.padding(horizontal = DesignTokens.spacing16))
+            }
+
+            // ============== 1. 实时设备状态 ==============
             item(key = "live_status") {
                 LiveDeviceStatus(
                     modifier = Modifier.padding(horizontal = DesignTokens.spacing16)
                 )
             }
 
-            // ============== 1. 快捷方式区 ==============
+            // ============== 2. 快捷方式区 ==============
             item(key = "section_shortcuts_header") {
                 SectionHeader(title = "快捷方式")
             }
@@ -181,7 +188,7 @@ fun HomeScreen(
                 }
             }
 
-            // ============== 2. 功能区 ==============
+            // ============== 3. 功能区 ==============
             item(key = "section_functions_header") {
                 SectionHeader(title = "功能")
             }
@@ -227,7 +234,7 @@ fun HomeScreen(
                 }
             }
 
-            // ============== 3. 最近模型 ==============
+            // ============== 4. 最近模型 ==============
             item(key = "section_recent_models_header") {
                 SectionHeader(title = "最近模型")
             }
@@ -245,7 +252,7 @@ fun HomeScreen(
                 }
             }
 
-            // ============== 4. 设备状态 ==============
+            // ============== 5. 设备状态 ==============
             item(key = "section_thermal_header") {
                 SectionHeader(title = "设备状态")
             }
@@ -269,13 +276,26 @@ fun HomeScreen(
 
 @Composable
 private fun SectionHeader(title: String) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing4),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
+    ) {
+        // 左侧一小段主题色竖条，让分区标题更像“块”而不是漂浮的文字
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(16.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Colors.primary)
+        )
         Text(
             text = title,
             style = Type.titleMedium,
             color = Colors.primary,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing4)
+            fontWeight = FontWeight.SemiBold
         )
     }
 }

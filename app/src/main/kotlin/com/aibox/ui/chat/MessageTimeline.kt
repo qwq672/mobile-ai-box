@@ -180,22 +180,32 @@ fun encodeToolPartMarker(part: MsgPart): String {
 /**
  * 给本地模型注入工具说明（云端走原生 function calling，不需要这段）。
  *
- * 本地后端只吃 role/content，因此用文本协议描述可用工具与调用格式。
+ * 每个工具只占一行（名称 + 参数键 + 截断后的说明），不再内联完整 JSON Schema：
+ * 小模型上下文有限，长 schema 会显著提高复读与胡编工具参数的概率。
  */
 fun buildToolPrompt(tools: List<ToolFunctionSchema>): String {
     if (tools.isEmpty()) return ""
     val lines = tools.joinToString("\n") { t ->
-        "- ${t.name}：${t.description} 参数 schema: ${t.parameters}"
+        val params = parameterKeys(t.parameters)
+        val desc = t.description.lineSequence().firstOrNull()?.trim()?.take(60).orEmpty()
+        if (params.isBlank()) "- ${t.name}：$desc" else "- ${t.name}（参数：$params）：$desc"
     }
-    return """你可以调用以下工具，仅在确实需要时使用，一次只调用一个：
+    return """可调用工具（按需使用，一次只调用一个）：
 $lines
 
-调用方式：单独输出一个代码块，内容必须是合法 JSON：
+调用格式：单独输出一个代码块，内容必须是合法 JSON：
 ```aibox:tool
 {"name":"工具名","arguments":{...}}
 ```
-客户端执行后会以「工具执行结果」消息把结果发给你，你再继续回答。不要编造工具结果。"""
+执行结果会以「工具执行结果」消息返回，不要编造结果。"""
 }
+
+/** 从 JSON Schema 里取参数名列表（只取键名，不展开类型 / 描述）。 */
+private fun parameterKeys(schema: String): String = runCatching {
+    markerJson.parseToJsonElement(schema).jsonObject["properties"]
+        ?.jsonObject?.keys?.joinToString(", ")
+        ?: ""
+}.getOrDefault("")
 
 // ---------------- 内部实现 ----------------
 

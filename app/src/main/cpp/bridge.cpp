@@ -38,8 +38,12 @@ llama_sampler* bridge_build_sampler() {
     if (n_vocab <= 0) n_vocab = 32000; // 兜底，理论上不该走到
 
     auto chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    // llama.cpp 0.4.x: (n_vocab, penalty_last_n, penalty_repeat, penalty_freq, penalty_present)
-    llama_sampler_chain_add(chain, llama_sampler_init_penalties(n_vocab, 64, s.repeat_penalty, 0.0f, 0.0f));
+    // (n_vocab, penalty_last_n, penalty_repeat, penalty_freq, penalty_present)
+    //
+    // penalty_last_n 从 64 提到 512：长回答里 64 token 的窗口太短，
+    // 循环往往在间隔上百 token 后才复现，短窗口完全管不住；512 覆盖常见
+    // 段落级复读，同时不改变用户滑块的 repeat penalty 强度。
+    llama_sampler_chain_add(chain, llama_sampler_init_penalties(n_vocab, 512, s.repeat_penalty, 0.0f, 0.0f));
     llama_sampler_chain_add(chain, llama_sampler_init_top_k(s.top_k));
     llama_sampler_chain_add(chain, llama_sampler_init_top_p(s.top_p, 1));
     llama_sampler_chain_add(chain, llama_sampler_init_temp (s.temperature));
