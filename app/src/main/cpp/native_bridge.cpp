@@ -120,6 +120,7 @@ static MemoryPool g_pool;
 static std::string g_backend_str = "cpu";
 // 实际生效的加载参数（用于 UI 显示"真实生效值"，避免请求 Q8_0 实际被降级 F16 这类黑盒）
 static std::string g_effective_kv = "unknown";
+static std::mutex g_effective_mtx;
 static std::atomic<bool> g_effective_fa{false};
 static std::atomic<int>  g_effective_threads{0};
 // 当前模型是否为 hybrid（SSM + attention）架构；影响 prompt 分块大小等保守策略
@@ -717,7 +718,10 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         else if (kvq_str == "q4_0")  cp.type_k = cp.type_v = GGML_TYPE_Q4_0;
         else                         cp.type_k = cp.type_v = GGML_TYPE_F16;
         // 记录真正生效的值（kvq_str 可能刚被降级成 f16）
-        g_effective_kv = kvq_str;
+        {
+            std::lock_guard<std::mutex> effLk(g_effective_mtx);
+            g_effective_kv = kvq_str;
+        }
         g_effective_fa.store(effectiveFa);
         g_effective_threads.store(cp.n_threads);
 
@@ -770,7 +774,10 @@ Java_com_aibox_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
     g_ctx_used.store(0);
     g_n_past_total = 0;
     g_last_prompt.clear();
-    g_effective_kv = "unknown";
+    {
+        std::lock_guard<std::mutex> effLk(g_effective_mtx);
+        g_effective_kv = "unknown";
+    }
     g_effective_fa.store(false);
     g_effective_threads.store(0);
     g_pool.releaseAll();
@@ -1346,7 +1353,12 @@ Java_com_aibox_infra_jni_NativeBridge_llamaInterrupt(JNIEnv*, jclass) {
 // ---------- 状态 ----------
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_aibox_infra_jni_NativeBridge_llamaEffectiveKv(JNIEnv* env, jclass) {
-    return env->NewStringUTF(g_effective_kv.c_str());
+    std::string kv;
+    {
+        std::lock_guard<std::mutex> lk(g_effective_mtx);
+        kv = g_effective_kv;
+    }
+    return env->NewStringUTF(kv.c_str());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
