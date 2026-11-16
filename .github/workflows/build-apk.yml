@@ -397,7 +397,7 @@ jobs:
           cp -r /tmp/vkhpp/vulkan/* "$NDK_SYSROOT/vulkan/"
           cp -r /tmp/vk/include/vk_video/* "$NDK_SYSROOT/vk_video/" 2>/dev/null || true
           cp -r /tmp/spirv/include/spirv/* "$NDK_SYSROOT/spirv/"
-          HPP_VER=$(grep -E 'static_assert.*VK_HEADER_VERSION' "$NDK_SYSROOT/vulkan/vulkan.hpp" | head -1 | grep -oE '[0-9]+' | head -1)
+          HPP_VER=$(grep -E 'static_assert.*VK_HEADER_VERSION' "$NDK_SYSROOT/vulkan/vulkan.hpp" | head -1 | grep -oE '[0-9]+' | head -1 || true)
           if [ -n "$HPP_VER" ]; then
             sed -i "s/#define VK_HEADER_VERSION [0-9]*/#define VK_HEADER_VERSION $HPP_VER/" "$NDK_SYSROOT/vulkan/vulkan_core.h"
           fi
