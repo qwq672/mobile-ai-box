@@ -163,7 +163,8 @@ fun OptimizationSettingsScreen(
                         }
                     }
                     Text(
-                        "性能优先（Burst）会让首 token 更快，但长文生成更容易发热降速；低电量时可能加快掉电。",
+                        "性能优先会让首 token 更快，但长文生成更容易发热降速；低电量时可能加快掉电。" +
+                            "当前版本通过批大小近似该档位，接入厂商性能接口后会直接下发给 DSP。",
                         style = Type.labelSmall,
                         color = com.aibox.ui.theme.Colors.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = DesignTokens.spacing16)
@@ -176,7 +177,7 @@ fun OptimizationSettingsScreen(
                             key = "opt.lowPowerMode",
                             type = FieldType.SWITCH,
                             title = "低电量模式",
-                            description = "电量低于阈值时缩短空闲卸载，并在聊天页提示；不会擅自改你手动选的 HTP 档",
+                            description = "电量低于阈值时提示，并在下次加载模型时缩小批大小；不会擅自改你手动选的 HTP 档",
                             defaultValue = settings.lowPowerMode
                         ),
                         value = settings.lowPowerMode,

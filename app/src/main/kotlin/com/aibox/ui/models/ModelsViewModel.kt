@@ -112,7 +112,7 @@ class ModelsViewModel : ViewModel() {
             } else config
             // 低电量档：只削峰值功率（批大小），不改上下文与 KV，避免静默影响质量。
             val powerMode = container.powerController.mode.value
-            val loadedConfig = when (powerMode) {
+            val powerCapped = when (powerMode) {
                 com.aibox.domain.power.PowerMode.SAVER -> effectiveConfig.copy(
                     physicalBatch = minOf(effectiveConfig.physicalBatch, 256),
                     batch = minOf(effectiveConfig.batch, 1024)
@@ -123,10 +123,23 @@ class ModelsViewModel : ViewModel() {
                 )
                 com.aibox.domain.power.PowerMode.NORMAL -> effectiveConfig
             }
+            // HTP 档位：当前版本用批大小近似（厂商 DSP 性能接口接入后会直接下发）。
+            val htp = container.powerController.effectiveHtp.value
+            val loadedConfig = when (htp) {
+                com.aibox.domain.power.HtpPerfMode.BALANCED -> powerCapped.copy(
+                    physicalBatch = minOf(powerCapped.physicalBatch, 512),
+                    batch = minOf(powerCapped.batch, 1024)
+                )
+                com.aibox.domain.power.HtpPerfMode.POWERSAVE -> powerCapped.copy(
+                    physicalBatch = minOf(powerCapped.physicalBatch, 256),
+                    batch = minOf(powerCapped.batch, 512)
+                )
+                else -> powerCapped
+            }
             if (loadedConfig != effectiveConfig) {
                 LogSystem.info(
                     "aibox.power",
-                    "loading under ${powerMode.name}: physicalBatch=${loadedConfig.physicalBatch} batch=${loadedConfig.batch}"
+                    "loading: mode=${powerMode.name} htp=$htp physicalBatch=${loadedConfig.physicalBatch} batch=${loadedConfig.batch}"
                 )
             }
             // 插件可能刚安装，或启动时的后台同步还没跑完；加载前再同步一次，
