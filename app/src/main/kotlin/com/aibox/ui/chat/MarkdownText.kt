@@ -90,7 +90,14 @@ fun MarkdownText(
     baseFontSize: Int = 16,
     lineHeight: Int = 24,
     /** 点击 `aibox:choices` 组件按钮时回调，一般用于直接把选项发给模型 */
-    onChoice: (String) -> Unit = {}
+    onChoice: (String) -> Unit = {},
+    /**
+     * 历史消息里的选项是否还可点。
+     *
+     * 只有最新一条助手消息需要可点：旧选项继续做成按钮会让整屏都是菜单，
+     * 也容易误点到很早以前的选项。
+     */
+    choicesEnabled: Boolean = true
 ) {
     val blocks = remember(text) { parseBlocks(text) }
     val primary = MaterialTheme.colorScheme.primary
@@ -267,16 +274,25 @@ fun MarkdownText(
 
                 is MdBlock.Choices -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     block.options.forEachIndexed { idx, option ->
-                        OutlinedButton(
-                            onClick = { onChoice(option) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
+                        if (!choicesEnabled) {
+                            // 历史选项：降级成纯文本，避免整屏都是可点菜单
                             Text(
                                 "${'A' + idx}. $option",
                                 style = MaterialTheme.typography.bodyMedium,
-                                textAlign = TextAlign.Start,
-                                modifier = Modifier.fillMaxWidth()
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        } else {
+                            OutlinedButton(
+                                onClick = { onChoice(option) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "${'A' + idx}. $option",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.Start,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
                 }

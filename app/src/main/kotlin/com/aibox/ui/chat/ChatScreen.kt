@@ -412,6 +412,7 @@ fun ChatScreen(
                                     docStyle = ui.docStyle,
                                     showActions = !ui.streaming && index == lastAssistantIndex,
                                     animate = false,
+                                    choicesEnabled = !ui.streaming && index == lastAssistantIndex,
                                     onCopy = {
                                         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                                 as android.content.ClipboardManager
@@ -1097,6 +1098,7 @@ private fun MessageItem(
     docStyle: Boolean,
     showActions: Boolean,
     animate: Boolean = false,
+    choicesEnabled: Boolean = true,
     onCopy: () -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
     onDelete: () -> Unit = {},
@@ -1167,6 +1169,7 @@ private fun MessageItem(
                         parts = parts,
                         streaming = animate,
                         onChoice = onChoice,
+                        choicesEnabled = choicesEnabled,
                         modifier = if (animate) {
                             Modifier.animateContentSize(animationSpec = tween(120))
                         } else Modifier
@@ -1191,7 +1194,8 @@ private fun MessageItem(
                             AssistantParts(
                                 parts = parts,
                                 streaming = animate,
-                                onChoice = onChoice
+                                onChoice = onChoice,
+                                choicesEnabled = choicesEnabled
                             )
                         }
                     }
@@ -1267,6 +1271,7 @@ private fun AssistantParts(
     parts: List<MsgPart>,
     streaming: Boolean,
     onChoice: (String) -> Unit,
+    choicesEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1284,7 +1289,8 @@ private fun AssistantParts(
                     MarkdownText(
                         text = part.text,
                         color = MaterialTheme.colorScheme.onSurface,
-                        onChoice = onChoice
+                        onChoice = onChoice,
+                        choicesEnabled = choicesEnabled
                     )
                 }
             }

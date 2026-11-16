@@ -66,6 +66,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -84,7 +85,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.domain.inference.BackendType
 import com.aibox.ui.components.SliderWithLabel
 import com.aibox.ui.components.SwitchRow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -446,6 +449,23 @@ fun SettingsScreen(
                         }
                     }
                 }
+            }
+
+            /* ============== 推理框架（LiteRT / ONNX / MNN） ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Memory, title = "推理框架")
+                val frameworkDiagnostics by produceState(
+                    initialValue = emptyList<com.aibox.infra.plugin.PluginDiagnostic>()
+                ) {
+                    value = withContext(Dispatchers.IO) {
+                        runCatching {
+                            com.aibox.AIBoxApp.instance.container.pluginManager.diagnoseKnown()
+                        }.getOrDefault(emptyList())
+                    }
+                }
+                FrameworkStatusCard(
+                    diagnostics = frameworkDiagnostics.filter { it.installed }
+                )
             }
 
             /* ============== 调试 ============== */
@@ -1134,4 +1154,70 @@ private fun hueOfHex(spec: String): Float {
 private fun hsvToHex(hue: Float): String {
     val c = android.graphics.Color.HSVToColor(floatArrayOf(hue, 0.62f, 0.62f))
     return String.format("#%06X", 0xFFFFFF and c)
+}
+
+/**
+ * 推理框架状态卡片：LiteRT / ONNX / MNN 是否安装、是否已绑定。
+ *
+ * 只展示“确实装了”的包；没装的框架不占位，避免设置页堆一排红字。
+ */
+@Composable
+private fun FrameworkStatusCard(
+    diagnostics: List<com.aibox.infra.plugin.PluginDiagnostic>
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (diagnostics.isEmpty()) {
+                Text(
+                    "未检测到 LiteRT / ONNX / MNN 插件。安装模块 APK 后会自动发现并绑定。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                diagnostics.forEach { d ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                frameworkDisplayName(d.packageName),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                d.packageName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (!d.active) {
+                                Text(
+                                    d.reason,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                        Text(
+                            if (d.active) "已启用" else "未启用",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (d.active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun frameworkDisplayName(packageName: String): String = when {
+    packageName.contains("litert", ignoreCase = true) -> "LiteRT-LM"
+    packageName.contains("onnx", ignoreCase = true) -> "ONNX Runtime"
+    packageName.contains("mnn", ignoreCase = true) -> "MNN"
+    else -> packageName
 }

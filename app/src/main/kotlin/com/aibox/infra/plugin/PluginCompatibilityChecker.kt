@@ -91,7 +91,13 @@ class PluginCompatibilityChecker(
         val minVersion = readMinAiboxVersion(pkgInfo)
         val targetSdk = pkgInfo.applicationInfo?.targetSdkVersion ?: 0
         val abiSupported = checkAbi(pkgInfo)
-        val signatureValid = pkgInfo.signingInfo != null || pkgInfo.applicationInfo?.sourceDir != null
+        // signingInfo 是 API 28+；minSdk 26 的机器上直接读会 NoSuchFieldError
+        val signatureValid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkgInfo.signingInfo != null
+        } else {
+            @Suppress("DEPRECATION")
+            !pkgInfo.signatures.isNullOrEmpty()
+        } || pkgInfo.applicationInfo?.sourceDir != null
         val versionOk = isVersionCompatible(minVersion)
         val sdkOk = targetSdk >= Build.VERSION_CODES.O  // 宿主 minSdk=26
         val abiOk = abiSupported
