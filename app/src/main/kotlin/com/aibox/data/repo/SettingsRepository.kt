@@ -232,8 +232,15 @@ class SettingsRepository(private val context: Context) {
     // 欢迎页
     // ===================================================
 
-    /** 是否已完成首次启动欢迎页。 */
-    val onboardingDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.ONBOARDING_DONE] ?: false }
+    /**
+     * 是否已完成首次启动欢迎页。
+     *
+     * 缺省推断：DataStore 里已有任何设置 → 视为老用户，不再弹欢迎页；
+     * 全新安装（DataStore 为空）→ false，展示欢迎页。
+     */
+    val onboardingDone: Flow<Boolean> = context.dataStore.data.map { p ->
+        p[Keys.ONBOARDING_DONE] ?: p.asMap().isNotEmpty()
+    }
 
     suspend fun setOnboardingDone(done: Boolean) =
         context.dataStore.edit { it[Keys.ONBOARDING_DONE] = done }
@@ -286,11 +293,9 @@ class SettingsRepository(private val context: Context) {
      * [Keys.LAST_MODEL_ID]（模型文件还在，保留上次选择更符合预期）。
      */
     suspend fun resetAllSettings() = context.dataStore.edit { p ->
-        val onboarding = p[Keys.ONBOARDING_DONE]
-        val lastModel = p[Keys.LAST_MODEL_ID]
         p.clear()
-        if (onboarding != null) p[Keys.ONBOARDING_DONE] = onboarding
-        if (lastModel != null) p[Keys.LAST_MODEL_ID] = lastModel
+        // 重置后不再弹欢迎页（用户已经在用了），也保留上次选择的模型 id
+        p[Keys.ONBOARDING_DONE] = true
         LogSystem.info("aibox.settings", "resetAllSettings done")
     }
 }
