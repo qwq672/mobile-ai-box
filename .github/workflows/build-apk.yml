@@ -6,14 +6,18 @@ name: Build AIBox APK
 # 结论: main 上之前某个配置有问题, 把 exp-a 的配置 merge 到 main
 on:
   push:
-    branches: [ main, npu-build ]
+    branches: [ main, npu-build, npu-hosted ]
     paths-ignore:
       - '**.md'
       - '.gitignore'
   workflow_dispatch:
     inputs:
       build_npu:
-        description: '同时构建 Hexagon NPU 版（需要自托管 runner 在线）'
+        description: '构建 Hexagon NPU 版（自托管 runner）'
+        type: boolean
+        default: false
+      build_npu_hosted:
+        description: '构建 Hexagon NPU 版（GitHub 托管 runner + Snapdragon 工具链容器）'
         type: boolean
         default: false
 
@@ -313,5 +317,144 @@ jobs:
           path: |
             aibox-hexagon-*.apk
             aibox-hexagon-*.apk.sha256
+          retention-days: 14
+
+  # ============================================================
+  # Hexagon NPU 版（GitHub 托管 runner + 公开 Snapdragon 工具链容器）
+  # 不需要自托管 runner；容器里自带 Hexagon SDK 6.7 / HTP 工具链 / qaic。
+  # 触发：workflow_dispatch 勾选 build_npu_hosted，或 push 到 npu-hosted 分支。
+  # ============================================================
+  build-npu-hosted:
+    name: Hexagon NPU APK (hosted container)
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.build_npu_hosted == 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/npu-hosted') }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/snapdragon-toolchain/arm64-android:v0.8
+      options: --user root
+    timeout-minutes: 360
+    concurrency:
+      group: npu-hosted-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      NDK_VERSION: 26.1.10909125
+      CMAKE_VERSION: 3.31.6
+      LLAMA_REF: v1.0.0
+      HTP_ARCHS: v73 v75 v79 v81 v85
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Install JDK / build tools
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            openjdk-21-jdk-headless unzip wget git make build-essential ca-certificates
+          JDK_DIR=$(dirname "$(dirname "$(readlink -f "$(which javac)")")")
+          echo "JAVA_HOME=$JDK_DIR" >> "$GITHUB_ENV"
+          java -version
+
+      - name: Install Android SDK / NDK / CMake
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          wget -q -O /tmp/cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdline.zip -d /tmp/cmdline
+          mv /tmp/cmdline/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          sdkmanager --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0" \
+            "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/ndk/$NDK_VERSION/shader-tools/linux-x86_64" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmake/$CMAKE_VERSION/bin" >> "$GITHUB_PATH"
+          ls "$ANDROID_HOME/ndk/$NDK_VERSION/shader-tools/linux-x86_64/glslc"
+
+      - name: Fetch llama.cpp (pinned ${{ env.LLAMA_REF }})
+        run: |
+          mkdir -p app/src/main/cpp
+          git clone --depth 1 --branch "${LLAMA_REF}" \
+            https://github.com/ggml-org/llama.cpp app/src/main/cpp/llama.cpp
+
+      - name: Install Vulkan headers into NDK sysroot
+        run: |
+          set -euo pipefail
+          NDK_SYSROOT="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
+          wget -q -O /tmp/vk-headers.tar.gz https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/heads/main.tar.gz
+          wget -q -O /tmp/vk-hpp.tar.gz https://github.com/KhronosGroup/Vulkan-Hpp/archive/refs/heads/main.tar.gz
+          wget -q -O /tmp/spirv.tar.gz https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/heads/main.tar.gz
+          mkdir -p /tmp/vk /tmp/vkhpp /tmp/spirv
+          tar -xzf /tmp/vk-headers.tar.gz -C /tmp/vk --strip-components=1
+          tar -xzf /tmp/vk-hpp.tar.gz -C /tmp/vkhpp --strip-components=1
+          tar -xzf /tmp/spirv.tar.gz -C /tmp/spirv --strip-components=1
+          rm -rf "$NDK_SYSROOT/vulkan" "$NDK_SYSROOT/vk_video" "$NDK_SYSROOT/spirv"
+          mkdir -p "$NDK_SYSROOT/vulkan" "$NDK_SYSROOT/vk_video" "$NDK_SYSROOT/spirv"
+          cp -r /tmp/vk/include/vulkan/* "$NDK_SYSROOT/vulkan/"
+          cp -r /tmp/vkhpp/vulkan/* "$NDK_SYSROOT/vulkan/"
+          cp -r /tmp/vk/include/vk_video/* "$NDK_SYSROOT/vk_video/" 2>/dev/null || true
+          cp -r /tmp/spirv/include/spirv/* "$NDK_SYSROOT/spirv/"
+          HPP_VER=$(grep -E 'static_assert.*VK_HEADER_VERSION' "$NDK_SYSROOT/vulkan/vulkan.hpp" | head -1 | grep -oE '[0-9]+' | head -1)
+          if [ -n "$HPP_VER" ]; then
+            sed -i "s/#define VK_HEADER_VERSION [0-9]*/#define VK_HEADER_VERSION $HPP_VER/" "$NDK_SYSROOT/vulkan/vulkan_core.h"
+          fi
+          sed -i '/VULKAN_HPP_STATIC_ASSERT.*VK_HEADER_VERSION/s/^/\/\/ DISABLED: /' "$NDK_SYSROOT/vulkan/vulkan.hpp"
+          ls "$NDK_SYSROOT/vulkan/vulkan.hpp"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-npu-hosted-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}-v1
+
+      - name: Build native (host)
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:assembleRelease -Paibox.npu=true --no-daemon --stacktrace
+
+      - name: Build HTP skels
+        run: |
+          set -euo pipefail
+          BD=$(dirname "$(find app/.cxx/Release -maxdepth 3 -name CMakeCache.txt | head -1)")
+          test -f "$BD/CMakeCache.txt" || { echo "::error::找不到 CMake 构建目录"; exit 1; }
+          "$ANDROID_HOME/cmake/$CMAKE_VERSION/bin/cmake" --build "$BD" --target \
+            htp-v73 htp-v75 htp-v79 htp-v81 htp-v85
+          ls -lh "$BD/llama_build/ggml/src/ggml-hexagon/"libggml-htp-*.so
+
+      - name: Collect HTP skels into assets
+        run: |
+          set -euo pipefail
+          BD=$(dirname "$(find app/.cxx/Release -maxdepth 3 -name CMakeCache.txt | head -1)")
+          SRC="$BD/llama_build/ggml/src/ggml-hexagon"
+          mkdir -p app/src/main/assets/hexagon
+          for v in $HTP_ARCHS; do
+            cp -f "$SRC/libggml-htp-$v.so" app/src/main/assets/hexagon/
+          done
+          ls -lh app/src/main/assets/hexagon/
+
+      - name: Repackage APK with skels
+        run: ./gradlew :app:assembleRelease -Paibox.npu=true --no-daemon --stacktrace
+
+      - name: Verify + collect APK
+        run: |
+          set -euo pipefail
+          apk=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          test -n "$apk" || { echo "::error::没有找到 APK"; exit 1; }
+          unzip -l "$apk" | grep -E 'assets/hexagon/libggml-htp-v' || {
+            echo "::error::APK 里没有 HTP skel"; exit 1; }
+          out="aibox-hexagon-hosted-${GITHUB_RUN_NUMBER}.apk"
+          mkdir -p out
+          cp "$apk" "out/$out"
+          sha256sum "out/$out" | tee "out/$out.sha256"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aibox-hexagon-hosted-apk
+          path: out/aibox-hexagon-hosted-*
           retention-days: 14
 
