@@ -518,7 +518,10 @@ class PluginManager(
      * 依次检查：包是否可见 → 是否被发现 → 兼容性 → 是否已绑定。
      * 不主动 bind（避免副作用），但会列出可尝试的 Service。
      */
-    fun diagnose(packageName: String): PluginDiagnostic {
+    fun diagnose(packageName: String): PluginDiagnostic =
+        diagnoseWith(packageName, discoveredPackages = null)
+
+    private fun diagnoseWith(packageName: String, discoveredPackages: Set<String>?): PluginDiagnostic {
         val pm = context.packageManager
         val pkgInfo = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -543,7 +546,8 @@ class PluginManager(
 
         val services = exportedServiceNames(packageName)
         val compat = compatibilityChecker.check(packageName)
-        val discovered = discoverPlugins().any { it.packageName == packageName }
+        val discovered = discoveredPackages?.contains(packageName)
+            ?: discoverPlugins().any { it.packageName == packageName }
         val active = isActive(packageName)
         val reason = when {
             !discovered -> "包已安装，但没有发现 BACKEND_PLUGIN Service（可能是 action 不一致或 Service 未 exported）"
@@ -564,7 +568,12 @@ class PluginManager(
     }
 
     /** 诊断所有已知后端包（包括未安装的），用于模块页展示。 */
-    fun diagnoseKnown(): List<PluginDiagnostic> = KNOWN_BACKEND_PACKAGES.map { diagnose(it) }
+    fun diagnoseKnown(): List<PluginDiagnostic> {
+        // discoverPlugins 会遍历所有已知包，这里只做一次，避免 N×N 次 PackageManager 查询
+        val discovered = runCatching { discoverPlugins().map { it.packageName }.toSet() }
+            .getOrDefault(emptySet())
+        return KNOWN_BACKEND_PACKAGES.map { diagnoseWith(it, discovered) }
+    }
 
     /** 获取某插件的 handle；未启用返回 null。 */
     fun getHandle(packageName: String): PluginHandle? = synchronized(plugins) { plugins[packageName] }
