@@ -193,7 +193,9 @@ class SettingsViewModel : ViewModel() {
                     temperature = c.temperature,
                     topK = c.topK,
                     topP = c.topP,
-                    repeatPenalty = c.repeatPenalty
+                    repeatPenalty = c.repeatPenalty,
+                    minP = c.minP,
+                    repeatLastN = c.repeatLastN
                 )
             }.onFailure {
                 LogSystem.warn("aibox.ui.settings", "llamaSetSampler hot update failed: ${it.message}")
@@ -302,5 +304,49 @@ class SettingsViewModel : ViewModel() {
             effectiveThreads = runCatching { b.llamaEffectiveThreads() }.getOrDefault(0),
             runtimeContextMax = container.inferenceEngine.stats.value.contextMax
         )
+    }
+
+    // ===================================================
+    // 重置（按分类 / 全部）
+    // ===================================================
+
+    fun resetInference() = viewModelScope.launch {
+        runCatching { container.settingsRepository.resetInference() }
+            .onFailure { LogSystem.error("aibox.settings", "resetInference failed", it) }
+    }
+
+    fun resetAppearance() = viewModelScope.launch {
+        runCatching { container.settingsRepository.resetAppearance() }
+            .onFailure { LogSystem.error("aibox.settings", "resetAppearance failed", it) }
+    }
+
+    fun resetBehavior() = viewModelScope.launch {
+        runCatching { container.settingsRepository.resetBehavior() }
+            .onFailure { LogSystem.error("aibox.settings", "resetBehavior failed", it) }
+    }
+
+    fun resetCloud() = viewModelScope.launch {
+        runCatching { container.settingsRepository.resetCloud() }
+            .onFailure { LogSystem.error("aibox.settings", "resetCloud failed", it) }
+    }
+
+    fun resetToolSettings() = viewModelScope.launch {
+        runCatching { container.toolSettingsRepository.resetAll() }
+            .onFailure { LogSystem.error("aibox.settings", "resetToolSettings failed", it) }
+    }
+
+    fun resetOptimizationSettings() = viewModelScope.launch {
+        runCatching { container.optimizationSettingsRepository.reset() }
+            .onFailure { LogSystem.error("aibox.settings", "resetOptimizationSettings failed", it) }
+    }
+
+    /** 重置所有设置：常规设置 + 优化设置 + 工具设置；保留欢迎页标记与模型列表。 */
+    fun resetAllSettings() = viewModelScope.launch {
+        runCatching {
+            container.settingsRepository.resetAllSettings()
+            container.optimizationSettingsRepository.reset()
+            container.toolSettingsRepository.resetAll()
+            LogSystem.info("aibox.settings", "resetAllSettings: all categories reset")
+        }.onFailure { LogSystem.error("aibox.settings", "resetAllSettings failed", it) }
     }
 }

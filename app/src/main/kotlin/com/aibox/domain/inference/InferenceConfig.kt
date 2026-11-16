@@ -17,7 +17,9 @@ import kotlinx.serialization.Serializable
  * @property temperature 采样温度
  * @property topK Top-K 采样
  * @property topP Top-P 采样
+ * @property minP Min-P 采样：保留概率不低于 max_prob * minP 的候选，比 top_p 更保质量
  * @property repeatPenalty 重复惩罚
+ * @property repeatLastN 重复惩罚的统计窗口（token 数）
  */
 @Serializable
 data class InferenceConfig(
@@ -32,7 +34,11 @@ data class InferenceConfig(
     val temperature: Float = 0.8f,
     val topK: Int = 40,
     val topP: Float = 0.95f,
+    /** Min-P 采样阈值；0 = 关闭。比单纯调 top_p 更不容易伤到事实性。 */
+    val minP: Float = 0.05f,
     val repeatPenalty: Float = 1.1f,
+    /** 重复惩罚窗口：管住段落级复读，但不要大到影响长文。 */
+    val repeatLastN: Int = 256,
     /**
      * 是否强制开启 FlashAttention。
      *

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
@@ -54,6 +55,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -68,6 +70,7 @@ import com.aibox.ui.audio.AsrScreen
 import com.aibox.ui.audio.TtsScreen
 import com.aibox.ui.debug.DebugChatScreen
 import com.aibox.ui.history.HistoryScreen
+import com.aibox.ui.help.HelpScreen
 import com.aibox.ui.home.HomeScreen
 import com.aibox.ui.logviewer.LogScreen
 import com.aibox.ui.models.ModelsScreen
@@ -116,6 +119,8 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object DebugChat : Dest("debug_chat", R.string.nav_settings, Icons.Filled.Tune)
     // 运行日志查看器
     data object Logs : Dest("logs", R.string.nav_settings, Icons.Outlined.History)
+    // 帮助与教程（assets/help）
+    data object Help : Dest("help", R.string.nav_settings, Icons.Outlined.Info)
 }
 
 /** 抽屉菜单项（不含 History，History 是独立入口） */
@@ -133,6 +138,35 @@ val LocalDrawerState = staticCompositionLocalOf<androidx.compose.material3.Drawe
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppNav() {
+    val container = com.aibox.AIBoxApp.instance.container
+    val onboardingDone by androidx.compose.runtime.produceState<Boolean?>(initialValue = null) {
+        value = runCatching { container.settingsRepository.onboardingDone.first() }.getOrDefault(true)
+    }
+    var locallyDone by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    if (!locallyDone && onboardingDone == false) {
+        com.aibox.ui.onboarding.WelcomeScreen(
+            onDone = {
+                locallyDone = true
+                scope.launch {
+                    runCatching { container.settingsRepository.setOnboardingDone(true) }
+                }
+            }
+        )
+        return
+    }
+    if (onboardingDone == null && !locallyDone) {
+        // DataStore 首次读取期间留白（启动图仍在上层），避免闪一下主页再跳欢迎页
+        androidx.compose.foundation.layout.Box(Modifier.fillMaxSize())
+        return
+    }
+    MainNav()
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MainNav() {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
@@ -403,7 +437,8 @@ fun AppNav() {
                         // G-settings-fix：传递推理优化页跳转回调
                         onOpenOptimization = { nav.navigate(Dest.Optimization.route) },
                         onOpenDebugChat = { nav.navigate(Dest.DebugChat.route) },
-                        onOpenLogs = { nav.navigate(Dest.Logs.route) }
+                        onOpenLogs = { nav.navigate(Dest.Logs.route) },
+                        onOpenHelp = { nav.navigate(Dest.Help.route) }
                     )
                 }
                 composable(Dest.Search.route) {
@@ -482,6 +517,9 @@ fun AppNav() {
                 }
                 composable(Dest.Logs.route) {
                     LogScreen(onBack = { nav.popBackStack() })
+                }
+                composable(Dest.Help.route) {
+                    HelpScreen(onBack = { nav.popBackStack() })
                 }
             }
         }

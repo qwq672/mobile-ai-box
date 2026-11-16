@@ -59,6 +59,15 @@ interface Tool {
     fun getParameterSchema(): ToolParameterSchema
 
     /**
+     * 工具自己的选项（用户级，非 LLM 参数）。
+     *
+     * 例如联网搜索的默认搜索引擎、URL 阅读的最大长度。
+     * 默认空；只有确实需要用户配置的工具才实现。
+     */
+    val options: List<ToolOptionSpec>
+        get() = emptyList()
+
+    /**
      * 执行工具。
      *
      * - 实现方应捕获所有异常并返回 [Outcome.Failure]，不抛出界
@@ -78,6 +87,41 @@ enum class ToolCategory {
     BASIC,      // 自动执行
     ADVANCED    // 需用户确认
 }
+
+/** 工具选项的控件类型。 */
+enum class ToolOptionType {
+    CHOICE,     // 单选（值 + 显示名）
+    INTEGER,    // 整数滑块
+    BOOLEAN     // 开关
+}
+
+/**
+ * 工具自己的选项声明（用户可见，不注入给 LLM）。
+ *
+ * 统一用字符串存储，执行时由工具自行解析，避免 DataStore 多类型泛滥。
+ *
+ * @param key 选项键（同一工具内唯一）
+ * @param title 显示名
+ * @param description 说明 / 推荐值
+ * @param type 控件类型
+ * @param defaultValue 默认值（字符串形式）
+ * @param choices [ToolOptionType.CHOICE] 时的可选值与显示名
+ * @param min [ToolOptionType.INTEGER] 最小值
+ * @param max [ToolOptionType.INTEGER] 最大值
+ */
+data class ToolOptionSpec(
+    val key: String,
+    val title: String,
+    val description: String = "",
+    val type: ToolOptionType,
+    val defaultValue: String,
+    val choices: List<ToolOptionChoice> = emptyList(),
+    val min: Int = 0,
+    val max: Int = 100
+)
+
+/** 工具选项的单选值。 */
+data class ToolOptionChoice(val value: String, val label: String)
 
 /**
  * 工具参数 schema。

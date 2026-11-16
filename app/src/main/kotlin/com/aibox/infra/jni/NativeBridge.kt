@@ -57,7 +57,9 @@ class NativeBridge {
         temperature: Float,
         topK: Int,
         topP: Float,
-        repeatPenalty: Float
+        repeatPenalty: Float,
+        minP: Float,
+        repeatLastN: Int
     )
 
     /**

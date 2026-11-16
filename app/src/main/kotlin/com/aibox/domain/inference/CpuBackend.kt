@@ -46,7 +46,9 @@ class CpuBackend(
                 temperature = config.temperature,
                 topK = config.topK,
                 topP = config.topP,
-                repeatPenalty = config.repeatPenalty
+                repeatPenalty = config.repeatPenalty,
+                minP = config.minP,
+                repeatLastN = config.repeatLastN
             )
         }
         ok

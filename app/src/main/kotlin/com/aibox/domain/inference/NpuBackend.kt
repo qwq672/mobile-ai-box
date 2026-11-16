@@ -66,7 +66,10 @@ class NpuBackend(
             )
         } catch (e: Throwable) { false }
         loaded = ok
-        if (ok) native.llamaSetSampler(config.temperature, config.topK, config.topP, config.repeatPenalty)
+        if (ok) native.llamaSetSampler(
+            config.temperature, config.topK, config.topP, config.repeatPenalty,
+            config.minP, config.repeatLastN
+        )
         ok
     }
 

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aibox.domain.cloud.CloudConfig
 import com.aibox.domain.inference.BackendType
 import com.aibox.domain.inference.InferenceConfig
+import com.aibox.util.log.LogSystem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -28,7 +29,9 @@ class SettingsRepository(private val context: Context) {
         val TEMPERATURE     = stringPreferencesKey("temperature")
         val TOP_K           = intPreferencesKey("top_k")
         val TOP_P           = stringPreferencesKey("top_p")
+        val MIN_P           = stringPreferencesKey("min_p")
         val REPEAT_PENALTY  = stringPreferencesKey("repeat_penalty")
+        val REPEAT_LAST_N   = intPreferencesKey("repeat_last_n")
         // 注：AUTO_LOAD key 已删除（G-settings-fix）
         // "模型预加载" 开关归 OptimizationSettings.preloadModel 统一管理
         // 详见 docs/ARCHITECTURE.md §配置分层
@@ -58,6 +61,11 @@ class SettingsRepository(private val context: Context) {
         val CLOUD_BASE_URL  = stringPreferencesKey("cloud_base_url")
         val CLOUD_API_KEY   = stringPreferencesKey("cloud_api_key")
         val CLOUD_MODEL     = stringPreferencesKey("cloud_model")
+        // 低电量提示：两级都可被用户永久关闭（默认开启）
+        val WARN_LOW_BATTERY      = booleanPreferencesKey("warn_low_battery")
+        val WARN_CRITICAL_BATTERY = booleanPreferencesKey("warn_critical_battery")
+        // 首次启动欢迎页是否已完成
+        val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -73,7 +81,9 @@ class SettingsRepository(private val context: Context) {
             temperature = (p[Keys.TEMPERATURE] ?: "0.8").toFloat(),
             topK = p[Keys.TOP_K] ?: 40,
             topP = (p[Keys.TOP_P] ?: "0.95").toFloat(),
+            minP = (p[Keys.MIN_P] ?: "0.05").toFloat().coerceIn(0f, 1f),
             repeatPenalty = (p[Keys.REPEAT_PENALTY] ?: "1.1").toFloat(),
+            repeatLastN = (p[Keys.REPEAT_LAST_N] ?: 256).coerceIn(32, 2048),
             systemPrompt = p[Keys.SYSTEM_PROMPT] ?: ""
         )
     }
@@ -136,7 +146,9 @@ class SettingsRepository(private val context: Context) {
             p[Keys.TEMPERATURE] = c.temperature.toString()
             p[Keys.TOP_K] = c.topK
             p[Keys.TOP_P] = c.topP.toString()
+            p[Keys.MIN_P] = c.minP.toString()
             p[Keys.REPEAT_PENALTY] = c.repeatPenalty.toString()
+            p[Keys.REPEAT_LAST_N] = c.repeatLastN
             p[Keys.SYSTEM_PROMPT] = c.systemPrompt
         }
     }
@@ -198,4 +210,87 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setExaApiKey(key: String) =
         context.dataStore.edit { it[Keys.EXA_API_KEY] = key }
+
+    // ===================================================
+    // 低电量提示开关（两级，默认都开；用户可永久关闭）
+    // ===================================================
+
+    /** 低电量（阈值附近）提示是否允许显示。 */
+    val warnLowBattery: Flow<Boolean> = context.dataStore.data.map { it[Keys.WARN_LOW_BATTERY] ?: true }
+
+    /** 极低电量（≤5%）警告是否允许显示。 */
+    val warnCriticalBattery: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.WARN_CRITICAL_BATTERY] ?: true }
+
+    suspend fun setWarnLowBattery(on: Boolean) =
+        context.dataStore.edit { it[Keys.WARN_LOW_BATTERY] = on }
+
+    suspend fun setWarnCriticalBattery(on: Boolean) =
+        context.dataStore.edit { it[Keys.WARN_CRITICAL_BATTERY] = on }
+
+    // ===================================================
+    // 欢迎页
+    // ===================================================
+
+    /** 是否已完成首次启动欢迎页。 */
+    val onboardingDone: Flow<Boolean> = context.dataStore.data.map { it[Keys.ONBOARDING_DONE] ?: false }
+
+    suspend fun setOnboardingDone(done: Boolean) =
+        context.dataStore.edit { it[Keys.ONBOARDING_DONE] = done }
+
+    // ===================================================
+    // 重置（按分类 / 全部）
+    // ===================================================
+
+    /** 只重置推理相关参数：后端、批大小、KV、上下文、采样、系统提示词。 */
+    suspend fun resetInference() = context.dataStore.edit { p ->
+        listOf(
+            Keys.BACKEND, Keys.N_GPU_LAYERS, Keys.CPU_THREADS, Keys.ANTI_ROLLBACK,
+            Keys.PHYSICAL_BATCH, Keys.BATCH, Keys.KV_QUANT, Keys.CONTEXT_LEN,
+            Keys.TEMPERATURE, Keys.TOP_K, Keys.TOP_P, Keys.MIN_P,
+            Keys.REPEAT_PENALTY, Keys.REPEAT_LAST_N, Keys.SYSTEM_PROMPT
+        ).forEach { p.remove(it) }
+        LogSystem.info("aibox.settings", "resetInference done")
+    }
+
+    /** 只重置外观：取色 / 主题 / 主色 / 圆角 / 消息呈现。 */
+    suspend fun resetAppearance() = context.dataStore.edit { p ->
+        listOf(
+            Keys.DYNAMIC_COLOR, Keys.DARK_THEME, Keys.ACCENT_COLOR,
+            Keys.CORNER_SCALE, Keys.CHAT_DOC_STYLE
+        ).forEach { p.remove(it) }
+        LogSystem.info("aibox.settings", "resetAppearance done")
+    }
+
+    /** 只重置云端模型配置。 */
+    suspend fun resetCloud() = context.dataStore.edit { p ->
+        listOf(
+            Keys.CLOUD_ENABLED, Keys.CLOUD_BASE_URL, Keys.CLOUD_API_KEY, Keys.CLOUD_MODEL
+        ).forEach { p.remove(it) }
+        LogSystem.info("aibox.settings", "resetCloud done")
+    }
+
+    /** 只重置下载源 / 语言 / 思考档位 / 日志开关 / 搜索 API key。 */
+    suspend fun resetBehavior() = context.dataStore.edit { p ->
+        listOf(
+            Keys.DOWNLOAD_SOURCE, Keys.LANGUAGE, Keys.THINKING_LEVEL, Keys.THINKING_MODE,
+            Keys.LOGGING_ENABLED, Keys.TAVILY_API_KEY, Keys.EXA_API_KEY
+        ).forEach { p.remove(it) }
+        LogSystem.info("aibox.settings", "resetBehavior done")
+    }
+
+    /**
+     * 重置本 DataStore 的全部设置。
+     *
+     * 保留 [Keys.ONBOARDING_DONE]（避免重置后又被欢迎页拦住）与
+     * [Keys.LAST_MODEL_ID]（模型文件还在，保留上次选择更符合预期）。
+     */
+    suspend fun resetAllSettings() = context.dataStore.edit { p ->
+        val onboarding = p[Keys.ONBOARDING_DONE]
+        val lastModel = p[Keys.LAST_MODEL_ID]
+        p.clear()
+        if (onboarding != null) p[Keys.ONBOARDING_DONE] = onboarding
+        if (lastModel != null) p[Keys.LAST_MODEL_ID] = lastModel
+        LogSystem.info("aibox.settings", "resetAllSettings done")
+    }
 }

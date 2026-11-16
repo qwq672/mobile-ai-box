@@ -6,8 +6,12 @@ import com.aibox.domain.tool.ParamType
 import com.aibox.domain.tool.Tool
 import com.aibox.domain.tool.ToolCategory
 import com.aibox.domain.tool.ToolContext
+import com.aibox.domain.tool.ToolOptionChoice
+import com.aibox.domain.tool.ToolOptionSpec
+import com.aibox.domain.tool.ToolOptionType
 import com.aibox.domain.tool.ToolParameterSchema
 import com.aibox.domain.tool.ToolResult
+import com.aibox.domain.tool.ToolSettingsRepository
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +59,8 @@ import java.util.concurrent.TimeUnit
  * - DDG 可能随时调整 HTML 结构；若解析失败返回空列表 + 警告日志（不阻塞 LLM 对话）
  */
 class WebSearchTool(
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val toolSettingsRepository: ToolSettingsRepository
 ) : Tool {
     override val id: String = "web_search"
     override val displayName: String = "联网搜索"
@@ -63,6 +68,31 @@ class WebSearchTool(
         "搜索互联网获取实时信息。支持中英文。返回多个结果含标题、URL、摘要。"
     override val category: ToolCategory = ToolCategory.BASIC
     override val icon: String = "🔍"
+
+    override val options: List<ToolOptionSpec> = listOf(
+        ToolOptionSpec(
+            key = "default_engine",
+            title = "默认搜索引擎",
+            description = "自动：配置了 Tavily/Exa 就用它，否则用 DuckDuckGo（免费、无需 key）",
+            type = ToolOptionType.CHOICE,
+            defaultValue = "auto",
+            choices = listOf(
+                ToolOptionChoice("auto", "自动"),
+                ToolOptionChoice("duckduckgo", "DuckDuckGo"),
+                ToolOptionChoice("tavily", "Tavily"),
+                ToolOptionChoice("exa", "Exa")
+            )
+        ),
+        ToolOptionSpec(
+            key = "max_results",
+            title = "默认结果条数",
+            description = "模型未指定 max_results 时使用；条数越多，注入 prompt 越长",
+            type = ToolOptionType.INTEGER,
+            defaultValue = "5",
+            min = 1,
+            max = 10
+        )
+    )
 
     override fun getParameterSchema(): ToolParameterSchema = ToolParameterSchema(
         required = listOf(
@@ -82,9 +112,8 @@ class WebSearchTool(
             ParamSpec(
                 name = "search_engine",
                 type = ParamType.STRING,
-                description = "搜索引擎: tavily / exa / duckduckgo",
-                enum = listOf("tavily", "exa", "duckduckgo"),
-                default = "duckduckgo"
+                description = "搜索引擎: auto / tavily / exa / duckduckgo；不传则用设置里的默认引擎",
+                enum = listOf("auto", "tavily", "exa", "duckduckgo")
             )
         )
     )
@@ -96,11 +125,17 @@ class WebSearchTool(
         val query = (params["query"] as? String)?.takeIf { it.isNotBlank() }
             ?: return Outcome.Failure("Missing query")
 
-        // max_results：解析 + 截断到 [1, 20]；兼容 LLM 传 Number / Int / String
-        val maxResultsRaw = (params["max_results"] as? Number)?.toInt() ?: 5
+        // 选项：默认引擎 / 默认结果条数（用户级，不注入给 LLM）
+        val opts = runCatching { toolSettingsRepository.getOptions(id) }.getOrDefault(emptyMap())
+        val optionEngine = opts["default_engine"]?.takeIf { it.isNotBlank() } ?: "auto"
+        val optionMax = opts["max_results"]?.toIntOrNull()?.coerceIn(1, 20) ?: 5
+
+        // max_results：参数优先，未传则用用户选项；统一截断到 [1, 20]
+        val maxResultsRaw = (params["max_results"] as? Number)?.toInt() ?: optionMax
         val maxResults = maxResultsRaw.coerceIn(1, 20)
 
-        val engine = (params["search_engine"] as? String)?.takeIf { it.isNotBlank() } ?: "duckduckgo"
+        val requestedEngine = (params["search_engine"] as? String)?.takeIf { it.isNotBlank() }
+        val engine = resolveEngine(requestedEngine ?: optionEngine)
 
         return try {
             LogSystem.info(TAG, "WebSearch: query='$query', engine=$engine, max=$maxResults")
@@ -146,10 +181,24 @@ class WebSearchTool(
         }
     }
 
+    /**
+     * 解析最终引擎：显式指定优先；auto 时按已配置的 API key 选择。
+     */
+    private suspend fun resolveEngine(requested: String): String {
+        val id = requested.trim().lowercase()
+        if (id != "auto") return id
+        val tavily = runCatching { settingsRepository.tavilyApiKey.first() }.getOrDefault("")
+        val exa = runCatching { settingsRepository.exaApiKey.first() }.getOrDefault("")
+        return when {
+            tavily.isNotBlank() -> "tavily"
+            exa.isNotBlank() -> "exa"
+            else -> "duckduckgo"
+        }
+    }
+
     // ===================================================
     // DuckDuckGo（默认，无需 API key）
     // ===================================================
-
     /**
      * 用 DuckDuckGo HTML 端点搜索。
      *

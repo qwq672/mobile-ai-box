@@ -19,6 +19,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +40,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -56,6 +58,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MoreHoriz
@@ -68,6 +71,7 @@ import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Thermostat
+import androidx.compose.material.icons.outlined.TravelExplore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -143,6 +147,7 @@ fun ChatScreen(
     onOpenShortcutEditor: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val enabledTools by vm.enabledToolIds.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
     val snackbarHost = remember { SnackbarHostState() }
@@ -488,12 +493,17 @@ fun ChatScreen(
                 )
             }
 
+            // 低电量提示：只提示，不自动改用户手动选的 HTP 档
+            PowerNoticeBanner()
+
             // 输入栏始终在底部
             Composer(
                 streaming = ui.streaming,
                 enabled = ui.hasModel,
                 attachments = ui.pendingAttachments,
                 onRemoveAttachment = vm::removePendingAttachment,
+                networkMode = com.aibox.domain.tool.NetworkMode.fromEnabled(enabledTools),
+                onCycleNetwork = vm::cycleNetworkMode,
                 onSend = { txt -> vm.send(txt); keyboard?.hide() },
                 onStop = { vm.stop() },
                 onOpenPlus = { sheetOpen = true },
@@ -1368,6 +1378,8 @@ private fun Composer(
     enabled: Boolean,
     attachments: List<ChatAttachment>,
     onRemoveAttachment: (Int) -> Unit,
+    networkMode: com.aibox.domain.tool.NetworkMode,
+    onCycleNetwork: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onOpenPlus: () -> Unit,
@@ -1453,6 +1465,12 @@ private fun Composer(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+                Spacer(Modifier.width(8.dp))
+                NetworkModeChip(
+                    mode = networkMode,
+                    enabled = enabled,
+                    onClick = onCycleNetwork
+                )
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
@@ -1532,4 +1550,181 @@ private fun CircleAction(
 private fun formatCtx(n: Int): String = when {
     n >= 1024 -> "%.1fK".format(n / 1024.0)
     else -> n.toString()
+}
+
+/* ==================== 联网三态 chip ==================== */
+
+/**
+ * 输入区「联网」三态按钮：关 / 阅读 / 搜索。
+ *
+ * 视觉上固定一个地球图标家族，状态靠容器色 + 文案 + 小徽标区分，
+ * 避免被误认为三个独立功能。点击循环切换，底层写回两个独立工具开关。
+ */
+@Composable
+private fun NetworkModeChip(
+    mode: com.aibox.domain.tool.NetworkMode,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val containerColor = when (mode) {
+        com.aibox.domain.tool.NetworkMode.OFF -> MaterialTheme.colorScheme.surfaceContainerHigh
+        com.aibox.domain.tool.NetworkMode.READ -> MaterialTheme.colorScheme.secondaryContainer
+        com.aibox.domain.tool.NetworkMode.SEARCH -> MaterialTheme.colorScheme.primaryContainer
+    }
+    val contentColor = when (mode) {
+        com.aibox.domain.tool.NetworkMode.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+        com.aibox.domain.tool.NetworkMode.READ -> MaterialTheme.colorScheme.onSecondaryContainer
+        com.aibox.domain.tool.NetworkMode.SEARCH -> MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(50),
+        color = containerColor,
+        contentColor = contentColor,
+        border = if (mode == com.aibox.domain.tool.NetworkMode.OFF) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
+        } else null
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(16.dp)) {
+                Icon(
+                    imageVector = if (mode == com.aibox.domain.tool.NetworkMode.SEARCH) {
+                        Icons.Outlined.TravelExplore
+                    } else {
+                        Icons.Outlined.Language
+                    },
+                    contentDescription = "联网：${mode.description}",
+                    modifier = Modifier
+                        .size(16.dp)
+                        .alpha(if (mode == com.aibox.domain.tool.NetworkMode.OFF) 0.6f else 1f)
+                )
+                if (mode == com.aibox.domain.tool.NetworkMode.READ) {
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .align(Alignment.TopEnd)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = mode.label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+/* ==================== 低电量提示条 ==================== */
+
+/**
+ * 低电量提示：只提醒与建议，绝不自动改用户手动选择的 HTP 档。
+ *
+ * 规则：
+ * - 充电中 / 自动档 / 已是均衡或省电 → 不显示
+ * - ≤阈值且手动选了性能优先 → 轻提示
+ * - ≤5% 且手动选了性能优先 → 强警告（说明可能关机的后果）
+ * - 本次忽略 / 不再提醒 都支持；永久关闭后仍可在设置页看到当前档位
+ */
+@Composable
+private fun PowerNoticeBanner() {
+    val container = com.aibox.AIBoxApp.instance.container
+    val status by container.batteryMonitor.status.collectAsStateWithLifecycle()
+    val settings by container.optimizationSettingsRepository.settingsFlow
+        .collectAsStateWithLifecycle(initialValue = com.aibox.domain.optimization.OptimizationSettings.DEFAULT)
+    val warnLowAllowed by container.settingsRepository.warnLowBattery
+        .collectAsStateWithLifecycle(initialValue = true)
+    val warnCriticalAllowed by container.settingsRepository.warnCriticalBattery
+        .collectAsStateWithLifecycle(initialValue = true)
+    var dismissedLow by rememberSaveable { mutableStateOf(false) }
+    var dismissedCritical by rememberSaveable { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    val mode = com.aibox.domain.power.PowerPolicy.resolve(settings, status)
+    val level = com.aibox.domain.power.PowerPolicy.warningLevel(settings.htpPerfMode, mode)
+    val visible = when (level) {
+        com.aibox.domain.power.PowerPolicy.Warning.LOW -> warnLowAllowed && !dismissedLow
+        com.aibox.domain.power.PowerPolicy.Warning.CRITICAL -> warnCriticalAllowed && !dismissedCritical
+        null -> false
+    }
+    if (!visible) return
+
+    val critical = level == com.aibox.domain.power.PowerPolicy.Warning.CRITICAL
+    val setHtp: (String) -> Unit = { id ->
+        scope.launch {
+            runCatching {
+                container.optimizationSettingsRepository.update { it.copy(htpPerfMode = id) }
+            }
+        }
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = if (critical) MaterialTheme.colorScheme.errorContainer
+        else MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                text = if (critical) {
+                    "当前电量极低，Burst 模式会明显加快耗电，仍要使用吗？"
+                } else {
+                    "当前电量较低，均衡档能兼顾稳定速度与更低耗电。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (critical) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            if (critical) {
+                Text(
+                    "极端情况下可能触发系统关机，未保存内容会丢失。也可以先复制重要内容。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (critical) {
+                    TextButton(onClick = { dismissedCritical = true }) { Text("仍要使用") }
+                    TextButton(onClick = { setHtp(com.aibox.domain.power.HtpPerfMode.BALANCED) }) {
+                        Text("降为均衡")
+                    }
+                    TextButton(onClick = { setHtp(com.aibox.domain.power.HtpPerfMode.POWERSAVE) }) {
+                        Text("降为省电")
+                    }
+                } else {
+                    TextButton(onClick = { setHtp(com.aibox.domain.power.HtpPerfMode.BALANCED) }) {
+                        Text("切为均衡")
+                    }
+                    TextButton(onClick = { dismissedLow = true }) { Text("本次忽略") }
+                }
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            if (critical) {
+                                container.settingsRepository.setWarnCriticalBattery(false)
+                                dismissedCritical = true
+                            } else {
+                                container.settingsRepository.setWarnLowBattery(false)
+                                dismissedLow = true
+                            }
+                        }
+                    }
+                ) { Text("不再提醒") }
+            }
+        }
+    }
 }

@@ -7,6 +7,8 @@ struct bridge_sampler_t {
     int   top_k;
     float top_p;
     float repeat_penalty;
+    float min_p;
+    int   repeat_last_n;
 };
 
 struct llama_sampler;

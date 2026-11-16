@@ -110,6 +110,25 @@ class ModelsViewModel : ViewModel() {
             val effectiveConfig = if (opt != null) {
                 config.copy(forceFlashAttention = opt.forceFlashAttention)
             } else config
+            // 低电量档：只削峰值功率（批大小），不改上下文与 KV，避免静默影响质量。
+            val powerMode = container.powerController.mode.value
+            val loadedConfig = when (powerMode) {
+                com.aibox.domain.power.PowerMode.SAVER -> effectiveConfig.copy(
+                    physicalBatch = minOf(effectiveConfig.physicalBatch, 256),
+                    batch = minOf(effectiveConfig.batch, 1024)
+                )
+                com.aibox.domain.power.PowerMode.SURVIVAL -> effectiveConfig.copy(
+                    physicalBatch = minOf(effectiveConfig.physicalBatch, 128),
+                    batch = minOf(effectiveConfig.batch, 512)
+                )
+                com.aibox.domain.power.PowerMode.NORMAL -> effectiveConfig
+            }
+            if (loadedConfig != effectiveConfig) {
+                LogSystem.info(
+                    "aibox.power",
+                    "loading under ${powerMode.name}: physicalBatch=${loadedConfig.physicalBatch} batch=${loadedConfig.batch}"
+                )
+            }
             // 插件可能刚安装，或启动时的后台同步还没跑完；加载前再同步一次，
             // 避免「已安装 LiteRT 插件却提示未安装」。
             withContext(Dispatchers.IO) {
@@ -124,7 +143,7 @@ class ModelsViewModel : ViewModel() {
                 when (route) {
                     is ModelFormatRouter.RouteResult.V1Path -> {
                         LogSystem.info("aibox.ui.models", "ModelsVM: route to V1 (format=${route.format})")
-                        loadV1(m, effectiveConfig, id)
+                        loadV1(m, loadedConfig, id)
                     }
                     is ModelFormatRouter.RouteResult.V2Path -> {
                         LogSystem.info("aibox.ui.models", "ModelsVM: route to V2 backend '${route.backendName}' (format=${route.format})")

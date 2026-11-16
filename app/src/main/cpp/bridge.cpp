@@ -8,7 +8,7 @@
 // 用 mutex 替代 std::atomic<bridge_sampler_t>，避免 16 字节原子操作在某些平台
 // （如 32 位 ARM、部分 NDK 工具链）需要链接 __atomic_store_16 的可移植性问题。
 static std::mutex g_sampler_mtx;
-static bridge_sampler_t g_sampler{ 0.8f, 40, 0.95f, 1.1f };
+static bridge_sampler_t g_sampler{ 0.8f, 40, 0.95f, 1.1f, 0.05f, 256 };
 
 // vocab 指针由 native_bridge 在 load 模型后注入；penalties 采样器需要真实词表大小
 static std::mutex g_vocab_mtx;
@@ -40,11 +40,15 @@ llama_sampler* bridge_build_sampler() {
     auto chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
     // (n_vocab, penalty_last_n, penalty_repeat, penalty_freq, penalty_present)
     //
-    // penalty_last_n 64 → 256：64 的窗口太短，段落级复读管不住；
-    // 512 对 2B 小模型又偏强，会把它推离正常措辞（表现为“越罚越怪”）。
-    // 256 覆盖常见复读距离，同时不改变用户滑块的 repeat penalty 强度。
-    llama_sampler_chain_add(chain, llama_sampler_init_penalties(n_vocab, 256, s.repeat_penalty, 0.0f, 0.0f));
+    // penalty_last_n 默认 256：覆盖常见复读距离，又不至于把 2B 小模型越罚越怪。
+    // 用户可在设置里调整（512 更强，64 更弱）。
+    const int last_n = s.repeat_last_n > 0 ? s.repeat_last_n : 256;
+    llama_sampler_chain_add(chain, llama_sampler_init_penalties(n_vocab, last_n, s.repeat_penalty, 0.0f, 0.0f));
     llama_sampler_chain_add(chain, llama_sampler_init_top_k(s.top_k));
+    // min_p 先于 top_p：只保留相对最大概率不低于阈值的候选，比单纯压 top_p 更保事实性。
+    if (s.min_p > 0.0f) {
+        llama_sampler_chain_add(chain, llama_sampler_init_min_p(s.min_p, 1));
+    }
     llama_sampler_chain_add(chain, llama_sampler_init_top_p(s.top_p, 1));
     llama_sampler_chain_add(chain, llama_sampler_init_temp (s.temperature));
     llama_sampler_chain_add(chain, llama_sampler_init_dist (0));

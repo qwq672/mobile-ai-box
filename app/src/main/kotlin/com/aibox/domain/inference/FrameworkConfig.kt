@@ -59,7 +59,9 @@ data class FrameworkOverride(
     val temperature: Float? = null,
     val topK: Int? = null,
     val topP: Float? = null,
-    val repeatPenalty: Float? = null
+    val minP: Float? = null,
+    val repeatPenalty: Float? = null,
+    val repeatLastN: Int? = null
 ) {
     /**
      * 把本覆盖应用到 base 配置,返回合并后的新 [InferenceConfig]。
@@ -77,7 +79,9 @@ data class FrameworkOverride(
         temperature     = temperature     ?: base.temperature,
         topK            = topK            ?: base.topK,
         topP            = topP            ?: base.topP,
+        minP            = minP            ?: base.minP,
         repeatPenalty   = repeatPenalty   ?: base.repeatPenalty,
+        repeatLastN     = repeatLastN     ?: base.repeatLastN,
         forceFlashAttention = base.forceFlashAttention,
         systemPrompt    = base.systemPrompt   // 框架覆盖不涉及 system prompt
     )

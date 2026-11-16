@@ -12,6 +12,8 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -64,6 +66,11 @@ fun OptimizationSettingsScreen(
     val settings by vm.settings.collectAsStateWithLifecycle()
     val currentPreset by vm.currentPreset.collectAsStateWithLifecycle()
     val runtime by vm.runtime.collectAsStateWithLifecycle()
+    val powerStatus by vm.powerStatus.collectAsStateWithLifecycle()
+    val powerMode by vm.powerMode.collectAsStateWithLifecycle()
+    val effectiveHtp by vm.effectiveHtp.collectAsStateWithLifecycle()
+    val warnLow by vm.warnLowBattery.collectAsStateWithLifecycle()
+    val warnCritical by vm.warnCriticalBattery.collectAsStateWithLifecycle()
     val drawerState = com.aibox.ui.nav.LocalDrawerState.current
     val scope = rememberCoroutineScope()
     val snackbarHost = remember { SnackbarHostState() }
@@ -112,6 +119,106 @@ fun OptimizationSettingsScreen(
                             color = com.aibox.ui.theme.Colors.onSurfaceVariant
                         )
                     }
+                }
+            }
+
+            // ============== 电量与后端性能档 ==============
+            item {
+                UnifiedSection(title = "电量与性能档", showTopDivider = false) {
+                    androidx.compose.foundation.layout.Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val levelText = if (powerStatus.levelKnown) "${powerStatus.level}%" else "未知"
+                        Text(
+                            "电量：$levelText" +
+                                (if (powerStatus.charging) "（充电中，不提示低电量）" else "") +
+                                " · 当前档位：${powerMode.label}",
+                            style = Type.bodySmall
+                        )
+                        Text(
+                            "HTP 实际档位：${com.aibox.domain.power.HtpPerfMode.label(effectiveHtp)}" +
+                                if (settings.htpPerfMode == com.aibox.domain.power.HtpPerfMode.AUTO) "（自动解析）" else "（手动）",
+                            style = Type.bodySmall
+                        )
+                        Text(
+                            "手动选择性能优先时，低电量只会提示，不会自动降档；充电中不提示。",
+                            style = Type.labelSmall,
+                            color = com.aibox.ui.theme.Colors.onSurfaceVariant
+                        )
+                    }
+                    androidx.compose.foundation.layout.Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing8),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        com.aibox.domain.power.HtpPerfMode.all.forEach { id ->
+                            FilterChip(
+                                selected = settings.htpPerfMode == id,
+                                onClick = { vm.setHtpPerfMode(id) },
+                                label = {
+                                    Text(com.aibox.domain.power.HtpPerfMode.label(id))
+                                }
+                            )
+                        }
+                    }
+                    Text(
+                        "性能优先（Burst）会让首 token 更快，但长文生成更容易发热降速；低电量时可能加快掉电。",
+                        style = Type.labelSmall,
+                        color = com.aibox.ui.theme.Colors.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16)
+                    )
+
+                    HorizontalDivider(Modifier.padding(vertical = DesignTokens.spacing8))
+
+                    UnifiedSwitch(
+                        field = SettingField(
+                            key = "opt.lowPowerMode",
+                            type = FieldType.SWITCH,
+                            title = "低电量模式",
+                            description = "电量低于阈值时缩短空闲卸载，并在聊天页提示；不会擅自改你手动选的 HTP 档",
+                            defaultValue = settings.lowPowerMode
+                        ),
+                        value = settings.lowPowerMode,
+                        onValueChange = vm::setLowPowerMode
+                    )
+                    UnifiedSlider(
+                        field = SettingField(
+                            key = "opt.lowPowerThreshold",
+                            type = FieldType.SLIDER,
+                            title = "低电量阈值",
+                            description = "电量低于该值时进入省电档；≤5% 为极低电量",
+                            defaultValue = settings.lowPowerThreshold,
+                            min = 5,
+                            max = 50,
+                            step = 1
+                        ),
+                        value = settings.lowPowerThreshold.toFloat(),
+                        onValueChange = { vm.setLowPowerThreshold(it.toInt()) },
+                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16)
+                    )
+                    UnifiedSwitch(
+                        field = SettingField(
+                            key = "opt.warnLowBattery",
+                            type = FieldType.SWITCH,
+                            title = "低电量提示",
+                            description = "手动选择性能优先且电量偏低时，提示一次（可在这里永久关闭）",
+                            defaultValue = warnLow
+                        ),
+                        value = warnLow,
+                        onValueChange = vm::setWarnLowBattery
+                    )
+                    UnifiedSwitch(
+                        field = SettingField(
+                            key = "opt.warnCriticalBattery",
+                            type = FieldType.SWITCH,
+                            title = "极低电量警告",
+                            description = "电量 ≤5% 且使用 Burst 时警告一次；关闭后不再打扰",
+                            defaultValue = warnCritical
+                        ),
+                        value = warnCritical,
+                        onValueChange = vm::setWarnCriticalBattery
+                    )
                 }
             }
 

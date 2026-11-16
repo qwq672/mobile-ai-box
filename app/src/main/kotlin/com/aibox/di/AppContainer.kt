@@ -182,6 +182,21 @@ class AppContainer(context: Context) {
         OptimizationSettingsRepository(appContext)
 
     /**
+     * 电量监听（少黑盒：低电量提示 / 性能档）。
+     *
+     * 只订阅系统电量与省电模式广播，不轮询。
+     */
+    val batteryMonitor: com.aibox.infra.power.BatteryMonitor =
+        com.aibox.infra.power.BatteryMonitor(appContext)
+
+    /**
+     * 电量策略控制器：把电量 + 优化设置合成为当前档位（正常 / 省电 / 极低电量），
+     * 并在切换时写入 `aibox.power` 日志，便于解释“为什么这次变慢/变烫”。
+     */
+    val powerController: com.aibox.domain.power.PowerController =
+        com.aibox.domain.power.PowerController(batteryMonitor, optimizationSettingsRepository)
+
+    /**
      * 优化管理器（P3）：统一优化入口。
      *
      * 串联 [com.aibox.domain.optimization.TtftOptimizer] /

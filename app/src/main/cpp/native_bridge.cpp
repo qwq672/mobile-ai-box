@@ -787,9 +787,10 @@ Java_com_aibox_infra_jni_NativeBridge_llamaUnload(JNIEnv*, jclass) {
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_aibox_infra_jni_NativeBridge_llamaSetSampler(
-    JNIEnv*, jclass, jfloat temp, jint topK, jfloat topP, jfloat repeat)
+    JNIEnv*, jclass, jfloat temp, jint topK, jfloat topP, jfloat repeat,
+    jfloat minP, jint repeatLastN)
 {
-    bridge_sampler_t s{ temp, topK, topP, repeat };
+    bridge_sampler_t s{ temp, topK, topP, repeat, minP, repeatLastN };
     bridge_set_sampler(s);
 }
 

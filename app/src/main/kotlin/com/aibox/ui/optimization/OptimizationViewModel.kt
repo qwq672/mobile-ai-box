@@ -58,6 +58,23 @@ class OptimizationViewModel : ViewModel() {
     private val _currentPreset = MutableStateFlow("default")
     val currentPreset: StateFlow<String> = _currentPreset.asStateFlow()
 
+    /** 电量 / 充电 / 系统省电模式。 */
+    val powerStatus: StateFlow<com.aibox.infra.power.PowerStatus> = container.batteryMonitor.status
+
+    /** 当前电量档位（正常 / 省电 / 极低电量）。 */
+    val powerMode: StateFlow<com.aibox.domain.power.PowerMode> = container.powerController.mode
+
+    /** 当前实际生效的 HTP 档（自动档会按电量解析）。 */
+    val effectiveHtp: StateFlow<String> = container.powerController.effectiveHtp
+
+    /** 低电量轻提示是否允许显示。 */
+    val warnLowBattery: StateFlow<Boolean> = container.settingsRepository.warnLowBattery
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** 极低电量警告是否允许显示。 */
+    val warnCriticalBattery: StateFlow<Boolean> = container.settingsRepository.warnCriticalBattery
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
     init {
         // 订阅 settings 变化 → 推断 currentPreset
         viewModelScope.launch {
@@ -127,4 +144,33 @@ class OptimizationViewModel : ViewModel() {
 
     /** 重置为默认档（等同 [applyPreset] "default"，独立按钮语义清晰）。 */
     fun resetToDefault() = applyPreset("default")
+
+    /** 设置 HTP 性能档："auto" / "performance" / "balanced" / "powersave"。 */
+    fun setHtpPerfMode(id: String) {
+        LogSystem.info("aibox.power", "user set htpPerfMode=$id")
+        update { it.copy(htpPerfMode = id) }
+    }
+
+    /** 设置低电量模式开关（只影响自动提示与后台策略，不改手动 HTP 档）。 */
+    fun setLowPowerMode(on: Boolean) = update { it.copy(lowPowerMode = on) }
+
+    /** 设置进入低电量模式的阈值（%）。 */
+    fun setLowPowerThreshold(percent: Int) =
+        update { it.copy(lowPowerThreshold = percent.coerceIn(5, 50)) }
+
+    /** 永久开启 / 关闭低电量轻提示。 */
+    fun setWarnLowBattery(on: Boolean) {
+        viewModelScope.launch {
+            runCatching { container.settingsRepository.setWarnLowBattery(on) }
+                .onFailure { LogSystem.warn("aibox.power", "setWarnLowBattery failed: ${it.message}") }
+        }
+    }
+
+    /** 永久开启 / 关闭极低电量警告。 */
+    fun setWarnCriticalBattery(on: Boolean) {
+        viewModelScope.launch {
+            runCatching { container.settingsRepository.setWarnCriticalBattery(on) }
+                .onFailure { LogSystem.warn("aibox.power", "setWarnCriticalBattery failed: ${it.message}") }
+        }
+    }
 }

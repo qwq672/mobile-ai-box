@@ -64,7 +64,21 @@ data class OptimizationSettings(
     /** 空闲多久后自动卸载模型（毫秒）。仅当 [idleUnloadTimeout] = true 时生效。默认 10 分钟。 */
     val idleUnloadTimeoutMs: Long = 10 * 60 * 1000,
     /** 电池模式下进入低功耗档（降低线程数 / 关闭 GPU）；仅提示，不强制。 */
-    val lowPowerOnBattery: Boolean = false
+    val lowPowerOnBattery: Boolean = false,
+
+    // === 电量与后端性能档（少黑盒：由用户决定，程序只提示） ===
+    /** 低电量模式：电量低时缩短空闲卸载、并在聊天页给出提示；不会擅自改用户手动选的 HTP 档。 */
+    val lowPowerMode: Boolean = true,
+    /** 进入低电量模式的电量阈值（%），默认 20。 */
+    val lowPowerThreshold: Int = 20,
+    /**
+     * HTP 性能档："auto" / "performance" / "balanced" / "powersave"。
+     *
+     * - auto：按电量/充电自动选择；低电量不使用 burst
+     * - performance：允许 burst（可能发热、掉电更快）
+     * - balanced / powersave：固定档位
+     */
+    val htpPerfMode: String = "auto"
 ) {
     companion object {
         /** 默认档：当前主流手机上的最优折中。 */
@@ -79,7 +93,10 @@ data class OptimizationSettings(
         val POWER_SAVE = OptimizationSettings(
             thermalAwareThrottle = true,
             idleUnloadTimeoutMs = 3 * 60 * 1000,
-            lowPowerOnBattery = true
+            lowPowerOnBattery = true,
+            lowPowerMode = true,
+            lowPowerThreshold = 25,
+            htpPerfMode = "powersave"
         )
 
         /** 预置 ID → [OptimizationSettings] 实例。 */

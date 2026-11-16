@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Thermostat
 import androidx.compose.material.icons.outlined.Tune
@@ -100,10 +101,13 @@ fun SettingsScreen(
     // 调试：纯净聊天（不注入任何提示词 / 工具，用于定位幻觉与复读来源）
     onOpenDebugChat: () -> Unit = {},
     // 运行日志查看器
-    onOpenLogs: () -> Unit = {}
+    onOpenLogs: () -> Unit = {},
+    // 帮助与教程
+    onOpenHelp: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val cfg = ui.config
+    var pendingReset by remember { mutableStateOf<ResetTarget?>(null) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val snackbarHost = remember { SnackbarHostState() }
@@ -557,6 +561,124 @@ fun SettingsScreen(
                 }
             }
 
+            /* ============== 重置 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.RestartAlt, title = "重置")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(Modifier.padding(vertical = 8.dp)) {
+                        ResetRow(
+                            title = "重置推理参数",
+                            subtitle = "后端 / 线程 / 批大小 / KV / 上下文 / 采样 / 系统提示词"
+                        ) {
+                            pendingReset = ResetTarget(
+                                title = "重置推理参数？",
+                                message = "当前已加载的模型不会立即变化，重新加载后生效。"
+                            ) { vm.resetInference() }
+                        }
+                        HorizontalDivider()
+                        ResetRow(
+                            title = "重置外观",
+                            subtitle = "动态取色 / 主题 / 主色 / 圆角 / 消息呈现"
+                        ) {
+                            pendingReset = ResetTarget("重置外观？", "界面会立即恢复默认外观。") {
+                                vm.resetAppearance()
+                            }
+                        }
+                        HorizontalDivider()
+                        ResetRow(
+                            title = "重置行为与搜索",
+                            subtitle = "下载源 / 思考档位 / 日志开关 / Tavily、Exa API key"
+                        ) {
+                            pendingReset = ResetTarget("重置行为与搜索设置？", "API key 也会被清空。") {
+                                vm.resetBehavior()
+                            }
+                        }
+                        HorizontalDivider()
+                        ResetRow(
+                            title = "重置云端模型",
+                            subtitle = "清空 API key / Base URL / 模型名，并关闭云端"
+                        ) {
+                            pendingReset = ResetTarget("重置云端模型配置？", "需要重新填写 API key。") {
+                                vm.resetCloud()
+                            }
+                        }
+                        HorizontalDivider()
+                        ResetRow(
+                            title = "重置工具设置",
+                            subtitle = "工具开关恢复默认、自动确认白名单与工具选项清空"
+                        ) {
+                            pendingReset = ResetTarget("重置工具设置？", "基础工具会恢复默认开启，高级工具默认关闭。") {
+                                vm.resetToolSettings()
+                            }
+                        }
+                        HorizontalDivider()
+                        ResetRow(
+                            title = "重置推理优化设置",
+                            subtitle = "TTFT / TG / 能耗开关恢复默认档"
+                        ) {
+                            pendingReset = ResetTarget("重置推理优化设置？", "会恢复到「默认（均衡）」档。") {
+                                vm.resetOptimizationSettings()
+                            }
+                        }
+                        HorizontalDivider()
+                        ResetRow(
+                            title = "重置所有设置",
+                            subtitle = "以上全部 + 常规设置；模型文件与欢迎页状态保留",
+                            danger = true
+                        ) {
+                            pendingReset = ResetTarget(
+                                title = "重置所有设置？",
+                                message = "该操作不可撤销。模型文件、聊天记录与模型列表不会被删除。"
+                            ) { vm.resetAllSettings() }
+                        }
+                    }
+                }
+            }
+
+            /* ============== 帮助 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Info, title = "帮助")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    ListItem(
+                        leadingContent = {
+                            Icon(
+                                Icons.Outlined.Info,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        headlineContent = { Text("帮助与教程") },
+                        supportingContent = {
+                            Text("上手指南、设置说明、工具与联网、低电量模式、常见问题")
+                        },
+                        trailingContent = {
+                            Icon(
+                                androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        modifier = Modifier.clickable { onOpenHelp() }
+                    )
+                }
+            }
+
             /* ============== 工具调用（B7 工具设置面板入口） ============== */
             item {
                 SectionHeader(icon = Icons.Outlined.Build, title = "工具调用")
@@ -677,6 +799,17 @@ fun SettingsScreen(
                         )
                         HelpText("累积概率阈值；0.9~0.95 通常足够，越低越保守。")
                         SliderWithLabel(
+                            title = "Min-P",
+                            value = cfg.minP,
+                            valueRange = 0f..0.5f,
+                            valueText = if (cfg.minP <= 0f) "关闭" else "%.2f".format(cfg.minP),
+                            onValueChange = { vm.update(cfg.copy(minP = it)) }
+                        )
+                        HelpText(
+                            "只保留相对最大概率不低于该比例的候选。0.05 是稳妥值，0 表示关闭；" +
+                                "比单纯压 Top-P 更不容易误删正确但概率略低的词。"
+                        )
+                        SliderWithLabel(
                             title = "Repeat Penalty",
                             value = cfg.repeatPenalty,
                             valueRange = 1f..2f,
@@ -684,15 +817,27 @@ fun SettingsScreen(
                             onValueChange = { vm.update(cfg.copy(repeatPenalty = it)) }
                         )
                         HelpText(
-                            "对最近 256 个 token 做重复惩罚。1.1 是通用值；调太高会让小模型用词变怪，" +
+                            "对最近若干 token 做重复惩罚。1.1 是通用值；调太高会让小模型用词变怪，" +
                                 "调太低容易复读。改动即时生效，无需重新加载模型。"
+                        )
+                        SliderWithLabel(
+                            title = "Repeat 窗口",
+                            value = cfg.repeatLastN.toFloat(),
+                            valueRange = 32f..1024f,
+                            valueText = "${cfg.repeatLastN} tokens",
+                            onValueChange = { vm.update(cfg.copy(repeatLastN = it.toInt())) }
+                        )
+                        HelpText(
+                            "参与重复统计的最近 token 数。256 覆盖常见段落复读；" +
+                                "长文创作可降到 128，短问答可升到 384 减少复读。"
                         )
                         HorizontalDivider()
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 "当前生效：temp=${"%.2f".format(cfg.temperature)} · " +
                                     "top_k=${cfg.topK} · top_p=${"%.2f".format(cfg.topP)} · " +
-                                    "repeat=${"%.2f".format(cfg.repeatPenalty)}",
+                                    "min_p=${if (cfg.minP <= 0f) "关" else "%.2f".format(cfg.minP)} · " +
+                                    "repeat=${"%.2f".format(cfg.repeatPenalty)}/${cfg.repeatLastN}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f)
@@ -704,7 +849,9 @@ fun SettingsScreen(
                                             temperature = 0.8f,
                                             topK = 40,
                                             topP = 0.95f,
-                                            repeatPenalty = 1.1f
+                                            minP = 0.05f,
+                                            repeatPenalty = 1.1f,
+                                            repeatLastN = 256
                                         )
                                     )
                                 }
@@ -1005,6 +1152,69 @@ fun SettingsScreen(
             item { Spacer(Modifier.size(16.dp)) }
         }
     }
+
+    // 重置确认对话框（所有重置都走这里，避免误触）
+    pendingReset?.let { target ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingReset = null },
+            title = { Text(target.title) },
+            text = { Text(target.message) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        target.action()
+                        pendingReset = null
+                        scope.launch {
+                            snackbarHost.showSnackbar("已重置：${target.title.removeSuffix("？")}")
+                        }
+                    }
+                ) { Text("确认重置", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { pendingReset = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+}
+
+/** 重置项：标题 + 说明 + 实际动作，确认后才执行。 */
+private data class ResetTarget(
+    val title: String,
+    val message: String,
+    val action: () -> Unit
+)
+
+/** 重置列表中的一行。 */
+@Composable
+private fun ResetRow(
+    title: String,
+    subtitle: String,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    ListItem(
+        headlineContent = {
+            Text(
+                title,
+                color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+        },
+        supportingContent = {
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        trailingContent = {
+            Icon(
+                androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = if (danger) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        modifier = Modifier.clickable { onClick() }
+    )
 }
 
 /* ---------------- Section Header ---------------- */

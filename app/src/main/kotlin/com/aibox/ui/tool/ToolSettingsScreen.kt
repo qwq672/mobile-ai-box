@@ -1,6 +1,7 @@
 package com.aibox.ui.tool
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Build
@@ -20,15 +22,19 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -191,6 +197,9 @@ fun ToolSettingsScreen(
                         } else {
                             tools.forEach { tool ->
                                 ToolDetailCard(tool)
+                                if (tool.options.isNotEmpty()) {
+                                    ToolOptionsBlock(tool = tool, vm = vm)
+                                }
                                 Spacer(Modifier.height(DesignTokens.spacing8))
                             }
                         }
@@ -430,6 +439,94 @@ private fun ToolDetailCard(tool: Tool) {
                 style = Type.labelSmall,
                 color = Colors.onSurfaceVariant
             )
+        }
+    }
+}
+
+/**
+ * 工具自己的选项（按需）。
+ *
+ * 只渲染实现了 [Tool.options] 的工具；未修改过的项回落到 spec.defaultValue。
+ * 选项立即写回 DataStore，下次工具执行即生效。
+ */
+@Composable
+private fun ToolOptionsBlock(tool: Tool, vm: ToolSettingsViewModel) {
+    val values by remember(tool.id) { vm.optionsOf(tool.id) }
+        .collectAsStateWithLifecycle(initialValue = emptyMap())
+
+    Column(
+        Modifier.padding(top = DesignTokens.spacing8),
+        verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing4)
+    ) {
+        Text(
+            text = "工具选项",
+            style = Type.labelLarge,
+            color = Colors.primary,
+            fontWeight = FontWeight.SemiBold
+        )
+        tool.options.forEach { spec ->
+            val value = values[spec.key] ?: spec.defaultValue
+            when (spec.type) {
+                com.aibox.domain.tool.ToolOptionType.CHOICE -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(spec.title, style = Type.bodyMedium, color = Colors.onSurface)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            spec.choices.forEach { choice ->
+                                FilterChip(
+                                    selected = value == choice.value,
+                                    onClick = { vm.setOption(tool.id, spec.key, choice.value) },
+                                    label = { Text(choice.label) }
+                                )
+                            }
+                        }
+                        if (spec.description.isNotBlank()) {
+                            Text(spec.description, style = Type.labelSmall, color = Colors.onSurfaceVariant)
+                        }
+                    }
+                }
+                com.aibox.domain.tool.ToolOptionType.INTEGER -> {
+                    val current = value.toIntOrNull()?.coerceIn(spec.min, spec.max) ?: spec.min
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                spec.title,
+                                style = Type.bodyMedium,
+                                color = Colors.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text("$current", style = Type.labelLarge, color = Colors.primary)
+                        }
+                        Slider(
+                            value = current.toFloat(),
+                            onValueChange = { vm.setOption(tool.id, spec.key, it.toInt().toString()) },
+                            valueRange = spec.min.toFloat()..spec.max.toFloat(),
+                            steps = ((spec.max - spec.min) / 500 - 1).coerceAtLeast(0)
+                        )
+                        if (spec.description.isNotBlank()) {
+                            Text(spec.description, style = Type.labelSmall, color = Colors.onSurfaceVariant)
+                        }
+                    }
+                }
+                com.aibox.domain.tool.ToolOptionType.BOOLEAN -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(spec.title, style = Type.bodyMedium, color = Colors.onSurface)
+                            if (spec.description.isNotBlank()) {
+                                Text(spec.description, style = Type.labelSmall, color = Colors.onSurfaceVariant)
+                            }
+                        }
+                        Switch(
+                            checked = value.toBooleanStrictOrNull() ?: true,
+                            onCheckedChange = { vm.setOption(tool.id, spec.key, it.toString()) }
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -3,7 +3,9 @@ package com.aibox.domain.optimization
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -51,6 +53,10 @@ class OptimizationSettingsRepository(private val context: Context) {
         val IDLE_UNLOAD_TIMEOUT          = booleanPreferencesKey("idle_unload_timeout")
         val IDLE_UNLOAD_TIMEOUT_MS       = longPreferencesKey("idle_unload_timeout_ms")
         val LOW_POWER_ON_BATTERY         = booleanPreferencesKey("low_power_on_battery")
+        // 电量与后端性能档
+        val LOW_POWER_MODE               = booleanPreferencesKey("low_power_mode")
+        val LOW_POWER_THRESHOLD          = intPreferencesKey("low_power_threshold")
+        val HTP_PERF_MODE                = stringPreferencesKey("htp_perf_mode")
     }
 
     /**
@@ -78,7 +84,10 @@ class OptimizationSettingsRepository(private val context: Context) {
                 thermalAwareThrottle       = p[Keys.THERMAL_AWARE_THROTTLE]       ?: true,
                 idleUnloadTimeout          = p[Keys.IDLE_UNLOAD_TIMEOUT]          ?: true,
                 idleUnloadTimeoutMs        = p[Keys.IDLE_UNLOAD_TIMEOUT_MS]       ?: 10 * 60 * 1000,
-                lowPowerOnBattery          = p[Keys.LOW_POWER_ON_BATTERY]         ?: false
+                lowPowerOnBattery          = p[Keys.LOW_POWER_ON_BATTERY]         ?: false,
+                lowPowerMode               = p[Keys.LOW_POWER_MODE]               ?: true,
+                lowPowerThreshold          = (p[Keys.LOW_POWER_THRESHOLD]         ?: 20).coerceIn(5, 50),
+                htpPerfMode                = p[Keys.HTP_PERF_MODE]                ?: "auto"
             )
         }
 
@@ -108,7 +117,10 @@ class OptimizationSettingsRepository(private val context: Context) {
                 thermalAwareThrottle       = p[Keys.THERMAL_AWARE_THROTTLE]       ?: true,
                 idleUnloadTimeout          = p[Keys.IDLE_UNLOAD_TIMEOUT]          ?: true,
                 idleUnloadTimeoutMs        = p[Keys.IDLE_UNLOAD_TIMEOUT_MS]       ?: 10 * 60 * 1000,
-                lowPowerOnBattery          = p[Keys.LOW_POWER_ON_BATTERY]         ?: false
+                lowPowerOnBattery          = p[Keys.LOW_POWER_ON_BATTERY]         ?: false,
+                lowPowerMode               = p[Keys.LOW_POWER_MODE]               ?: true,
+                lowPowerThreshold          = (p[Keys.LOW_POWER_THRESHOLD]         ?: 20).coerceIn(5, 50),
+                htpPerfMode                = p[Keys.HTP_PERF_MODE]                ?: "auto"
             )
             val next = transform(current)
             // 写回所有字段（包括未变的；这样保证下次读出来的就是 next 而不是缺省）
@@ -127,6 +139,9 @@ class OptimizationSettingsRepository(private val context: Context) {
             p[Keys.IDLE_UNLOAD_TIMEOUT]          = next.idleUnloadTimeout
             p[Keys.IDLE_UNLOAD_TIMEOUT_MS]       = next.idleUnloadTimeoutMs
             p[Keys.LOW_POWER_ON_BATTERY]         = next.lowPowerOnBattery
+            p[Keys.LOW_POWER_MODE]               = next.lowPowerMode
+            p[Keys.LOW_POWER_THRESHOLD]          = next.lowPowerThreshold
+            p[Keys.HTP_PERF_MODE]                = next.htpPerfMode
         }
     }
 
@@ -137,5 +152,10 @@ class OptimizationSettingsRepository(private val context: Context) {
      */
     suspend fun set(settings: OptimizationSettings) {
         update { settings }
+    }
+
+    /** 重置为默认档（清空本 DataStore 的所有 key，缺省即默认值）。 */
+    suspend fun reset() {
+        context.optimizationDataStore.edit { it.clear() }
     }
 }

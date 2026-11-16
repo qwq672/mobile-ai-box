@@ -63,9 +63,11 @@ class ToolBootstrap(
         okCount += safeRegister("DateTimeTool") { registry.register(DateTimeTool()) }
         okCount += safeRegister("CalculatorTool") { registry.register(CalculatorTool()) }
         okCount += safeRegister("WebSearchTool") {
-            registry.register(WebSearchTool(settingsRepository))
+            registry.register(WebSearchTool(settingsRepository, toolSettingsRepository))
         }
-        okCount += safeRegister("UrlReaderTool") { registry.register(UrlReaderTool()) }
+        okCount += safeRegister("UrlReaderTool") {
+            registry.register(UrlReaderTool(toolSettingsRepository))
+        }
         okCount += safeRegister("DeviceInfoBasicTool") {
             registry.register(DeviceInfoBasicTool(appContext))
         }

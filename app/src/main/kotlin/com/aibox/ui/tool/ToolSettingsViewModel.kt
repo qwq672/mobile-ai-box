@@ -6,6 +6,7 @@ import com.aibox.domain.tool.Tool
 import com.aibox.domain.tool.ToolRegistry
 import com.aibox.domain.tool.ToolSettingsRepository
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -82,6 +83,19 @@ class ToolSettingsViewModel(
         viewModelScope.launch {
             runCatching { toolSettingsRepository.setAutoConfirm(toolId, autoConfirm) }
                 .onFailure { LogSystem.error(TAG, "setAutoConfirm failed for $toolId", it) }
+        }
+    }
+
+    /** 某工具的用户选项流（只含已修改过的项，UI 需回落到 spec.defaultValue）。 */
+    fun optionsOf(toolId: String): Flow<Map<String, String>> =
+        toolSettingsRepository.optionsFlow(toolId)
+
+    /** 写某个工具选项。 */
+    fun setOption(toolId: String, key: String, value: String) {
+        LogSystem.info(TAG, "setOption: $toolId.$key = $value")
+        viewModelScope.launch {
+            runCatching { toolSettingsRepository.setOption(toolId, key, value) }
+                .onFailure { LogSystem.error(TAG, "setOption failed for $toolId.$key", it) }
         }
     }
 

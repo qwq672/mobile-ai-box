@@ -5,8 +5,11 @@ import com.aibox.domain.tool.ParamType
 import com.aibox.domain.tool.Tool
 import com.aibox.domain.tool.ToolCategory
 import com.aibox.domain.tool.ToolContext
+import com.aibox.domain.tool.ToolOptionSpec
+import com.aibox.domain.tool.ToolOptionType
 import com.aibox.domain.tool.ToolParameterSchema
 import com.aibox.domain.tool.ToolResult
+import com.aibox.domain.tool.ToolSettingsRepository
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
 import kotlinx.coroutines.Dispatchers
@@ -46,13 +49,34 @@ import org.jsoup.nodes.Document
  * - `include_links=true` 时抓取 `<a href>` 前 10 个，给 LLM 提供进一步探索的线索
  * - 链接文本可能为空（如 `<a href="..."><img></a>`），保留但不输出空 text
  */
-class UrlReaderTool : Tool {
+class UrlReaderTool(
+    private val toolSettingsRepository: ToolSettingsRepository
+) : Tool {
     override val id: String = "url_reader"
     override val displayName: String = "URL 阅读器"
     override val description: String =
         "抓取指定 URL 的网页内容,返回纯文本(去除 HTML)。支持指定最大长度。"
     override val category: ToolCategory = ToolCategory.BASIC
     override val icon: String = "🌐"
+
+    override val options: List<ToolOptionSpec> = listOf(
+        ToolOptionSpec(
+            key = "max_length",
+            title = "默认最大长度",
+            description = "模型未指定 max_length 时使用。越长注入越多，越费上下文",
+            type = ToolOptionType.INTEGER,
+            defaultValue = "5000",
+            min = 1000,
+            max = 10000
+        ),
+        ToolOptionSpec(
+            key = "include_links",
+            title = "附带页面链接",
+            description = "是否把页面前 10 个链接附在结果里，便于模型继续探索",
+            type = ToolOptionType.BOOLEAN,
+            defaultValue = "true"
+        )
+    )
 
     override fun getParameterSchema(): ToolParameterSchema = ToolParameterSchema(
         required = listOf(
@@ -85,8 +109,13 @@ class UrlReaderTool : Tool {
         val url = (params["url"] as? String)?.takeIf { it.isNotBlank() }
             ?: return Outcome.Failure("Missing url")
 
-        val maxLength = (params["max_length"] as? Number)?.toInt()?.coerceAtLeast(1) ?: 5000
-        val includeLinks = (params["include_links"] as? Boolean) ?: true
+        // 用户选项：模型未显式指定时作为默认值
+        val opts = runCatching { toolSettingsRepository.getOptions(id) }.getOrDefault(emptyMap())
+        val optionMax = opts["max_length"]?.toIntOrNull()?.coerceIn(1000, 10000) ?: 5000
+        val optionLinks = opts["include_links"]?.toBooleanStrictOrNull() ?: true
+
+        val maxLength = (params["max_length"] as? Number)?.toInt()?.coerceAtLeast(1) ?: optionMax
+        val includeLinks = (params["include_links"] as? Boolean) ?: optionLinks
 
         return try {
             LogSystem.info(TAG, "UrlReader: url=$url, max=$maxLength, includeLinks=$includeLinks")

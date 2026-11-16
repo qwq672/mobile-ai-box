@@ -27,9 +27,11 @@ import com.aibox.ui.tool.ToolInvocation
 import com.aibox.ui.tool.ToolInvocationViewModel
 import com.aibox.util.log.LogSystem
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -60,6 +62,21 @@ class ChatViewModel : ViewModel() {
         toolSettingsRepository = container.toolSettingsRepository,
         scope = viewModelScope
     )
+
+    /** 当前启用的工具集合（输入区三态 chip 用）。 */
+    val enabledToolIds: StateFlow<Set<String>> = container.toolSettingsRepository.enabledToolsFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    /** 输入区「联网」三态循环：关 → 阅读 → 搜索 → 关。 */
+    fun cycleNetworkMode() {
+        val current = com.aibox.domain.tool.NetworkMode.fromEnabled(enabledToolIds.value)
+        val next = current.next()
+        viewModelScope.launch {
+            runCatching { container.toolSettingsRepository.setToolsEnabled(next.applyTo(enabledToolIds.value)) }
+                .onSuccess { LogSystem.info("aibox.tool", "network mode -> ${next.name} (${next.label})") }
+                .onFailure { LogSystem.warn("aibox.tool", "cycleNetworkMode failed: ${it.message}") }
+        }
+    }
 
     data class UiState(
         val messages: List<ChatMessage> = emptyList(),

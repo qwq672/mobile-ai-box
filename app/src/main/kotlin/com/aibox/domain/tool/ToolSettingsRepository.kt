@@ -2,6 +2,7 @@ package com.aibox.domain.tool
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aibox.util.log.LogSystem
@@ -73,6 +74,59 @@ class ToolSettingsRepository(private val context: Context) {
             prefs[enabledToolsKey] = next
         }
         LogSystem.info(TAG, "Tool $toolId enabled=$enabled")
+    }
+
+    /** 批量设置启用列表（输入区联网三态切换用，避免两次写入产生中间态）。 */
+    suspend fun setToolsEnabled(ids: Set<String>) {
+        context.toolSettingsDataStore.edit { prefs -> prefs[enabledToolsKey] = ids }
+        LogSystem.info(TAG, "Tools enabled set = ${ids.sorted()}")
+    }
+
+    // ===================================================
+    // 工具独立选项（按需）
+    // ===================================================
+
+    private fun optionKey(toolId: String, key: String) =
+        stringPreferencesKey("tool_option_${toolId}_$key")
+
+    /**
+     * 某工具的全部选项值（只包含用户改过的项；未设置时调用方应回落到 [com.aibox.domain.tool.ToolOptionSpec.defaultValue]）。
+     */
+    fun optionsFlow(toolId: String): Flow<Map<String, String>> =
+        context.toolSettingsDataStore.data.map { prefs ->
+            val prefix = "tool_option_${toolId}_"
+            buildMap {
+                prefs.asMap().forEach { (k, v) ->
+                    if (k.name.startsWith(prefix) && v is String) {
+                        put(k.name.removePrefix(prefix), v)
+                    }
+                }
+            }
+        }
+
+    /** 一次性读取某工具的全部选项值。 */
+    suspend fun getOptions(toolId: String): Map<String, String> = optionsFlow(toolId).first()
+
+    /** 写单个选项。 */
+    suspend fun setOption(toolId: String, key: String, value: String) {
+        context.toolSettingsDataStore.edit { prefs ->
+            prefs[optionKey(toolId, key)] = value
+        }
+        LogSystem.info(TAG, "Tool option $toolId.$key = $value")
+    }
+
+    /** 清空所有工具选项（保留开关与自动确认）。 */
+    suspend fun resetOptions() {
+        context.toolSettingsDataStore.edit { prefs ->
+            val keys = prefs.asMap().keys.filter { it.name.startsWith("tool_option_") }
+            keys.forEach { prefs.remove(it) }
+        }
+    }
+
+    /** 重置整个工具设置（开关恢复默认、自动确认清空、选项清空）。 */
+    suspend fun resetAll() {
+        context.toolSettingsDataStore.edit { it.clear() }
+        LogSystem.info(TAG, "tool settings reset to defaults")
     }
 
     /** 一次性快照：检查工具是否在自动确认白名单。 */
