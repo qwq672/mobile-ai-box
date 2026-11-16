@@ -44,6 +44,8 @@ fun ModulesScreen(
 ) {
     val modules by viewModel.modules.collectAsState()
     val scanning by viewModel.scanning.collectAsState()
+    val diagnostics by viewModel.diagnostics.collectAsState()
+    val dependencyReport by viewModel.dependencyReport.collectAsState()
     val ctx = LocalContext.current
 
     Scaffold(
@@ -75,6 +77,22 @@ fun ModulesScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            // 后端插件诊断：只显示确实装了的包，回答「装了为什么还提示未安装」
+            val installedDiagnostics = diagnostics.filter { it.installed }
+            if (installedDiagnostics.isNotEmpty()) {
+                DiagnosticsCard(
+                    diagnostics = installedDiagnostics,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+
+            dependencyReport?.let { report ->
+                DependencyPlanCard(
+                    report = report,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
 
             if (modules.isEmpty() && !scanning) {
                 // 空状态
@@ -125,6 +143,120 @@ fun ModulesScreen(
                             }
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsCard(
+    diagnostics: List<com.aibox.infra.plugin.PluginDiagnostic>,
+    modifier: Modifier = Modifier
+) {
+    UnifiedCard(modifier = modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "后端插件诊断",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            diagnostics.forEach { d ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            d.packageName,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            when {
+                                d.active -> "已启用"
+                                !d.discovered -> "未被发现"
+                                !d.compatible -> "不兼容"
+                                else -> "未绑定"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (d.active) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error
+                        )
+                    }
+                    Text(
+                        d.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (d.services.isNotEmpty()) {
+                        Text(
+                            "Service: ${d.services.first()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DependencyPlanCard(
+    report: com.aibox.infra.module.loader.ModuleGraphService.Report,
+    modifier: Modifier = Modifier
+) {
+    val plan = report.plan
+    UnifiedCard(modifier = modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "依赖计划",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            val withManifest = report.entries.filter { it.moduleId != null }
+            if (withManifest.isEmpty()) {
+                Text(
+                    "已安装模块都没有提供 module_manifest/manifest.json，无法解析依赖。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                if (plan.groups.isEmpty()) {
+                    Text(
+                        "没有可加载的模块（全部被依赖/冲突排除）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                plan.groups.forEachIndexed { idx, group ->
+                    Text(
+                        "${idx + 1}. " + (if (group.cyclic) "🔁 " else "") +
+                            group.moduleIds.joinToString(" → "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                plan.excluded.forEach { e ->
+                    Text(
+                        "已排除 ${e.moduleId}：${e.reason}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                plan.warnings.take(4).forEach { w ->
+                    Text(
+                        "提示：$w",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                val missingManifest = report.entries.filter { it.moduleId == null }
+                if (missingManifest.isNotEmpty()) {
+                    Text(
+                        "无 manifest：" + missingManifest.joinToString(", ") { it.packageName },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }

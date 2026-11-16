@@ -19,8 +19,9 @@ class ModulesViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(ModulesViewModel::class.java)) {
-            val discoveryService = ModuleDiscoveryService(context.applicationContext)
-            return ModulesViewModel(discoveryService) as T
+            val appContext = context.applicationContext
+            val discoveryService = ModuleDiscoveryService(appContext)
+            return ModulesViewModel(discoveryService, appContext) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }

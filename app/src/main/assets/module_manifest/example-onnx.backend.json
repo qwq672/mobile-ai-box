@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "module_id": "onnx.runtime",
+  "version": "1.0.0",
+  "module_type": "backend_runtime",
+  "min_host_api": 1,
+  "abi_filters": ["arm64-v8a"],
+  "depends_on_libs": [
+    {"soname": "libonnxruntime.so", "shared": true, "min_version": "1.16.0"}
+  ],
+  "depends_on_modules": [],
+  "exports": ["aibox_onnx_v1"],
+  "interface_aidl": "com.aibox.plugin.IPluginInterface",
+  "capabilities": ["text_generation", "embedding"],
+  "native_libs_bundled": [
+    {"soname": "libonnxruntime.so", "abi": "arm64-v8a"}
+  ],
+  "priority": 10
+}

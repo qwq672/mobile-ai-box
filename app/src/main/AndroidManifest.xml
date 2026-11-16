@@ -36,6 +36,14 @@
     <queries>
         <!-- LiteRT 推理插件 -->
         <package android:name="com.aibox.litert.backend" />
+        <package android:name="com.aibox.litert" />
+        <package android:name="com.aibox.litertlm" />
+        <package android:name="com.aibox.litert.module" />
+        <!-- ONNX Runtime 推理插件 -->
+        <package android:name="com.aibox.onnx.backend" />
+        <package android:name="com.aibox.onnx" />
+        <!-- MNN 推理插件 -->
+        <package android:name="com.aibox.mnn.backend" />
         <!-- Easy Chat 聊天模块 -->
         <package android:name="com.easychat.aibox.module" />
         <!-- 翻译模块 -->

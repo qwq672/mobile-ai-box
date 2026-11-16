@@ -135,16 +135,21 @@ class PluginManager(
                     PackageManager.GET_SERVICES or PackageManager.GET_META_DATA
                 )
             }
-            val service = pkgInfo.services?.firstOrNull { s ->
-                s.exported && (
-                    s.metaData?.containsKey(META_DESCRIPTOR_CLASS) == true ||
-                        s.name?.contains("PluginService") == true
-                    )
-            } ?: return null
+            // 不再要求 service 名字里必须有 PluginService / descriptor meta-data：
+            // 各模块的 Service 命名并不统一，过严的过滤会把“已安装”误判成“未安装”。
+            val services = pkgInfo.services.orEmpty().filter { it.exported }
+            val service = services.firstOrNull { s ->
+                s.metaData?.containsKey(META_DESCRIPTOR_CLASS) == true
+            } ?: services.firstOrNull { s ->
+                val n = s.name.orEmpty()
+                n.contains("PluginService", ignoreCase = true) ||
+                    n.contains("Backend", ignoreCase = true) ||
+                    n.contains("Plugin", ignoreCase = true)
+            } ?: services.firstOrNull()
             val app = pkgInfo.applicationInfo
             PluginInfo(
                 packageName = packageName,
-                descriptorClass = service.name ?: "",
+                descriptorClass = service?.name ?: "",
                 version = pkgInfo.versionName ?: "",
                 displayName = runCatching { app?.loadLabel(pm)?.toString() }
                     .getOrNull() ?: packageName,
@@ -235,7 +240,8 @@ class PluginManager(
         }
 
         // 3. 绑定
-        val bindResult = bindPluginService(packageName)
+        val candidate = discoverPlugins().firstOrNull { it.packageName == packageName }
+        val bindResult = bindPluginService(packageName, candidate?.descriptorClass)
         val bind = bindResult.getOrNull()
             ?: return Outcome.Failure(bindResult.reasonOrNull() ?: "Bind service failed")
 
@@ -429,7 +435,18 @@ class PluginManager(
         when (event) {
             is PluginPackageEvent.Added -> {
                 LogSystem.info(logTag, "Plugin package added: ${event.packageName}")
-                // 不自动启用；只刷新发现列表，等用户在 UI 上手动启用。
+                // 安装后立即在后台尝试绑定。绑定是阻塞的（等 onServiceConnected），
+                // 不能占着广播主线程，否则会 ANR。
+                Thread {
+                    runCatching {
+                        val r = enablePlugin(event.packageName)
+                        LogSystem.info(
+                            logTag,
+                            "auto-enable after install ${event.packageName}: " +
+                                (if (r is Outcome.Success) "ok" else "failed: ${r.reasonOrNull()}")
+                        )
+                    }
+                }.start()
             }
             is PluginPackageEvent.Replaced -> {
                 LogSystem.info(logTag, "Plugin package replaced: ${event.packageName}")
@@ -495,6 +512,60 @@ class PluginManager(
     /** 查询某插件是否已启用（在 plugins map 中）。 */
     fun isActive(packageName: String): Boolean = synchronized(plugins) { plugins.containsKey(packageName) }
 
+    /**
+     * 诊断一个后端插件包，回答「到底卡在哪一步」。
+     *
+     * 依次检查：包是否可见 → 是否被发现 → 兼容性 → 是否已绑定。
+     * 不主动 bind（避免副作用），但会列出可尝试的 Service。
+     */
+    fun diagnose(packageName: String): PluginDiagnostic {
+        val pm = context.packageManager
+        val pkgInfo = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(packageName, 0)
+            }
+        } catch (_: PackageManager.NameNotFoundException) {
+            return PluginDiagnostic(
+                packageName = packageName,
+                installed = false,
+                reason = "未安装，或 Android 11+ 包可见性未放行（需要 AndroidManifest <queries> 声明该包名）"
+            )
+        } catch (e: Throwable) {
+            return PluginDiagnostic(
+                packageName = packageName,
+                installed = false,
+                reason = "查询失败：${e.message}"
+            )
+        }
+
+        val services = exportedServiceNames(packageName)
+        val compat = compatibilityChecker.check(packageName)
+        val discovered = discoverPlugins().any { it.packageName == packageName }
+        val active = isActive(packageName)
+        val reason = when {
+            !discovered -> "包已安装，但没有发现 BACKEND_PLUGIN Service（可能是 action 不一致或 Service 未 exported）"
+            !compat.success -> "发现插件但兼容性检查未通过：${compat.reason}"
+            !active -> "发现且兼容，但绑定/注册失败（查看日志 aibox.plugin.manager 的 auto-enable 记录）"
+            else -> "已启用"
+        }
+        return PluginDiagnostic(
+            packageName = packageName,
+            installed = true,
+            version = pkgInfo.versionName ?: "",
+            services = services,
+            discovered = discovered,
+            compatible = compat.success,
+            active = active,
+            reason = reason
+        )
+    }
+
+    /** 诊断所有已知后端包（包括未安装的），用于模块页展示。 */
+    fun diagnoseKnown(): List<PluginDiagnostic> = KNOWN_BACKEND_PACKAGES.map { diagnose(it) }
+
     /** 获取某插件的 handle；未启用返回 null。 */
     fun getHandle(packageName: String): PluginHandle? = synchronized(plugins) { plugins[packageName] }
 
@@ -508,7 +579,75 @@ class PluginManager(
      * 用 [CountDownLatch] 阻塞等待 onServiceConnected；超时 [BIND_TIMEOUT_MS] 则失败返回。
      * 调用方应在非主线程调用（避免阻塞 UI）。
      */
-    private fun bindPluginService(packageName: String): Outcome<BindResult> {
+    private fun bindPluginService(
+        packageName: String,
+        preferredServiceClass: String? = null
+    ): Outcome<BindResult> {
+        // 1. 先按 action 绑定（标准路径）
+        val actionResult = bindWithIntent(
+            Intent(ACTION_BACKEND_PLUGIN).setPackage(packageName),
+            packageName
+        )
+        if (actionResult is Outcome.Success) return actionResult
+        val actionReason = actionResult.reasonOrNull().orEmpty()
+        // 只有“找不到 action 对应的 Service”才降级到显式组件；超时/崩溃直接返回，
+        // 避免把 10 秒超时乘以 Service 数量，变成几分钟的假死。
+        if (!actionReason.contains("returned false")) return actionResult
+
+        // 2. 兜底：逐个尝试该包内 exported 的 Service（显式 ComponentName 绑定）
+        val candidates = buildList {
+            if (!preferredServiceClass.isNullOrBlank()) add(preferredServiceClass)
+            addAll(exportedServiceNames(packageName).filter { it != preferredServiceClass })
+        }
+        LogSystem.info(logTag, "bind fallback for $packageName, candidates=$candidates")
+        var lastReason = actionReason
+        for (cls in candidates) {
+            val r = bindWithIntent(
+                Intent().setComponent(ComponentName(packageName, cls)),
+                packageName
+            )
+            if (r is Outcome.Success) {
+                LogSystem.info(logTag, "bind fallback succeeded: $packageName/$cls")
+                return r
+            }
+            lastReason = r.reasonOrNull() ?: lastReason
+        }
+        return Outcome.Failure(
+            "找不到可绑定的插件 Service：$packageName（action 与显式组件都失败；最后原因：$lastReason）"
+        )
+    }
+
+    /** 列出包内 exported 的 Service 类名，优先名字像插件入口的。 */
+    private fun exportedServiceNames(packageName: String): List<String> {
+        return try {
+            val pm = context.packageManager
+            val pkgInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(PackageManager.GET_SERVICES.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(packageName, PackageManager.GET_SERVICES)
+            }
+            val services = pkgInfo.services.orEmpty()
+                .filter { it.exported && !it.name.isNullOrBlank() }
+            val nameOf: (ServiceInfo) -> String = { it.name ?: "" }
+            services.sortedByDescending { s ->
+                val n = nameOf(s)
+                when {
+                    n.contains("PluginService", true) -> 3
+                    n.contains("Plugin", true) || n.contains("Backend", true) -> 2
+                    else -> 1
+                }
+            }.map(nameOf).distinct()
+        } catch (e: Throwable) {
+            LogSystem.warn(logTag, "exportedServiceNames($packageName) failed: ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    private fun bindWithIntent(intent: Intent, packageName: String): Outcome<BindResult> {
         val latch = CountDownLatch(1)
         var binder: IBinder? = null
         var error: String? = null
@@ -535,14 +674,15 @@ class PluginManager(
             }
         }
 
-        val intent = Intent(ACTION_BACKEND_PLUGIN).setPackage(packageName)
         val bound = try {
             context.bindService(intent, conn, Context.BIND_AUTO_CREATE)
         } catch (e: Throwable) {
             return Outcome.Failure("bindService threw: ${e.message}", e)
         }
         if (!bound) {
-            return Outcome.Failure("bindService returned false for $packageName (no service with action $ACTION_BACKEND_PLUGIN)")
+            return Outcome.Failure(
+                "bindService returned false for $packageName (no matching service)"
+            )
         }
 
         val ok = try {
@@ -613,7 +753,11 @@ class PluginManager(
          */
         private val KNOWN_BACKEND_PACKAGES = listOf(
             "com.aibox.litert.backend",
+            "com.aibox.litert",
+            "com.aibox.litertlm",
+            "com.aibox.litert.module",
             "com.aibox.onnx.backend",
+            "com.aibox.onnx",
             "com.aibox.mnn.backend"
         )
 
@@ -636,4 +780,25 @@ data class PluginHandle(
     val pluginInterface: com.aibox.plugin.IPluginInterface,
     /** 描述符接口；文本描述符缺失的插件（Binder 只暴露运行时接口）为 null。 */
     val descriptor: com.aibox.plugin.IPluginDescriptor?
+)
+
+/**
+ * 单个后端插件的诊断结果。
+ *
+ * 用来回答「装了插件为什么还提示未安装」：卡在包可见性、Service 发现、
+ * 兼容性检查，还是绑定/注册阶段。
+ */
+data class PluginDiagnostic(
+    val packageName: String,
+    val installed: Boolean,
+    val version: String = "",
+    /** 包内 exported 的 Service 类名（按疑似入口排序）。 */
+    val services: List<String> = emptyList(),
+    /** 是否被 discoverPlugins 找到。 */
+    val discovered: Boolean = false,
+    /** 兼容性检查是否通过。 */
+    val compatible: Boolean = false,
+    /** 是否已绑定并注册到 BackendManagerV2。 */
+    val active: Boolean = false,
+    val reason: String = ""
 )

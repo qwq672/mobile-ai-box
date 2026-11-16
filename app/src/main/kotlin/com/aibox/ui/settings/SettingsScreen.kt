@@ -459,21 +459,33 @@ fun SettingsScreen(
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            "纯净聊天",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurface
+                    Column(Modifier.padding(vertical = 8.dp)) {
+                        ListItem(
+                            leadingContent = {
+                                Icon(
+                                    Icons.Outlined.Info,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            headlineContent = { Text("纯净聊天") },
+                            supportingContent = {
+                                Text(
+                                    "不注入 system 提示 / 工具 / choices / 角色设定，" +
+                                        "用于对比判断复读与幻觉来源"
+                                )
+                            },
+                            trailingContent = {
+                                Icon(
+                                    androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            modifier = Modifier.clickable { onOpenDebugChat() }
                         )
-                        Text(
-                            "不注入 system 提示、工具清单、choices 协议和角色设定，消息只存内存。" +
-                                "用它和正式聊天对比同一句话，判断复读/幻觉来自模型还是提示词。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        OutlinedButton(onClick = onOpenDebugChat) {
-                            Text("打开纯净聊天")
-                        }
                     }
                 }
             }

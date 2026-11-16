@@ -69,14 +69,37 @@ data class LibDependencyDto(
     @SerialName("min_version")       val minVersion: String? = null,
     /** 版本冲突时是否允许独立子进程隔离加载(兜底)。 */
     @SerialName("fallback_isolated_process")
-    val fallbackIsolatedProcess: Boolean = false
+    val fallbackIsolatedProcess: Boolean = false,
+    /**
+     * 库的提供方：
+     * - `"host"`：宿主 APK 自带（进程启动时已加载）
+     * - 模块 id：由另一个模块 APK 提供（跨模块依赖）
+     * - null：自动推断（有模块声明 native_libs_bundled 则用它，否则视为宿主）
+     */
+    @SerialName("provider")          val provider: String? = null
 )
 
 /** 依赖的其他模块。 */
 @Serializable
 data class ModuleDependencyDto(
     @SerialName("module_id")   val moduleId: String,
-    @SerialName("min_version") val minVersion: String
+    @SerialName("min_version") val minVersion: String = "0.0.0",
+    /** 最高可接受版本（含），null 表示不限制。 */
+    @SerialName("max_version") val maxVersion: String? = null,
+    /**
+     * 版本范围表达式，优先级高于 min/max：
+     * `^1.2.3` / `~1.2.3` / `>=1.2.3` / `>=1.0.0 <2.0.0` / `1.2.*` / `=1.2.3`
+     */
+    @SerialName("version_range") val versionRange: String? = null
+)
+
+/** 与其他模块的冲突声明。 */
+@Serializable
+data class ModuleConflictDto(
+    @SerialName("module_id") val moduleId: String,
+    /** 仅当对方版本落在此范围时才冲突；null 表示任意版本都冲突。 */
+    @SerialName("version_range") val versionRange: String? = null,
+    val reason: String = ""
 )
 
 /** 自带 native 库描述(从 lib/<abi>/ 扫描)。 */
@@ -127,6 +150,13 @@ data class ModuleManifestDto(
     @SerialName("capabilities")         val capabilities: List<String> = emptyList(),
     @SerialName("safe_context")         val safeContext: SafeContextDto? = null,
     @SerialName("native_libs_bundled")  val nativeLibsBundled: List<NativeLibBundledDto> = emptyList(),
+    /** 与其他模块的冲突；用于 F/G、H/I、J/I 这类互斥关系。 */
+    @SerialName("conflicts_with")        val conflictsWith: List<ModuleConflictDto> = emptyList(),
+    /**
+     * 冲突时的优先级：数值大的优先保留。默认 0；同优先级时报告冲突，
+     * 由用户手动选择（宿主 UI 会展示被排除的模块与原因）。
+     */
+    @SerialName("priority")              val priority: Int = 0,
     @SerialName("signature")            val signature: String? = null
 )
 
