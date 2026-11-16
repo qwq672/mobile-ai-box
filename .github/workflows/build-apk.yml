@@ -345,6 +345,7 @@ jobs:
       CMAKE_VERSION: 3.31.6
       LLAMA_REF: v1.0.0
       HTP_ARCHS: v73 v75 v79 v81 v85
+      CMAKE_PREFIX_PATH: /usr/local
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
@@ -403,6 +404,17 @@ jobs:
           fi
           sed -i '/VULKAN_HPP_STATIC_ASSERT.*VK_HEADER_VERSION/s/^/\/\/ DISABLED: /' "$NDK_SYSROOT/vulkan/vulkan.hpp"
           ls "$NDK_SYSROOT/vulkan/vulkan.hpp"
+
+      # ggml-vulkan 的 CMakeLists 用 find_package(SPIRV-Headers CONFIG REQUIRED)，
+      # 只拷头文件不够，需要安装它的 CMake config（标准 job 也是装到 /usr/local）。
+      - name: Install SPIRV-Headers CMake package
+        run: |
+          set -euo pipefail
+          cmake -S /tmp/spirv -B /tmp/spirv-build \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DSPIRV_HEADERS_SKIP_EXAMPLES=ON
+          cmake --build /tmp/spirv-build --target install
+          ls /usr/local/share/cmake/SPIRV-Headers/
 
       - name: Cache Gradle
         uses: actions/cache@v4
