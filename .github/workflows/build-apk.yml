@@ -335,6 +335,9 @@ jobs:
     concurrency:
       group: npu-hosted-${{ github.ref }}
       cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
     env:
       ANDROID_HOME: /opt/android-sdk
       ANDROID_SDK_ROOT: /opt/android-sdk
@@ -383,13 +386,11 @@ jobs:
         run: |
           set -euo pipefail
           NDK_SYSROOT="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
-          wget -q -O /tmp/vk-headers.tar.gz https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/heads/main.tar.gz
-          wget -q -O /tmp/vk-hpp.tar.gz https://github.com/KhronosGroup/Vulkan-Hpp/archive/refs/heads/main.tar.gz
-          wget -q -O /tmp/spirv.tar.gz https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/heads/main.tar.gz
-          mkdir -p /tmp/vk /tmp/vkhpp /tmp/spirv
-          tar -xzf /tmp/vk-headers.tar.gz -C /tmp/vk --strip-components=1
-          tar -xzf /tmp/vk-hpp.tar.gz -C /tmp/vkhpp --strip-components=1
-          tar -xzf /tmp/spirv.tar.gz -C /tmp/spirv --strip-components=1
+          test -d "$NDK_SYSROOT" || { echo "::error::NDK sysroot 不存在: $NDK_SYSROOT"; exit 1; }
+          rm -rf /tmp/vk /tmp/vkhpp /tmp/spirv
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers /tmp/vk
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Hpp /tmp/vkhpp
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers /tmp/spirv
           rm -rf "$NDK_SYSROOT/vulkan" "$NDK_SYSROOT/vk_video" "$NDK_SYSROOT/spirv"
           mkdir -p "$NDK_SYSROOT/vulkan" "$NDK_SYSROOT/vk_video" "$NDK_SYSROOT/spirv"
           cp -r /tmp/vk/include/vulkan/* "$NDK_SYSROOT/vulkan/"
