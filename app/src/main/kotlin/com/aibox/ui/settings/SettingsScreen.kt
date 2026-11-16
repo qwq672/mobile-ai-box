@@ -93,7 +93,9 @@ fun SettingsScreen(
     onOpenThermal: () -> Unit = {},
     onOpenToolSettings: () -> Unit = {},
     // G-settings-fix：新增入口跳转到推理优化设置页（开关式优化统一归口处）
-    onOpenOptimization: () -> Unit = {}
+    onOpenOptimization: () -> Unit = {},
+    // 调试：纯净聊天（不注入任何提示词 / 工具，用于定位幻觉与复读来源）
+    onOpenDebugChat: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val cfg = ui.config
@@ -441,6 +443,36 @@ fun SettingsScreen(
                         }
                         OutlinedButton(onClick = { vm.refreshDiagnostics() }) {
                             Text("刷新诊断信息")
+                        }
+                    }
+                }
+            }
+
+            /* ============== 调试 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Info, title = "调试")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "纯净聊天",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "不注入 system 提示、工具清单、choices 协议和角色设定，消息只存内存。" +
+                                "用它和正式聊天对比同一句话，判断复读/幻觉来自模型还是提示词。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedButton(onClick = onOpenDebugChat) {
+                            Text("打开纯净聊天")
                         }
                     }
                 }

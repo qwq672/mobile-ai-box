@@ -66,6 +66,7 @@ import com.aibox.domain.shortcut.ShortcutTargetType
 import com.aibox.ui.chat.ChatScreen
 import com.aibox.ui.audio.AsrScreen
 import com.aibox.ui.audio.TtsScreen
+import com.aibox.ui.debug.DebugChatScreen
 import com.aibox.ui.history.HistoryScreen
 import com.aibox.ui.home.HomeScreen
 import com.aibox.ui.models.ModelsScreen
@@ -110,6 +111,8 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object ImageGen : Dest("image_gen", R.string.nav_settings, Icons.Filled.Add)
     // 角色扮演：角色 / 身份管理 + 进入角色会话（MVP）
     data object Roleplay : Dest("roleplay", R.string.nav_settings, Icons.Filled.Apps)
+    // 调试：纯净聊天（无提示词注入，用于定位幻觉 / 复读来源）
+    data object DebugChat : Dest("debug_chat", R.string.nav_settings, Icons.Filled.Tune)
 }
 
 /** 抽屉菜单项（不含 History，History 是独立入口） */
@@ -395,7 +398,8 @@ fun AppNav() {
                         onOpenThermal = { nav.navigate(Dest.Thermal.route) },
                         onOpenToolSettings = { nav.navigate(Dest.ToolSettings.route) },
                         // G-settings-fix：传递推理优化页跳转回调
-                        onOpenOptimization = { nav.navigate(Dest.Optimization.route) }
+                        onOpenOptimization = { nav.navigate(Dest.Optimization.route) },
+                        onOpenDebugChat = { nav.navigate(Dest.DebugChat.route) }
                     )
                 }
                 composable(Dest.Search.route) {
@@ -468,6 +472,9 @@ fun AppNav() {
                             nav.currentBackStackEntry?.savedStateHandle?.set("sessionId", 0L)
                         }
                     )
+                }
+                composable(Dest.DebugChat.route) {
+                    DebugChatScreen(onBack = { nav.popBackStack() })
                 }
             }
         }
