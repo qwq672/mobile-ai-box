@@ -102,6 +102,7 @@ class DownloadManager(private val context: Context) {
                     var windowStart = System.nanoTime()
                     var windowBytes = 0L
                     var speed = 0L
+                    var lastEmit = 0L
                     while (true) {
                         val read = try {
                             ins.read(buf)
@@ -121,9 +122,17 @@ class DownloadManager(private val context: Context) {
                         val p = if (total > 0) {
                             (sum * 100 / total).toInt().coerceIn(0, 100)
                         } else 0
-                        _progress.value = _progress.value + (destFile.name to p)
-                        onProgress(DownloadProgress(p, sum, total, speed))
+                        // 限流：每 200ms 最多推一次，避免每 64KB 都触发整页重组
+                        if (now - lastEmit >= 200_000_000L) {
+                            lastEmit = now
+                            _progress.value = _progress.value + (destFile.name to p)
+                            onProgress(DownloadProgress(p, sum, total, speed))
+                        }
                     }
+                    // 收尾补一次 100%，保证 UI 不会停在 99%
+                    val finalPercent = if (total > 0) 100 else 0
+                    _progress.value = _progress.value + (destFile.name to finalPercent)
+                    onProgress(DownloadProgress(finalPercent, sum, total, 0L))
                 }
             }
             Result.success(destFile)
