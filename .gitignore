@@ -91,3 +91,6 @@ skills/
 
 # 用户上传的临时文件
 .uploads/
+
+# 预发布测试签名（固定密钥，保证覆盖升级；正式上架请替换为私有密钥）
+!app/keystore/aibox-stable.jks

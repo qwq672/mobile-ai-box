@@ -28,8 +28,8 @@ android {
         applicationId = "com.aibox"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "v261116-11"
+        versionCode = 26111612
+        versionName = "v261116-12"
 
         ndk {
             // 手机几乎都是 arm64；缩小体积只打这一个
@@ -104,6 +104,16 @@ android {
     }
 
     // 资源压缩 + 代码混淆，缩小体积
+    // 固定测试签名：CI 默认 debug keystore 每次重新生成，前后版本签名不一致，
+    // 覆盖安装会被系统拒绝（表现就是"装了新包但打开还是旧版"）。
+    signingConfigs {
+        create("stable") {
+            storeFile = file("keystore/aibox-stable.jks")
+            storePassword = "aibox123456"
+            keyAlias = "aibox"
+            keyPassword = "aibox123456"
+        }
+    }
     buildTypes {
         lint { abortOnError = false; checkReleaseBuilds = false }
         release {
@@ -113,7 +123,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug") // 简化首发，正式版请换正式签名
+            signingConfig = signingConfigs.getByName("stable")
         }
         debug {
             isMinifyEnabled = false

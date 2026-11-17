@@ -882,11 +882,11 @@ fun SettingsScreen(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                             },
-                            headlineContent = { Text("推理优化设置") },
+                            headlineContent = { Text("推理优化与电量") },
                             supportingContent = {
                                 Text(
-                                    "模型预加载 / Flash Attention / KV 连续布局 / 空闲超时卸载 " +
-                                    "等开关式优化统一在此管理"
+                                    "电量与性能档（HTP 档位 / 低电量阈值与提示）/ 模型预加载 / " +
+                                    "Flash Attention / KV 连续布局 / 空闲超时卸载等统一在此管理"
                                 )
                             },
                             trailingContent = {
@@ -1146,6 +1146,19 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+
+            // 底部版本信息：便于确认装的是哪一版（覆盖安装失败时最先看这里）
+            item {
+                Text(
+                    "AIBox ${com.aibox.BuildConfig.VERSION_NAME} (${com.aibox.BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                )
             }
 
             // 底部留白
