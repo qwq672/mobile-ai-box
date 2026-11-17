@@ -6,8 +6,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -59,6 +61,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.aibox.ui.components.InAppNoticeHost
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.navigation.NavType
@@ -575,6 +578,9 @@ private fun MainNav() {
             }
         }
     }
+
+    // 应用内通知（Popup 实现，不参与页面布局测量）
+    InAppNoticeHost()
 }
 
 /**

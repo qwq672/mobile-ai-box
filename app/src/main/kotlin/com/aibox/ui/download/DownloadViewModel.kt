@@ -275,6 +275,7 @@ class DownloadViewModel : ViewModel() {
                 setTask(key, session) {
                     it.copy(state = TaskState.DONE, percent = 100, speed = 0)
                 }
+                com.aibox.util.notify.InAppNotifier.show("下载完成：$key")
             }.onFailure { e ->
                 if (e is DownloadPausedException) {
                     setTask(key, session) { it.copy(state = TaskState.PAUSED, speed = 0) }

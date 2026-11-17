@@ -43,6 +43,14 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -57,7 +65,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Check
@@ -92,7 +102,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -181,7 +194,8 @@ fun ChatScreen(
     // 这正是之前流式时只能看到回复开头、划不到最底的原因）。
     // 过滤掉空助手消息（旧数据里可能有 content="" 且无 parts 的记录），否则会渲染空气泡。
     val visibleMessages = remember(ui.messages) {
-        ui.messages.filter { m ->
+        // 只展示当前用户消息版本对应的助手回复分支（旧版本分支保留但不渲染）
+        vm.visibleMessages(ui.messages).filter { m ->
             m.role != "assistant" || m.content.isNotBlank() || m.parts.isNotEmpty()
         }
     }
@@ -207,12 +221,11 @@ fun ChatScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
     var sheetOpen by remember { mutableStateOf(false) }
-    // 加号面板的遮罩透明度：打开淡入、收起淡出
-    val scrimAlpha by animateFloatAsState(
-        targetValue = if (sheetOpen) 0.22f else 0f,
-        animationSpec = tween(if (sheetOpen) 180 else 140),
-        label = "plusScrim"
-    )
+    // 加号菜单：回到和「添加模型」一致的底部面板（拖拽把 + 标题 + 图标行），
+    // 动画交给 ModalBottomSheet，避免自己实现高度展开导致的折纸感
+    val plusSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var thinkingDialog by remember { mutableStateOf(false) }
+    var networkDialog by remember { mutableStateOf(false) }
     // 用户消息编辑：编辑前的内容会作为历史版本保留
     var editTarget by remember { mutableStateOf<ChatMessage?>(null) }
     var editText by remember { mutableStateOf("") }
@@ -244,23 +257,35 @@ fun ChatScreen(
         ActivityResultContracts.OpenDocument()
     ) { uri -> if (uri != null) vm.addFileAttachment(uri) }
 
-    val micPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        Toast.makeText(
-            context,
-            if (granted) "麦克风已授权（语音输入即将上线）" else "麦克风权限被拒绝",
-            Toast.LENGTH_SHORT
-        ).show()
+    // 语音输入：先走系统识别（零体积、走厂商 DSP，耗电最低）。
+    // 麦克风权限由系统识别界面自己申请，宿主不需要 RECORD_AUDIO。
+    var voiceText by remember { mutableStateOf<String?>(null) }
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        if (res.resultCode == android.app.Activity.RESULT_OK) {
+            val text = res.data
+                ?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+            if (!text.isNullOrBlank()) voiceText = text
+        }
     }
     val requestMic: () -> Unit = {
-        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
-            == android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            Toast.makeText(context, "语音输入开发中", Toast.LENGTH_SHORT).show()
-        } else {
-            micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE,
+                java.util.Locale.getDefault().toLanguageTag()
+            )
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "说话，识别结果会填入输入框")
         }
+        runCatching { speechLauncher.launch(intent) }
+            .onFailure {
+                Toast.makeText(context, "此设备没有可用的语音识别服务", Toast.LENGTH_SHORT).show()
+            }
     }
 
     Scaffold(
@@ -386,6 +411,11 @@ fun ChatScreen(
                 }
             )
         },
+        // 底部 inset 交给 Composer 自己处理（ime ∪ navigationBars），
+        // 否则 Scaffold 的导航栏留白会和 IME 叠加，在输入框和键盘之间多出一段空隙
+        contentWindowInsets = WindowInsets.systemBars.only(
+            WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+        ),
         snackbarHost = { SnackbarHost(snackbarHost) }
     ) { inner ->
         Column(
@@ -494,67 +524,6 @@ fun ChatScreen(
                         )
                 )
 
-                // 加号面板打开时：一层淡遮罩，把面板和聊天内容分开；
-                // 点内容区任意位置收起（不吃滚动，只接管点击）
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = scrimAlpha))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            enabled = sheetOpen
-                        ) { sheetOpen = false }
-                )
-
-                // 加号面板：整块从输入框上方浮出（位移 + 缩放 + 淡入），
-                // 不做高度展开，避免内容被裁切 / 逐行折纸
-                Column(Modifier.align(Alignment.BottomCenter)) {
-                    AnimatedVisibility(
-                        visible = sheetOpen,
-                        enter = slideInVertically(
-                            animationSpec = tween(200),
-                            initialOffsetY = { it / 2 }
-                        ) + fadeIn(tween(160)) + scaleIn(
-                            animationSpec = tween(200),
-                            initialScale = 0.94f,
-                            transformOrigin = TransformOrigin(0f, 1f)
-                        ),
-                        exit = slideOutVertically(
-                            animationSpec = tween(140),
-                            targetOffsetY = { it / 2 }
-                        ) + fadeOut(tween(110)) + scaleOut(
-                            animationSpec = tween(140),
-                            targetScale = 0.96f,
-                            transformOrigin = TransformOrigin(0f, 1f)
-                        )
-                    ) {
-                        ComposerPlusPanel(
-                            thinkingLevel = ui.thinkingLevel,
-                            onThinkingLevel = vm::setThinkingLevel,
-                            networkMode = networkMode,
-                            onNetworkMode = vm::setNetworkMode,
-                            onPhoto = {
-                                sheetOpen = false
-                                photoPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            },
-                            onFile = {
-                                sheetOpen = false
-                                filePicker.launch(
-                                    arrayOf(
-                                        "text/*",
-                                        "application/json",
-                                        "application/xml",
-                                        "application/octet-stream"
-                                    )
-                                )
-                            }
-                        )
-                    }
-                }
-
             }
 
             // 运行状态：仅在生成时出现，不生成时完全隐形
@@ -582,12 +551,16 @@ fun ChatScreen(
                 enabled = ui.hasModel,
                 attachments = ui.pendingAttachments,
                 onRemoveAttachment = vm::removePendingAttachment,
-                networkMode = networkMode,
-                onCycleNetwork = vm::cycleNetworkMode,
                 onSend = { txt -> vm.send(txt); keyboard?.hide() },
                 onStop = { vm.stop() },
-                onOpenPlus = { sheetOpen = !sheetOpen },
+                // 先收键盘再开面板：否则 IME 收起和面板滑入两段动画同时跑，会“顿一下”
+                onOpenPlus = {
+                    keyboard?.hide()
+                    sheetOpen = true
+                },
                 onMic = requestMic,
+                voiceText = voiceText,
+                onVoiceConsumed = { voiceText = null },
                 modifier = Modifier.graphicsLayer {
                     alpha = composerProgress
                     translationY = (1f - composerProgress) * 26f
@@ -657,6 +630,223 @@ fun ChatScreen(
             onSubmit = { vm.submitUserChoice(it) },
             onCancel = { vm.cancelUserChoice() }
         )
+    }
+
+    // ===== 加号菜单：与「添加模型」同款底部面板 =====
+    if (sheetOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { sheetOpen = false },
+            sheetState = plusSheetState,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ) {
+            Column(Modifier.padding(bottom = 20.dp)) {
+                Text(
+                    "本轮设置",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 10.dp)
+                )
+                SheetSettingRow(
+                    icon = Icons.Outlined.Psychology,
+                    title = "思考",
+                    value = when (ui.thinkingLevel) {
+                        "off" -> "关闭"
+                        "low" -> "低"
+                        "high" -> "高"
+                        else -> "中"
+                    },
+                    onClick = { thinkingDialog = true }
+                )
+                SheetSettingRow(
+                    icon = if (networkMode == com.aibox.domain.tool.NetworkMode.SEARCH) {
+                        Icons.Outlined.TravelExplore
+                    } else {
+                        Icons.Outlined.Language
+                    },
+                    title = "联网",
+                    value = networkMode.label,
+                    onClick = { networkDialog = true }
+                )
+                HorizontalDivider(
+                    Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+                SheetActionRow(
+                    icon = Icons.Outlined.Image,
+                    title = "照片",
+                    subtitle = "从相册选择图片",
+                    onClick = {
+                        sheetOpen = false
+                        photoPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }
+                )
+                SheetActionRow(
+                    icon = Icons.Outlined.AttachFile,
+                    title = "文件",
+                    subtitle = "文本 / JSON / 附件",
+                    onClick = {
+                        sheetOpen = false
+                        filePicker.launch(
+                            arrayOf(
+                                "text/*",
+                                "application/json",
+                                "application/xml",
+                                "application/octet-stream"
+                            )
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    if (thinkingDialog) {
+        AlertDialog(
+            onDismissRequest = { thinkingDialog = false },
+            title = { Text("思考") },
+            text = {
+                Column {
+                    listOf("off" to "关闭", "low" to "低", "medium" to "中", "high" to "高")
+                        .forEach { (id, label) ->
+                            SheetRadioRow(
+                                label = label,
+                                selected = ui.thinkingLevel == id,
+                                onClick = {
+                                    vm.setThinkingLevel(id)
+                                    thinkingDialog = false
+                                }
+                            )
+                        }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { thinkingDialog = false }) { Text("完成") }
+            }
+        )
+    }
+
+    if (networkDialog) {
+        AlertDialog(
+            onDismissRequest = { networkDialog = false },
+            title = { Text("联网") },
+            text = {
+                Column {
+                    listOf(
+                        com.aibox.domain.tool.NetworkMode.OFF to "关闭",
+                        com.aibox.domain.tool.NetworkMode.READ to "仅 URL 阅读",
+                        com.aibox.domain.tool.NetworkMode.SEARCH to "打开"
+                    ).forEach { (mode, label) ->
+                        SheetRadioRow(
+                            label = label,
+                            selected = networkMode == mode,
+                            onClick = {
+                                vm.setNetworkMode(mode)
+                                networkDialog = false
+                            }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { networkDialog = false }) { Text("完成") }
+            }
+        )
+    }
+}
+
+/** 底部面板里的「设置项」行：标题 + 当前值 + 箭头。 */
+@Composable
+private fun SheetSettingRow(
+    icon: ImageVector,
+    title: String,
+    value: String,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.weight(1f))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Icon(
+            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/** 底部面板里的「动作」行：图标 + 标题 + 副标题，和添加模型面板一致。 */
+@Composable
+private fun SheetActionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            modifier = Modifier.size(40.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(Modifier.width(16.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun SheetRadioRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -736,167 +926,6 @@ private fun UserChoiceDialog(
             TextButton(onClick = onCancel) { Text("取消") }
         }
     )
-}
-
-/* ==================== 加号面板（内联浮层） ==================== */
-
-/**
- * 输入区加号面板：紧凑浮层，而不是把一块设置页贴在输入框上。
- *
- * - 有遮罩（在 ChatScreen 里画），与聊天内容分层；
- * - chip 无描边、字号收小，选中态用主色 tint；
- * - 照片 / 文件是左对齐的小胶囊，不再用 weight 平分。
- */
-@Composable
-private fun ComposerPlusPanel(
-    thinkingLevel: String,
-    onThinkingLevel: (String) -> Unit,
-    networkMode: com.aibox.domain.tool.NetworkMode,
-    onNetworkMode: (com.aibox.domain.tool.NetworkMode) -> Unit,
-    onPhoto: () -> Unit,
-    onFile: () -> Unit
-) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 8.dp
-        ) {
-            Column(Modifier.padding(top = 12.dp, bottom = 10.dp)) {
-                Text(
-                    "本轮设置",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 18.dp, bottom = 2.dp)
-                )
-                PanelChipRow(
-                    label = "思考",
-                    options = listOf(
-                        "off" to "关",
-                        "low" to "低",
-                        "medium" to "中",
-                        "high" to "高"
-                    ),
-                    selected = thinkingLevel,
-                    onSelect = onThinkingLevel
-                )
-                PanelChipRow(
-                    label = "联网",
-                    options = listOf(
-                        com.aibox.domain.tool.NetworkMode.OFF.name to "关",
-                        com.aibox.domain.tool.NetworkMode.READ.name to "阅读",
-                        com.aibox.domain.tool.NetworkMode.SEARCH.name to "搜索"
-                    ),
-                    selected = networkMode.name,
-                    onSelect = { id ->
-                        com.aibox.domain.tool.NetworkMode.values()
-                            .firstOrNull { it.name == id }
-                            ?.let(onNetworkMode)
-                    }
-                )
-                HorizontalDivider(
-                    Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                )
-                Row(
-                    Modifier.padding(horizontal = 14.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    PanelAction(
-                        icon = Icons.Outlined.Image,
-                        label = "照片",
-                        onClick = onPhoto
-                    )
-                    PanelAction(
-                        icon = Icons.Outlined.AttachFile,
-                        label = "文件",
-                        onClick = onFile
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PanelChipRow(
-    label: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 18.dp, end = 14.dp, top = 2.dp, bottom = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(36.dp)
-        )
-        Row(
-            Modifier
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            options.forEach { (id, text) ->
-                FilterChip(
-                    selected = selected == id,
-                    onClick = { onSelect(id) },
-                    label = { Text(text, style = MaterialTheme.typography.labelMedium) },
-                    shape = RoundedCornerShape(10.dp),
-                    border = null,
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = Color.Transparent,
-                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PanelAction(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.surfaceContainerHighest
-    ) {
-        Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-            Text(
-                label,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-    }
 }
 
 @Composable
@@ -1627,15 +1656,22 @@ private fun Composer(
     enabled: Boolean,
     attachments: List<ChatAttachment>,
     onRemoveAttachment: (Int) -> Unit,
-    networkMode: com.aibox.domain.tool.NetworkMode,
-    onCycleNetwork: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onOpenPlus: () -> Unit,
     onMic: () -> Unit,
+    voiceText: String? = null,
+    onVoiceConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var input by rememberSaveable { mutableStateOf("") }
+
+    // 系统语音识别结果：追加到当前输入，而不是覆盖用户已经打好的字
+    LaunchedEffect(voiceText) {
+        val v = voiceText ?: return@LaunchedEffect
+        input = if (input.isBlank()) v else "$input $v"
+        onVoiceConsumed()
+    }
     val canSend = enabled && (input.isNotBlank() || attachments.isNotEmpty()) && !streaming
     val doSend: () -> Unit = {
         if (canSend) {
@@ -1650,9 +1686,10 @@ private fun Composer(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .imePadding()
-            .navigationBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 8.dp)
+            // 只取 ime 与导航栏的较大值：两者叠加时输入框会“悬”在键盘上方一段
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+            // 左右下等距，卡片不再往下沉
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)
     ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1670,10 +1707,9 @@ private fun Composer(
             BasicTextField(
                 value = input,
                 onValueChange = { input = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    // 给文字本身留出呼吸高度，避免输入区看起来只有一条细线
-                    .heightIn(min = 40.dp),
+                // 不再强制 40dp 最小高度：单行时下方会多出一条“空行”，
+                // 高度由行高 + 上下内边距自然决定
+                modifier = Modifier.fillMaxWidth(),
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     color = if (enabled) MaterialTheme.colorScheme.onSurface
@@ -1686,7 +1722,7 @@ private fun Composer(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { doSend() }),
                 decorationBox = { inner ->
-                    Box(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+                    Box(Modifier.fillMaxWidth()) {
                         if (input.isEmpty()) {
                             Text(
                                 if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型",
@@ -1718,12 +1754,6 @@ private fun Composer(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                Spacer(Modifier.width(8.dp))
-                NetworkModeChip(
-                    mode = networkMode,
-                    enabled = enabled,
-                    onClick = onCycleNetwork
-                )
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
@@ -1740,16 +1770,16 @@ private fun Composer(
                     )
                 }
                 Spacer(Modifier.width(4.dp))
-                // 发送 / 停止：同一个圆形按钮形变，生成中变实心停止块
-                val circleColor = when {
-                    streaming -> MaterialTheme.colorScheme.error
-                    canSend -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                // 发送 / 停止：与左侧加号同一套圆形底 + 线性图标，不再用实心三角
+                val circleColor = if (streaming) {
+                    MaterialTheme.colorScheme.errorContainer
+                } else {
+                    MaterialTheme.colorScheme.primaryContainer
                 }
-                val iconTint = when {
-                    streaming -> MaterialTheme.colorScheme.onError
-                    canSend -> MaterialTheme.colorScheme.onPrimary
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                val iconTint = if (streaming) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.onPrimaryContainer
                 }
                 CircleAction(
                     size = 40,
@@ -1766,10 +1796,10 @@ private fun Composer(
                         )
                     } else {
                         Icon(
-                            Icons.AutoMirrored.Filled.Send,
+                            Icons.Outlined.ArrowUpward,
                             contentDescription = "发送",
                             tint = iconTint,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -1803,76 +1833,6 @@ private fun CircleAction(
 private fun formatCtx(n: Int): String = when {
     n >= 1024 -> "%.1fK".format(n / 1024.0)
     else -> n.toString()
-}
-
-/* ==================== 联网三态 chip ==================== */
-
-/**
- * 输入区「联网」三态按钮：关 / 阅读 / 搜索。
- *
- * 视觉上固定一个地球图标家族，状态靠容器色 + 文案 + 小徽标区分，
- * 避免被误认为三个独立功能。点击循环切换，底层写回两个独立工具开关。
- */
-@Composable
-private fun NetworkModeChip(
-    mode: com.aibox.domain.tool.NetworkMode,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    val containerColor = when (mode) {
-        com.aibox.domain.tool.NetworkMode.OFF -> MaterialTheme.colorScheme.surfaceContainerHigh
-        com.aibox.domain.tool.NetworkMode.READ -> MaterialTheme.colorScheme.secondaryContainer
-        com.aibox.domain.tool.NetworkMode.SEARCH -> MaterialTheme.colorScheme.primaryContainer
-    }
-    val contentColor = when (mode) {
-        com.aibox.domain.tool.NetworkMode.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
-        com.aibox.domain.tool.NetworkMode.READ -> MaterialTheme.colorScheme.onSecondaryContainer
-        com.aibox.domain.tool.NetworkMode.SEARCH -> MaterialTheme.colorScheme.onPrimaryContainer
-    }
-    Surface(
-        onClick = onClick,
-        enabled = enabled,
-        shape = RoundedCornerShape(50),
-        color = containerColor,
-        contentColor = contentColor,
-        border = if (mode == com.aibox.domain.tool.NetworkMode.OFF) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
-        } else null
-    ) {
-        Row(
-            Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.size(16.dp)) {
-                Icon(
-                    imageVector = if (mode == com.aibox.domain.tool.NetworkMode.SEARCH) {
-                        Icons.Outlined.TravelExplore
-                    } else {
-                        Icons.Outlined.Language
-                    },
-                    contentDescription = "联网：${mode.description}",
-                    modifier = Modifier
-                        .size(16.dp)
-                        .alpha(if (mode == com.aibox.domain.tool.NetworkMode.OFF) 0.6f else 1f)
-                )
-                if (mode == com.aibox.domain.tool.NetworkMode.READ) {
-                    Box(
-                        Modifier
-                            .size(7.dp)
-                            .align(Alignment.TopEnd)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
-                }
-            }
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = mode.label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium
-            )
-        }
-    }
 }
 
 /* ==================== 低电量提示条 ==================== */

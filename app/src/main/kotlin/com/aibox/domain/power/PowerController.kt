@@ -5,6 +5,7 @@ import com.aibox.domain.optimization.OptimizationSettingsRepository
 import com.aibox.infra.power.BatteryMonitor
 import com.aibox.infra.power.PowerStatus
 import com.aibox.util.log.LogSystem
+import com.aibox.util.notify.InAppNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,6 +56,12 @@ class PowerController(
                 "mode=${mode.name} level=${status.level} charging=${status.charging} " +
                     "powerSave=${status.powerSave} htp=$htp configured=${settings.htpPerfMode}"
             )
+            // 只提示“进入”低电量，退出时不打扰
+            when (mode) {
+                PowerMode.SAVER -> InAppNotifier.show("电量较低，已进入平衡模式")
+                PowerMode.SURVIVAL -> InAppNotifier.show("电量极低，已进入省电模式")
+                PowerMode.NORMAL -> Unit
+            }
         }
     }
 }

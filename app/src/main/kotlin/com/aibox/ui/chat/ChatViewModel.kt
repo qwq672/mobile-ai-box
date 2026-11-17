@@ -91,6 +91,31 @@ class ChatViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 按「用户消息版本」过滤出当前可见的消息。
+     *
+     * 用户重发后，旧回复仍然保留在列表中（作为旧版本的分支），
+     * 但只有与当前 [ChatMessage.versionIndex] 匹配的助手回复会被展示，
+     * 也只会被送入下一轮上下文。
+     */
+    fun visibleMessages(src: List<ChatMessage> = _ui.value.messages): List<ChatMessage> {
+        val out = ArrayList<ChatMessage>(src.size)
+        var userVersion = -1
+        for (m in src) {
+            when {
+                m.role == "user" -> {
+                    userVersion = m.versionIndex
+                    out.add(m)
+                }
+                m.role == "assistant" && m.parentUserVersion >= 0 -> {
+                    if (m.parentUserVersion == userVersion) out.add(m)
+                }
+                else -> out.add(m)
+            }
+        }
+        return out
+    }
+
     data class UiState(
         val messages: List<ChatMessage> = emptyList(),
         val streaming: Boolean = false,
@@ -382,7 +407,7 @@ class ChatViewModel : ViewModel() {
         }
 
         viewModelScope.launch {
-            val gen = generate(sid, _ui.value.messages)
+            val gen = generate(sid, visibleMessages())
             // 空回复不落库、不渲染：之前会生成一条 content="" 的助手消息，
             // 在气泡模式下表现为“空气泡”，用户只能继续发「？」追问。
             if (gen.text.isBlank()) {
@@ -593,14 +618,17 @@ class ChatViewModel : ViewModel() {
      */
     fun regenerate() {
         if (_ui.value.streaming) return
-        val msgs = _ui.value.messages
-        val lastIndex = msgs.indexOfLast { it.role == "assistant" }
-        if (lastIndex < 0) return
-        val last = msgs[lastIndex]
-        val history = msgs.take(lastIndex)
+        // 只对「当前可见分支」的最后一条助手回复重新生成，
+        // 否则会把其他用户版本下的隐藏回复也带进上下文
+        val visible = visibleMessages()
+        val lastVisibleIndex = visible.indexOfLast { it.role == "assistant" }
+        if (lastVisibleIndex < 0) return
+        val last = visible[lastVisibleIndex]
+        val history = visible.take(lastVisibleIndex)
+        val remaining = _ui.value.messages.filterNot { it.id == last.id && it.ts == last.ts }
         // 先移除旧回复，只显示新生成的流式内容；完成后把新版本追加回去（旧内容在 versions 里）
         _ui.value = _ui.value.copy(
-            messages = history,
+            messages = remaining,
             streaming = true,
             currentStream = "",
             streamParts = emptyList(),
@@ -646,11 +674,15 @@ class ChatViewModel : ViewModel() {
     }
 
     /**
-     * 编辑用户消息：保留旧内容为版本，并以编辑后的消息重新发送。
+     * 编辑用户消息：旧内容保留为用户消息的历史版本，并以编辑后的内容重新发送。
      *
-     * - 被编辑消息之后的所有消息会被删除（UI + DB），避免出现“旧回答还挂在后面”
-     * - 重新生成不再创建用户消息副本，只追加一条新的助手回复
-     * - 如果只是“重新生成”而不编辑，仍走 [regenerate]（保留回答版本）
+     * 版本关系：
+     * - 用户消息 2/2 = 重新发送后的内容；
+     * - 助手回复 2/2 = 这条重发内容下的第 2 次重新生成（由 [regenerate] 管理）；
+     * - 不同用户版本各自保留自己的助手回复分支，切回旧版本时显示旧分支。
+     *
+     * 编辑最后一条用户消息时保留旧回复分支；编辑更早的消息时仍会截断后续内容
+     * （后续对话依赖旧版提问，无法复用）。
      */
     fun editMessage(message: ChatMessage, newText: String) {
         if (_ui.value.streaming) return
@@ -658,30 +690,60 @@ class ChatViewModel : ViewModel() {
         if (text.isEmpty() || text == message.content) return
         val sid = _ui.value.sessionId
         if (sid == 0L) return
-        val idx = _ui.value.messages.indexOfFirst { it.id == message.id && it.ts == message.ts }
+        val full = _ui.value.messages
+        val idx = full.indexOfFirst { it.id == message.id && it.ts == message.ts }
         if (idx < 0) return
 
-        // 删除被编辑消息之后的所有消息：编辑 = 从这一条重新开始
-        val tail = _ui.value.messages.drop(idx + 1)
-        tail.forEach { old ->
-            if (old.id > 0) {
-                viewModelScope.launch {
-                    runCatching { chatRepo.deleteMessage(old.id) }
-                        .onFailure { LogSystem.warn("aibox.ui.chat", "delete tail msg failed: ${it.message}") }
-                }
-            }
-        }
+        val visible = visibleMessages(full)
+        val isLastUser = visible.lastOrNull { it.role == "user" }?.let {
+            it.id == message.id && it.ts == message.ts
+        } == true
 
-        // 编辑即重发：用户消息只保留编辑后的内容，不再挂 1/2 历史版本
+        val oldVersion = if (message.versions.isEmpty()) 0 else message.versionIndex
+        val base = if (message.versions.isEmpty()) listOf(message.content) else message.versions
+        val versions = base + text
+        val newVersion = versions.lastIndex
         val updated = message.copy(
             content = text,
-            versions = listOf(text),
-            versionIndex = 0
+            versions = versions,
+            versionIndex = newVersion,
+            parts = emptyList()
         )
-        val history = _ui.value.messages.take(idx) + updated
+
+        val history: List<ChatMessage>
+        if (isLastUser) {
+            // 当前分支的旧助手回复 → 绑定到旧用户版本，先隐藏但保留
+            var i = idx + 1
+            while (i < full.size && full[i].role == "assistant") {
+                val oldReply = full[i]
+                val tagged = oldReply.copy(parentUserVersion = oldVersion)
+                if (oldReply.parentUserVersion != oldVersion) {
+                    replaceMessage(oldReply, tagged)
+                    persistUpdate(tagged)
+                }
+                i++
+            }
+            val vIdx = visible.indexOfFirst { it.id == message.id && it.ts == message.ts }
+            history = (if (vIdx >= 0) visible.take(vIdx) else visible) + updated
+            _ui.value = _ui.value.copy(messages = _ui.value.messages.map {
+                if (it.id == message.id && it.ts == message.ts) updated else it
+            })
+        } else {
+            // 编辑更早的消息：后续内容全部失效，截断后重发
+            full.drop(idx + 1).forEach { old ->
+                if (old.id > 0) {
+                    viewModelScope.launch {
+                        runCatching { chatRepo.deleteMessage(old.id) }
+                            .onFailure { LogSystem.warn("aibox.ui.chat", "delete tail msg failed: ${it.message}") }
+                    }
+                }
+            }
+            history = full.take(idx) + updated
+            _ui.value = _ui.value.copy(messages = history)
+        }
+
         toolInvocationViewModel.clearHistory()
         _ui.value = _ui.value.copy(
-            messages = history,
             streaming = true,
             currentStream = "",
             streamParts = emptyList(),
@@ -712,7 +774,8 @@ class ChatViewModel : ViewModel() {
                 tokensPerSecond = gen.tps,
                 parts = gen.parts,
                 versions = listOf(gen.text),
-                versionIndex = 0
+                versionIndex = 0,
+                parentUserVersion = newVersion
             )
             _ui.value = _ui.value.copy(
                 messages = _ui.value.messages + assistant,

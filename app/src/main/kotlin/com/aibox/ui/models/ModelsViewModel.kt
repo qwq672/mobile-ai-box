@@ -108,6 +108,7 @@ class ModelsViewModel : ViewModel() {
                 return@launch
             }
             _ui.value = _ui.value.copy(loading = true, error = null)
+            com.aibox.util.notify.InAppNotifier.show("正在加载模型 ${m.name}")
             LogSystem.info("aibox.ui.models", "ModelsViewModel: activating ${m.name} (${m.filePath})")
 
             // 告诉启动预加载"让路"，别再插一次 load 把用户选择的模型覆盖掉
@@ -200,6 +201,7 @@ class ModelsViewModel : ViewModel() {
                 ?.onSuccess {
                     settings.setLastModel(id)
                     repo.touchUsed(id)
+                    com.aibox.util.notify.InAppNotifier.show("已加载 ${m.name}")
                     LogSystem.info("aibox.ui.models", "ModelsVM: ${m.name} loaded via V1")
                 }
                 ?.onFailure {
@@ -258,6 +260,7 @@ class ModelsViewModel : ViewModel() {
             )
             settings.setLastModel(id)
             repo.touchUsed(id)
+            com.aibox.util.notify.InAppNotifier.show("已加载 ${m.name}")
             LogSystem.info("aibox.ui.models", "ModelsVM: ${m.name} loaded via V2 backend '$backendName'")
         } catch (t: Throwable) {
             _ui.value = _ui.value.copy(error = "V2 加载异常: ${t.message}")

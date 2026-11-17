@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ModelEntity::class, SessionEntity::class, MessageEntity::class, BenchmarkResultEntity::class,
         CharacterEntity::class, PersonaEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -132,13 +132,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // v6 → v7: messages 表新增 parentUserVersion（用户消息版本 ↔ 助手回复分支）
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN parentUserVersion INTEGER NOT NULL DEFAULT -1")
+            }
+        }
+
         fun get(ctx: Context): AppDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(
                 ctx.applicationContext,
                 AppDatabase::class.java,
                 "aibox.db"
             )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
             .fallbackToDestructiveMigration()
             .build().also { INSTANCE = it }
         }

@@ -53,7 +53,14 @@ data class ChatMessage(
      * 非空时 [versions] 的每一项都是一版正文，当前展示 [versionIndex] 对应的那一版。
      */
     val versions: List<String> = emptyList(),
-    val versionIndex: Int = 0
+    val versionIndex: Int = 0,
+    /**
+     * 助手回复所属的用户消息版本下标（-1 = 不区分版本，旧数据/普通回合）。
+     *
+     * 用户重发（编辑）后，旧回复与旧用户版本绑定，新回复绑定新版本；
+     * 切换用户消息版本时只显示对应分支的助手回复。
+     */
+    val parentUserVersion: Int = -1
 )
 
 /** 一次会话 */

@@ -87,7 +87,10 @@ data class MessageEntity(
     val versionsJson: String = "",
     /** 当前展示的版本下标。 */
     @ColumnInfo(defaultValue = "0")
-    val versionIndex: Int = 0
+    val versionIndex: Int = 0,
+    /** 助手回复所属的用户消息版本（-1 = 不区分）。 */
+    @ColumnInfo(defaultValue = "-1")
+    val parentUserVersion: Int = -1
 )
 
 /**

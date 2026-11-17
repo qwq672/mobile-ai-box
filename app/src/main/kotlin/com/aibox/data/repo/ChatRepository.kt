@@ -150,7 +150,8 @@ private fun MessageEntity.toChatMessage() = ChatMessage(
     else runCatching {
         attachmentJson.decodeFromString<List<String>>(versionsJson)
     }.getOrDefault(emptyList()),
-    versionIndex = versionIndex
+    versionIndex = versionIndex,
+    parentUserVersion = parentUserVersion
 )
 private fun ChatMessage.toEntity(sid: Long) = MessageEntity(
     id = id, sessionId = sid, role = role, content = content,
@@ -159,5 +160,6 @@ private fun ChatMessage.toEntity(sid: Long) = MessageEntity(
     else attachmentJson.encodeToString(attachments),
     partsJson = if (parts.isEmpty()) "" else attachmentJson.encodeToString(parts),
     versionsJson = if (versions.isEmpty()) "" else attachmentJson.encodeToString(versions),
-    versionIndex = versionIndex
+    versionIndex = versionIndex,
+    parentUserVersion = parentUserVersion
 )
