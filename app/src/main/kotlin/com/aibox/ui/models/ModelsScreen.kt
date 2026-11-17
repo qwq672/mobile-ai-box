@@ -245,28 +245,37 @@ fun ModelsScreen(
                 }
             } else {
                 items(items = ui.models, key = { it.id }) { m ->
-                    // 删除按钮放进卡片内部，避免卡片被右侧按钮挤窄、按钮悬空
-                    Box {
-                        ModelCard(
-                            model = m,
-                            isActive = ui.activeId == m.id,
-                            loading = ui.loading && ui.activeId == m.id,
-                            onClick = { vm.activate(m.id) },
-                            modifier = Modifier.padding(end = 40.dp)
-                        )
-                        IconButton(
-                            onClick = { deleteTarget = m },
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 2.dp, end = 0.dp)
-                                .size(36.dp)
-                        ) {
-                            Icon(
-                                Icons.Outlined.Delete,
-                                contentDescription = "删除",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(20.dp)
+                    // 删除按钮与卡片共用一层容器，避免“卡片被挤窄、按钮悬空”
+                    val active = ui.activeId == m.id
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (active) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceContainerLow
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            ModelCard(
+                                modifier = Modifier.weight(1f),
+                                model = m,
+                                isActive = active,
+                                loading = ui.loading && ui.activeId == m.id,
+                                onClick = { vm.activate(m.id) }
                             )
+                            IconButton(
+                                onClick = { deleteTarget = m },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Delete,
+                                    contentDescription = "删除",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(Modifier.size(4.dp))
                         }
                     }
                 }
