@@ -63,6 +63,9 @@ class AppContainer(context: Context) {
 
     val modelRepository: ModelRepository = ModelRepository(appContext)
     val settingsRepository: SettingsRepository = SettingsRepository(appContext)
+    /** 云端模型配置集合（可作为独立“模型”出现在列表里）。 */
+    val cloudModelRepository: com.aibox.data.repo.CloudModelRepository =
+        com.aibox.data.repo.CloudModelRepository(appContext)
     val chatRepository: ChatRepository = ChatRepository(appContext)
     /** 角色扮演：AI 角色 + 用户身份。 */
     val roleplayRepository: RoleplayRepository = RoleplayRepository(appContext)

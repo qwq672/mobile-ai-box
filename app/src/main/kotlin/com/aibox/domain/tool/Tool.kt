@@ -92,7 +92,8 @@ enum class ToolCategory {
 enum class ToolOptionType {
     CHOICE,     // 单选（值 + 显示名）
     INTEGER,    // 整数滑块
-    BOOLEAN     // 开关
+    BOOLEAN,    // 开关
+    TEXT        // 文本输入（API key、自定义地址等）
 }
 
 /**
@@ -209,7 +210,13 @@ data class ToolContext(
     val userId: String = "default",
     val deviceInfo: DeviceInfo,
     val confirmCallback: suspend (String, Map<String, Any>) -> Boolean = { _, _ -> false },
-    val progressCallback: ((Float, String) -> Unit)? = null
+    val progressCallback: ((Float, String) -> Unit)? = null,
+    /**
+     * 交互式提问回调（user_choice 工具用）。
+     *
+     * 返回 null 表示当前没有可用 UI（例如后台执行），工具应返回失败而不是卡住。
+     */
+    val choiceCallback: (suspend (UserChoiceRequest) -> UserChoiceAnswer?)? = null
 )
 
 /**

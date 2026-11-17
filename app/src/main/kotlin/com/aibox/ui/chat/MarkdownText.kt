@@ -99,7 +99,7 @@ fun MarkdownText(
      */
     choicesEnabled: Boolean = true
 ) {
-    val blocks = remember(text) { parseBlocks(text) }
+    val blocks = remember(text, choicesEnabled) { parseBlocks(text, choicesEnabled) }
     val primary = MaterialTheme.colorScheme.primary
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val clipboard = LocalClipboardManager.current
@@ -325,7 +325,7 @@ private val olRegex = Regex("^(\\d+)[.)]\\s+(.*)$")
 private val hrRegex = Regex("^\\s*([-*_])\\1{2,}\\s*$")
 private val imageRegex = Regex("^!\\[([^]]*)]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)$")
 
-private fun parseBlocks(src: String): List<MdBlock> {
+private fun parseBlocks(src: String, choicesEnabled: Boolean = true): List<MdBlock> {
     if (src.isBlank()) return emptyList()
     val lines = src.replace("\r\n", "\n").split('\n')
     val blocks = mutableListOf<MdBlock>()
@@ -393,7 +393,7 @@ private fun parseBlocks(src: String): List<MdBlock> {
             }
             if (i < lines.size) i++ // 跳过结束围栏
             // 组件扩展：```aibox:choices
-            if (lang == "choices" || lang == "aibox:choices") {
+            if (choicesEnabled && (lang == "choices" || lang == "aibox:choices")) {
                 val options = code.toString().lineSequence()
                     .map {
                         it.trim()

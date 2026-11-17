@@ -13,7 +13,15 @@ data class CloudConfig(
     val apiKey: String = "",
     val model: String = DEFAULT_MODEL,
     val temperature: Float = 0.7f,
-    val maxTokens: Int = 2048
+    val maxTokens: Int = 2048,
+    /** 供应商/模型是否支持图片输入（多模态）。 */
+    val supportsVision: Boolean = false,
+    /** 是否支持音频输入。 */
+    val supportsAudio: Boolean = false,
+    /** 供应商自带联网搜索（无需本地 web_search 工具）。 */
+    val builtinWebSearch: Boolean = false,
+    /** 供应商自带 URL 阅读（无需本地 url_reader 工具）。 */
+    val builtinUrlReader: Boolean = false
 ) {
     /** 配置是否可用于发起请求。 */
     val usable: Boolean

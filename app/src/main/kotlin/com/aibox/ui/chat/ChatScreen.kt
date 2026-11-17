@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -46,6 +47,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.Add
@@ -77,6 +79,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -148,6 +151,7 @@ fun ChatScreen(
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val enabledTools by vm.enabledToolIds.collectAsStateWithLifecycle()
+    val networkMode = com.aibox.domain.tool.NetworkMode.fromEnabled(enabledTools)
     val listState = rememberLazyListState()
     val keyboard = LocalSoftwareKeyboardController.current
     val snackbarHost = remember { SnackbarHostState() }
@@ -417,7 +421,7 @@ fun ChatScreen(
                                     docStyle = ui.docStyle,
                                     showActions = !ui.streaming && index == lastAssistantIndex,
                                     animate = false,
-                                    choicesEnabled = !ui.streaming && index == lastAssistantIndex,
+                                    choicesEnabled = ui.choicesBeta && !ui.streaming && index == lastAssistantIndex,
                                     onCopy = {
                                         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                                 as android.content.ClipboardManager
@@ -450,6 +454,7 @@ fun ChatScreen(
                                         docStyle = ui.docStyle,
                                         showActions = false,
                                         animate = true,
+                                        choicesEnabled = ui.choicesBeta,
                                         onChoice = { vm.send(it) }
                                     )
                                 }
@@ -502,7 +507,7 @@ fun ChatScreen(
                 enabled = ui.hasModel,
                 attachments = ui.pendingAttachments,
                 onRemoveAttachment = vm::removePendingAttachment,
-                networkMode = com.aibox.domain.tool.NetworkMode.fromEnabled(enabledTools),
+                networkMode = networkMode,
                 onCycleNetwork = vm::cycleNetworkMode,
                 onSend = { txt -> vm.send(txt); keyboard?.hide() },
                 onStop = { vm.stop() },
@@ -526,6 +531,61 @@ fun ChatScreen(
                     .navigationBarsPadding()
                     .padding(bottom = 16.dp)
             ) {
+                Text(
+                    "本轮设置",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                )
+                Text(
+                    "思考档位",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        "off" to "关",
+                        "low" to "低",
+                        "medium" to "中",
+                        "high" to "高"
+                    ).forEach { (id, label) ->
+                        FilterChip(
+                            selected = ui.thinkingLevel == id,
+                            onClick = { vm.setThinkingLevel(id) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+                Text(
+                    "联网",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 24.dp)
+                        .padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    com.aibox.domain.tool.NetworkMode.values().forEach { mode ->
+                        FilterChip(
+                            selected = networkMode == mode,
+                            onClick = { vm.setNetworkMode(mode) },
+                            label = { Text(mode.label) }
+                        )
+                    }
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 Text(
                     "添加到当前消息",
                     style = MaterialTheme.typography.titleSmall,
@@ -613,6 +673,93 @@ fun ChatScreen(
             onAlwaysAllow = { vm.alwaysAllowTool() }
         )
     }
+
+    // user_choice：模型请求用户选择 / 补充
+    ui.pendingUserChoice?.let { pending ->
+        UserChoiceDialog(
+            pending = pending,
+            onSubmit = { vm.submitUserChoice(it) },
+            onCancel = { vm.cancelUserChoice() }
+        )
+    }
+}
+
+/**
+ * user_choice 交互面板：单选 / 多选 / 文字回答，可附带补充说明。
+ */
+@Composable
+private fun UserChoiceDialog(
+    pending: com.aibox.ui.tool.PendingUserChoice,
+    onSubmit: (com.aibox.domain.tool.UserChoiceAnswer) -> Unit,
+    onCancel: () -> Unit
+) {
+    val req = pending.request
+    var selected by remember(pending.invocationId) { mutableStateOf(emptySet<String>()) }
+    var text by remember(pending.invocationId) { mutableStateOf("") }
+    val needsText = req.mode == com.aibox.domain.tool.ChoiceMode.TEXT
+    val canSubmit = selected.isNotEmpty() || text.isNotBlank()
+
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(req.question) },
+        text = {
+            Column(
+                Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (req.options.isNotEmpty()) {
+                    req.options.forEach { option ->
+                        FilterChip(
+                            selected = option in selected,
+                            onClick = {
+                                selected = when (req.mode) {
+                                    com.aibox.domain.tool.ChoiceMode.MULTIPLE ->
+                                        if (option in selected) selected - option else selected + option
+                                    else -> if (option in selected) emptySet() else setOf(option)
+                                }
+                            },
+                            label = { Text(option) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                if (needsText || req.allowExtra) {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = {
+                            Text(
+                                req.extraHint.ifBlank {
+                                    if (needsText) "输入你的回答" else "补充说明（可选）"
+                                }
+                            )
+                        },
+                        minLines = 1,
+                        maxLines = 4
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canSubmit,
+                onClick = {
+                    onSubmit(
+                        com.aibox.domain.tool.UserChoiceAnswer(
+                            selected = selected.toList(),
+                            text = text.trim()
+                        )
+                    )
+                }
+            ) { Text("发送回答") }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("取消") }
+        }
+    )
 }
 
 @Composable
@@ -1401,7 +1548,7 @@ private fun Composer(
             .fillMaxWidth()
             .imePadding()
             .navigationBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 14.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp)
     ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1410,7 +1557,7 @@ private fun Composer(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
         shadowElevation = 6.dp
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 10.dp, top = 12.dp, bottom = 9.dp)) {
+        Column(Modifier.padding(start = 14.dp, end = 8.dp, top = 9.dp, bottom = 6.dp)) {
             PendingAttachmentBar(
                 attachments = attachments,
                 onRemove = onRemoveAttachment,
@@ -1421,10 +1568,10 @@ private fun Composer(
                 onValueChange = { input = it },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = enabled,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
                     color = if (enabled) MaterialTheme.colorScheme.onSurface
                     else MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 22.sp
+                    lineHeight = 20.sp
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 maxLines = 6,
@@ -1432,11 +1579,11 @@ private fun Composer(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { doSend() }),
                 decorationBox = { inner ->
-                    Box(Modifier.padding(top = 2.dp, bottom = 4.dp)) {
+                    Box(Modifier.padding(top = 1.dp, bottom = 2.dp)) {
                         if (input.isEmpty()) {
                             Text(
                                 if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型",
-                                style = MaterialTheme.typography.bodyLarge,
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
                         }
@@ -1444,25 +1591,25 @@ private fun Composer(
                     }
                 }
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 CircleAction(
-                    size = 38,
+                    size = 36,
                     container = MaterialTheme.colorScheme.primaryContainer,
                     enabled = enabled,
-                    // composer 左右内边距不对称（左 16 / 右 10），往左挪 6dp 后
+                    // composer 左右内边距不对称（左 14 / 右 8），往左挪 4dp 后
                     // 与右侧发送按钮的视觉边距保持一致
-                    modifier = Modifier.offset(x = (-6).dp),
+                    modifier = Modifier.offset(x = (-4).dp),
                     onClick = onOpenPlus
                 ) {
                     Icon(
                         Icons.Outlined.Add,
                         contentDescription = "添加",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
                 Spacer(Modifier.width(8.dp))
@@ -1474,7 +1621,7 @@ private fun Composer(
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
-                        .size(38.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
                         .clickable(enabled = enabled, onClick = onMic),
                     contentAlignment = Alignment.Center
@@ -1483,10 +1630,10 @@ private fun Composer(
                         Icons.Outlined.Mic,
                         contentDescription = "语音",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(4.dp))
                 // 发送 / 停止：同一个圆形按钮形变，生成中变实心停止块
                 val circleColor = when {
                     streaming -> MaterialTheme.colorScheme.error
@@ -1499,7 +1646,7 @@ private fun Composer(
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 CircleAction(
-                    size = 38,
+                    size = 36,
                     container = circleColor,
                     enabled = streaming || canSend,
                     onClick = { if (streaming) onStop() else doSend() }
@@ -1509,14 +1656,14 @@ private fun Composer(
                             Icons.Outlined.Stop,
                             contentDescription = "停止",
                             tint = iconTint,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     } else {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
                             contentDescription = "发送",
                             tint = iconTint,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
@@ -1587,7 +1734,7 @@ private fun NetworkModeChip(
         } else null
     ) {
         Row(
-            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(Modifier.size(16.dp)) {

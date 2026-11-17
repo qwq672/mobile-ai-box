@@ -9,8 +9,10 @@ import com.aibox.domain.tool.builtin.DeviceInfoBasicTool
 import com.aibox.domain.tool.builtin.EmailTool
 import com.aibox.domain.tool.builtin.FileReadTool
 import com.aibox.domain.tool.builtin.FileWriteTool
+import com.aibox.domain.tool.builtin.GpsLocationTool
 import com.aibox.domain.tool.builtin.PhoneControlTool
 import com.aibox.domain.tool.builtin.UrlReaderTool
+import com.aibox.domain.tool.builtin.UserChoiceTool
 import com.aibox.domain.tool.builtin.WebSearchTool
 import com.aibox.util.log.LogSystem
 
@@ -87,6 +89,12 @@ class ToolBootstrap(
         okCount += safeRegister("PhoneControlTool") {
             registry.register(PhoneControlTool(appContext))
         }
+        // Agent 交互：让用户选择 / 补充回答
+        okCount += safeRegister("UserChoiceTool") { registry.register(UserChoiceTool()) }
+        // 定位（高级工具，单次定位）
+        okCount += safeRegister("GpsLocationTool") {
+            registry.register(GpsLocationTool(appContext, toolSettingsRepository))
+        }
 
         failCount = EXPECTED_BUILTIN_TOOLS - okCount
         if (failCount == 0) {
@@ -114,8 +122,8 @@ class ToolBootstrap(
     companion object {
         private const val TAG = "aibox.tool.bootstrap"
 
-        /** 当前已实现工具数：5 个基础 + 5 个高级 = 10。 */
-        private const val EXPECTED_BUILTIN_TOOLS = 10
+        /** 当前已实现工具数：5 个基础 + 7 个高级 = 12。 */
+        private const val EXPECTED_BUILTIN_TOOLS = 12
     }
 }
 

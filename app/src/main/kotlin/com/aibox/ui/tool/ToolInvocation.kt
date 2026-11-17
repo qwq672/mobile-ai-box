@@ -84,3 +84,14 @@ data class PendingToolConfirmation(
     val toolIcon: String,
     val params: Map<String, Any>
 )
+
+/**
+ * 待用户回答的交互式提问（user_choice 工具）。
+ *
+ * @param request 问题与可选项
+ */
+data class PendingUserChoice(
+    val invocationId: String,
+    val toolDisplayName: String,
+    val request: com.aibox.domain.tool.UserChoiceRequest
+)

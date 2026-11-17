@@ -61,11 +61,17 @@ class SettingsRepository(private val context: Context) {
         val CLOUD_BASE_URL  = stringPreferencesKey("cloud_base_url")
         val CLOUD_API_KEY   = stringPreferencesKey("cloud_api_key")
         val CLOUD_MODEL     = stringPreferencesKey("cloud_model")
+        val CLOUD_VISION    = booleanPreferencesKey("cloud_supports_vision")
+        val CLOUD_AUDIO     = booleanPreferencesKey("cloud_supports_audio")
+        val CLOUD_WEB       = booleanPreferencesKey("cloud_builtin_web_search")
+        val CLOUD_URL       = booleanPreferencesKey("cloud_builtin_url_reader")
         // 低电量提示：两级都可被用户永久关闭（默认开启）
         val WARN_LOW_BATTERY      = booleanPreferencesKey("warn_low_battery")
         val WARN_CRITICAL_BATTERY = booleanPreferencesKey("warn_critical_battery")
         // 首次启动欢迎页是否已完成
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+        // Beta：aibox:choices 选项卡片（离线小模型下容易滥用，默认关闭）
+        val CHOICES_BETA = booleanPreferencesKey("choices_beta")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -120,7 +126,11 @@ class SettingsRepository(private val context: Context) {
             enabled = p[Keys.CLOUD_ENABLED] ?: false,
             baseUrl = p[Keys.CLOUD_BASE_URL] ?: CloudConfig.DEFAULT_BASE_URL,
             apiKey = p[Keys.CLOUD_API_KEY] ?: "",
-            model = p[Keys.CLOUD_MODEL] ?: CloudConfig.DEFAULT_MODEL
+            model = p[Keys.CLOUD_MODEL] ?: CloudConfig.DEFAULT_MODEL,
+            supportsVision = p[Keys.CLOUD_VISION] ?: false,
+            supportsAudio = p[Keys.CLOUD_AUDIO] ?: false,
+            builtinWebSearch = p[Keys.CLOUD_WEB] ?: false,
+            builtinUrlReader = p[Keys.CLOUD_URL] ?: false
         )
     }
 
@@ -130,6 +140,10 @@ class SettingsRepository(private val context: Context) {
             p[Keys.CLOUD_BASE_URL] = c.baseUrl
             p[Keys.CLOUD_API_KEY] = c.apiKey
             p[Keys.CLOUD_MODEL] = c.model
+            p[Keys.CLOUD_VISION] = c.supportsVision
+            p[Keys.CLOUD_AUDIO] = c.supportsAudio
+            p[Keys.CLOUD_WEB] = c.builtinWebSearch
+            p[Keys.CLOUD_URL] = c.builtinUrlReader
         }
     }
 
@@ -245,6 +259,17 @@ class SettingsRepository(private val context: Context) {
     suspend fun setOnboardingDone(done: Boolean) =
         context.dataStore.edit { it[Keys.ONBOARDING_DONE] = done }
 
+    /**
+     * Beta：是否启用 `aibox:choices` 选项卡片。
+     *
+     * 默认关闭：离线小模型容易把工具参数、选项列表当正文输出，
+     * 表现就是每轮都弹一堆 A/B/C 按钮。
+     */
+    val choicesBeta: Flow<Boolean> = context.dataStore.data.map { it[Keys.CHOICES_BETA] ?: false }
+
+    suspend fun setChoicesBeta(on: Boolean) =
+        context.dataStore.edit { it[Keys.CHOICES_BETA] = on }
+
     // ===================================================
     // 重置（按分类 / 全部）
     // ===================================================
@@ -272,7 +297,8 @@ class SettingsRepository(private val context: Context) {
     /** 只重置云端模型配置。 */
     suspend fun resetCloud() = context.dataStore.edit { p ->
         listOf(
-            Keys.CLOUD_ENABLED, Keys.CLOUD_BASE_URL, Keys.CLOUD_API_KEY, Keys.CLOUD_MODEL
+            Keys.CLOUD_ENABLED, Keys.CLOUD_BASE_URL, Keys.CLOUD_API_KEY, Keys.CLOUD_MODEL,
+            Keys.CLOUD_VISION, Keys.CLOUD_AUDIO, Keys.CLOUD_WEB, Keys.CLOUD_URL
         ).forEach { p.remove(it) }
         LogSystem.info("aibox.settings", "resetCloud done")
     }

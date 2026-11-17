@@ -38,6 +38,8 @@ class ModelsViewModel : ViewModel() {
 
     data class UiState(
         val models: List<ModelInfo> = emptyList(),
+        val cloudModels: List<com.aibox.data.repo.CloudModelProfile> = emptyList(),
+        val activeCloudId: Long = 0,
         val activeId: Long? = null,
         val loading: Boolean = false,
         val error: String? = null,
@@ -51,6 +53,16 @@ class ModelsViewModel : ViewModel() {
         viewModelScope.launch {
             repo.observeAll().collectLatest { list ->
                 _ui.value = _ui.value.copy(models = list)
+            }
+        }
+        viewModelScope.launch {
+            container.cloudModelRepository.profiles.collectLatest { list ->
+                _ui.value = _ui.value.copy(cloudModels = list)
+            }
+        }
+        viewModelScope.launch {
+            container.cloudModelRepository.activeId.collectLatest { id ->
+                _ui.value = _ui.value.copy(activeCloudId = id)
             }
         }
         viewModelScope.launch {
@@ -88,6 +100,9 @@ class ModelsViewModel : ViewModel() {
     fun activate(id: Long) {
         viewModelScope.launch {
             if (_ui.value.loading) return@launch
+            // 切回本地模型时先关云端，否则 completionChat 会继续走云端
+            runCatching { engine.setCloudEnabled(false) }
+            container.cloudModelRepository.setActive(0)
             val m = repo.getById(id) ?: run {
                 _ui.value = _ui.value.copy(error = "模型不存在 (id=$id)")
                 return@launch
@@ -347,5 +362,40 @@ class ModelsViewModel : ViewModel() {
     /** 清除错误提示 */
     fun clearError() {
         _ui.value = _ui.value.copy(error = null)
+    }
+
+    // ===================================================
+    // 云端模型（作为独立“模型”）
+    // ===================================================
+
+    /** 选中一个云端模型：先卸载本地模型，再写入配置并启用云端。 */
+    fun activateCloud(profile: com.aibox.data.repo.CloudModelProfile) {
+        viewModelScope.launch {
+            if (_ui.value.loading) return@launch
+            _ui.value = _ui.value.copy(loading = true, error = null)
+            try {
+                unloadCurrentSilently()
+                settings.saveCloud(container.cloudModelRepository.toConfig(profile, enabled = true))
+                engine.setCloudEnabled(true)
+                container.cloudModelRepository.setActive(profile.id)
+                LogSystem.info("aibox.ui.models", "cloud model activated: ${profile.name} (${profile.model})")
+            } catch (t: Throwable) {
+                LogSystem.error("aibox.ui.models", "activateCloud failed", t)
+                _ui.value = _ui.value.copy(error = "云端模型启用失败: ${t.message}")
+            } finally {
+                _ui.value = _ui.value.copy(loading = false)
+            }
+        }
+    }
+
+    fun deleteCloud(profile: com.aibox.data.repo.CloudModelProfile) {
+        viewModelScope.launch {
+            runCatching {
+                container.cloudModelRepository.delete(profile.id)
+                if (_ui.value.activeCloudId == profile.id) {
+                    engine.setCloudEnabled(false)
+                }
+            }.onFailure { LogSystem.warn("aibox.ui.models", "deleteCloud failed: ${it.message}") }
+        }
     }
 }

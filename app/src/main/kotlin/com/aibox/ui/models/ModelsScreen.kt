@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,9 +23,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
@@ -77,7 +80,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun ModelsScreen(
     vm: ModelsViewModel = viewModel(),
-    dl: DownloadViewModel = viewModel()
+    dl: DownloadViewModel = viewModel(),
+    onAddCloudModel: () -> Unit = {},
+    onEditCloudModel: (Long) -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val dlUi by dl.ui.collectAsStateWithLifecycle()
@@ -119,7 +124,12 @@ fun ModelsScreen(
                         Icon(Icons.Outlined.Menu, contentDescription = "菜单")
                     }
                 },
-                title = { Text("模型", style = MaterialTheme.typography.titleLarge) }
+                title = { Text("模型", style = MaterialTheme.typography.titleLarge) },
+                actions = {
+                    IconButton(onClick = onAddCloudModel) {
+                        Icon(Icons.Outlined.Cloud, contentDescription = "添加云端模型")
+                    }
+                }
             )
         },
         floatingActionButton = {
@@ -149,6 +159,56 @@ fun ModelsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+            }
+
+            // ===== Section 0: 云端模型 =====
+            stickyHeader(key = "header_cloud") {
+                SectionHeader(
+                    icon = Icons.Outlined.Cloud,
+                    title = "云端模型",
+                    count = ui.cloudModels.size
+                )
+            }
+            if (ui.cloudModels.isEmpty()) {
+                item(key = "empty_cloud") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                "还没有云端模型",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                "可以把 DeepSeek / OpenAI / Ollama 等配置成独立模型，和本地模型一起切换。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            FilledTonalButton(onClick = onAddCloudModel) {
+                                Icon(Icons.Outlined.Add, contentDescription = null)
+                                Spacer(Modifier.size(6.dp))
+                                Text("添加云端模型")
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(items = ui.cloudModels, key = { "cloud_${it.id}" }) { profile ->
+                    CloudModelCard(
+                        profile = profile,
+                        isActive = ui.activeCloudId == profile.id,
+                        onActivate = { vm.activateCloud(profile) },
+                        onEdit = { onEditCloudModel(profile.id) },
+                        onDelete = { vm.deleteCloud(profile) }
+                    )
                 }
             }
 
@@ -630,4 +690,85 @@ private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
     bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
     else -> "$bytes B"
+}
+
+/**
+ * 云端模型卡片：与本地模型并列展示，点击即切换。
+ *
+ * 徽标用于一眼看出这个配置支持什么（多模态 / 音频 / 供应商自带联网）。
+ */
+@Composable
+private fun CloudModelCard(
+    profile: com.aibox.data.repo.CloudModelProfile,
+    isActive: Boolean,
+    onActivate: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onActivate() },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            Modifier.padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.Cloud,
+                contentDescription = null,
+                tint = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer
+                else MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.size(10.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    profile.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "${profile.model} · ${profile.baseUrl}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+                val badges = buildList {
+                    if (profile.supportsVision) add("多模态")
+                    if (profile.supportsAudio) add("音频")
+                    if (profile.builtinWebSearch) add("自带联网")
+                    if (profile.builtinUrlReader) add("自带URL阅读")
+                }
+                if (badges.isNotEmpty()) {
+                    Text(
+                        badges.joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (isActive) {
+                    Text(
+                        "当前使用中",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Outlined.Edit, contentDescription = "编辑")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Outlined.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
 }

@@ -91,6 +91,20 @@ class WebSearchTool(
             defaultValue = "5",
             min = 1,
             max = 10
+        ),
+        ToolOptionSpec(
+            key = "tavily_api_key",
+            title = "Tavily API Key",
+            description = "选择 Tavily 或自动模式时需要；留空会回落到设置里的旧配置",
+            type = ToolOptionType.TEXT,
+            defaultValue = ""
+        ),
+        ToolOptionSpec(
+            key = "exa_api_key",
+            title = "Exa API Key",
+            description = "选择 Exa 或自动模式时需要；留空会回落到设置里的旧配置",
+            type = ToolOptionType.TEXT,
+            defaultValue = ""
         )
     )
 
@@ -187,12 +201,31 @@ class WebSearchTool(
     private suspend fun resolveEngine(requested: String): String {
         val id = requested.trim().lowercase()
         if (id != "auto") return id
-        val tavily = runCatching { settingsRepository.tavilyApiKey.first() }.getOrDefault("")
-        val exa = runCatching { settingsRepository.exaApiKey.first() }.getOrDefault("")
+        val tavily = apiKeyFor("tavily")
+        val exa = apiKeyFor("exa")
         return when {
             tavily.isNotBlank() -> "tavily"
             exa.isNotBlank() -> "exa"
             else -> "duckduckgo"
+        }
+    }
+
+    /**
+     * 读取 API key：工具选项优先（设置 → 工具调用 → 联网搜索），
+     * 留空时回落到旧版 SettingsRepository 的 key，保证老配置还能用。
+     */
+    private suspend fun apiKeyFor(engine: String): String {
+        val opts = runCatching { toolSettingsRepository.getOptions(id) }.getOrDefault(emptyMap())
+        val fromOption = when (engine) {
+            "tavily" -> opts["tavily_api_key"].orEmpty()
+            "exa" -> opts["exa_api_key"].orEmpty()
+            else -> ""
+        }
+        if (fromOption.isNotBlank()) return fromOption.trim()
+        return when (engine) {
+            "tavily" -> runCatching { settingsRepository.tavilyApiKey.first() }.getOrDefault("")
+            "exa" -> runCatching { settingsRepository.exaApiKey.first() }.getOrDefault("")
+            else -> ""
         }
     }
 
@@ -252,7 +285,7 @@ class WebSearchTool(
      */
     private suspend fun searchWithTavily(query: String, max: Int): List<SearchResultItem> =
         withContext(Dispatchers.IO) {
-            val apiKey = settingsRepository.tavilyApiKey.first()
+            val apiKey = apiKeyFor("tavily")
             if (apiKey.isBlank()) {
                 throw IllegalStateException("Tavily API key not configured (Settings → 工具 → Tavily API Key)")
             }
@@ -309,7 +342,7 @@ class WebSearchTool(
      */
     private suspend fun searchWithExa(query: String, max: Int): List<SearchResultItem> =
         withContext(Dispatchers.IO) {
-            val apiKey = settingsRepository.exaApiKey.first()
+            val apiKey = apiKeyFor("exa")
             if (apiKey.isBlank()) {
                 throw IllegalStateException("Exa API key not configured (Settings → 工具 → Exa API Key)")
             }

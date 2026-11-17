@@ -7,6 +7,8 @@ import com.aibox.domain.tool.ToolExecutor
 import com.aibox.domain.tool.ToolRegistry
 import com.aibox.domain.tool.ToolResult
 import com.aibox.domain.tool.ToolSettingsRepository
+import com.aibox.domain.tool.UserChoiceAnswer
+import com.aibox.domain.tool.UserChoiceRequest
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
 import kotlinx.coroutines.CompletableDeferred
@@ -57,6 +59,24 @@ class ToolInvocationViewModel(
 
     /** 当前 await 中的 CompletableDeferred；用 AtomicReference 保证串行化解析。 */
     private val pendingDeferred = AtomicReference<CompletableDeferred<Boolean>?>(null)
+
+    /** 当前待用户回答的交互式提问（user_choice）；null 表示没有。 */
+    private val _pendingChoice = MutableStateFlow<PendingUserChoice?>(null)
+    val pendingChoice: StateFlow<PendingUserChoice?> = _pendingChoice.asStateFlow()
+
+    private val choiceDeferred = AtomicReference<CompletableDeferred<UserChoiceAnswer?>?>(null)
+
+    /** 提交用户选择 / 回答；没有 pending 时 no-op。 */
+    fun submitChoice(answer: UserChoiceAnswer) {
+        choiceDeferred.getAndSet(null)?.complete(answer)
+        _pendingChoice.value = null
+    }
+
+    /** 取消选择（用户点返回 / 关闭面板）。 */
+    fun cancelChoice() {
+        choiceDeferred.getAndSet(null)?.complete(null)
+        _pendingChoice.value = null
+    }
 
     /** 每个 invocation 关联的执行上下文（sessionId + deviceInfo），用于重试时复用。 */
     private val invocationContexts = mutableMapOf<String, InvocationContext>()
@@ -244,6 +264,13 @@ class ToolInvocationViewModel(
             },
             progressCallback = { progress, _ ->
                 updateInvocation(invocation.id) { it.copy(progress = progress) }
+            },
+            choiceCallback = { request ->
+                awaitUserChoice(
+                    invocationId = invocation.id,
+                    toolDisplayName = tool.displayName,
+                    request = request
+                )
             }
         )
 
@@ -335,6 +362,33 @@ class ToolInvocationViewModel(
     private fun resolvePending(approved: Boolean) {
         pendingDeferred.getAndSet(null)?.takeIf { !it.isCompleted }?.complete(approved)
         _pending.value = null
+    }
+
+    /**
+     * 等待用户回答 user_choice。
+     *
+     * 与确认流程类似：同一时间只保留一个 pending，旧的在被覆盖前先以 null 结束，
+     * 避免调用方永久挂起。
+     */
+    private suspend fun awaitUserChoice(
+        invocationId: String,
+        toolDisplayName: String,
+        request: UserChoiceRequest
+    ): UserChoiceAnswer? {
+        choiceDeferred.get()?.let { if (!it.isCompleted) it.complete(null) }
+
+        val deferred = CompletableDeferred<UserChoiceAnswer?>()
+        choiceDeferred.set(deferred)
+        _pendingChoice.value = PendingUserChoice(
+            invocationId = invocationId,
+            toolDisplayName = toolDisplayName,
+            request = request
+        )
+        LogSystem.info(TAG, "awaitUserChoice: waiting for user (invocation=$invocationId)")
+        val answer = deferred.await()
+        _pendingChoice.value = null
+        LogSystem.info(TAG, "awaitUserChoice: answered=${answer != null}")
+        return answer
     }
 
     /** 原子更新单条 invocation（按 id 匹配；找不到 no-op）。 */

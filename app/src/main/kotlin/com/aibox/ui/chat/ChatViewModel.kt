@@ -40,8 +40,17 @@ import kotlinx.coroutines.launch
  * 刻意压成一行：小模型上下文宝贵，长篇能力说明反而会提高复读 / 幻觉概率。
  * 同时对 choices 做了硬约束：只在真正需要二选一时用，且不能代替正文。
  */
-private const val UI_CAPABILITY_HINT =
-    "回复用 Markdown。只有确实需要用户在 2~4 个方案中做选择时，才输出 ```aibox:choices 代码块：每行一条、用用户口吻、最多 4 条；不要每轮都给选项，不要用选项代替回答。"
+private const val UI_CAPABILITY_HINT = "回复用 Markdown。"
+
+/**
+ * Beta：choices 选项卡片的提示词。
+ *
+ * 默认不注入：离线小模型容易把工具参数、列表当正文输出，
+ * 表现就是每轮弹出一堆 A/B/C。开启后也保持强约束。
+ */
+private const val CHOICES_BETA_HINT =
+    "（Beta）只有在确实需要用户在 2~4 个方案中做选择时，才输出 ```aibox:choices 代码块：" +
+        "每行一条、用用户口吻、最多 4 条；不要每轮都给选项，不要用选项代替回答。"
 
 class ChatViewModel : ViewModel() {
 
@@ -70,11 +79,15 @@ class ChatViewModel : ViewModel() {
     /** 输入区「联网」三态循环：关 → 阅读 → 搜索 → 关。 */
     fun cycleNetworkMode() {
         val current = com.aibox.domain.tool.NetworkMode.fromEnabled(enabledToolIds.value)
-        val next = current.next()
+        setNetworkMode(current.next())
+    }
+
+    /** 直接设置联网三态（加号菜单用）。 */
+    fun setNetworkMode(mode: com.aibox.domain.tool.NetworkMode) {
         viewModelScope.launch {
-            runCatching { container.toolSettingsRepository.setToolsEnabled(next.applyTo(enabledToolIds.value)) }
-                .onSuccess { LogSystem.info("aibox.tool", "network mode -> ${next.name} (${next.label})") }
-                .onFailure { LogSystem.warn("aibox.tool", "cycleNetworkMode failed: ${it.message}") }
+            runCatching { container.toolSettingsRepository.setToolsEnabled(mode.applyTo(enabledToolIds.value)) }
+                .onSuccess { LogSystem.info("aibox.tool", "network mode -> ${mode.name} (${mode.label})") }
+                .onFailure { LogSystem.warn("aibox.tool", "setNetworkMode failed: ${it.message}") }
         }
     }
 
@@ -102,9 +115,13 @@ class ChatViewModel : ViewModel() {
         val pendingAttachments: List<ChatAttachment> = emptyList(),
         /** 思考档位："off" / "low" / "medium" / "high" */
         val thinkingLevel: String = "medium",
+        /** Beta：是否启用 aibox:choices 选项卡片（默认关闭） */
+        val choicesBeta: Boolean = false,
         // B6 工具调用 UI: 活跃工具调用列表 + 当前待确认（若有）
         val toolInvocations: List<ToolInvocation> = emptyList(),
         val pendingToolConfirmation: PendingToolConfirmation? = null,
+        /** user_choice 工具待用户回答；null 表示没有 */
+        val pendingUserChoice: com.aibox.ui.tool.PendingUserChoice? = null,
         // ---- 角色扮演 ----
         /** 会话模式："CHAT" / "AGENT" / "ROLEPLAY" */
         val mode: String = "CHAT",
@@ -134,6 +151,11 @@ class ChatViewModel : ViewModel() {
         viewModelScope.launch {
             settings.thinkingLevel.collectLatest { level ->
                 _ui.value = _ui.value.copy(thinkingLevel = level)
+            }
+        }
+        viewModelScope.launch {
+            settings.choicesBeta.collectLatest { on ->
+                _ui.value = _ui.value.copy(choicesBeta = on)
             }
         }
         viewModelScope.launch {
@@ -175,6 +197,11 @@ class ChatViewModel : ViewModel() {
         viewModelScope.launch {
             toolInvocationViewModel.pendingConfirmation.collectLatest { pending ->
                 _ui.value = _ui.value.copy(pendingToolConfirmation = pending)
+            }
+        }
+        viewModelScope.launch {
+            toolInvocationViewModel.pendingChoice.collectLatest { pending ->
+                _ui.value = _ui.value.copy(pendingUserChoice = pending)
             }
         }
     }
@@ -706,6 +733,13 @@ class ChatViewModel : ViewModel() {
     /** 用户点"始终允许此工具"：转发到 [ToolInvocationViewModel.alwaysAllow]（加入自动确认白名单）。 */
     fun alwaysAllowTool() = toolInvocationViewModel.alwaysAllow()
 
+    /** user_choice：提交用户的选择 / 回答。 */
+    fun submitUserChoice(answer: com.aibox.domain.tool.UserChoiceAnswer) =
+        toolInvocationViewModel.submitChoice(answer)
+
+    /** user_choice：用户取消回答。 */
+    fun cancelUserChoice() = toolInvocationViewModel.cancelChoice()
+
     /** 用户点"重试"：转发到 [ToolInvocationViewModel.retry]。 */
     fun retryToolInvocation(invocationId: String) = toolInvocationViewModel.retry(invocationId)
 
@@ -837,6 +871,7 @@ class ChatViewModel : ViewModel() {
             systemPrompt.trim(),
             levelHint,
             UI_CAPABILITY_HINT,
+            if (_ui.value.choicesBeta) CHOICES_BETA_HINT else "",
             toolPrompt
         )
             .filter { it.isNotBlank() }

@@ -1,5 +1,9 @@
 package com.aibox.ui.tool
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -30,15 +34,20 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.AIBoxApp
@@ -199,6 +208,9 @@ fun ToolSettingsScreen(
                                 ToolDetailCard(tool)
                                 if (tool.options.isNotEmpty()) {
                                     ToolOptionsBlock(tool = tool, vm = vm)
+                                }
+                                if (tool.id == "gps_location") {
+                                    LocationPermissionRow()
                                 }
                                 Spacer(Modifier.height(DesignTokens.spacing8))
                             }
@@ -526,8 +538,70 @@ private fun ToolOptionsBlock(tool: Tool, vm: ToolSettingsViewModel) {
                         )
                     }
                 }
+                com.aibox.domain.tool.ToolOptionType.TEXT -> {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = value,
+                        onValueChange = { vm.setOption(tool.id, spec.key, it) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(spec.title) },
+                        placeholder = { Text(spec.description) },
+                        singleLine = true,
+                        shape = MaterialTheme.shapes.small
+                    )
+                }
             }
         }
+    }
+}
+
+/**
+ * GPS 工具的权限行：一键申请粗略/精确定位。
+ *
+ * 工具执行时不会自己弹权限（没有 Activity），所以在这里提供入口；
+ * 未授权时工具会返回明确失败信息，而不是静默失败。
+ */
+@Composable
+private fun LocationPermissionRow() {
+    val context = LocalContext.current
+    fun granted(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    var hasPermission by remember { mutableStateOf(granted()) }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { hasPermission = granted() }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("定位权限", style = Type.bodyMedium, color = Colors.onSurface)
+            Text(
+                if (hasPermission) "已授权。精确位置选项需要「精确」权限。"
+                else "未授权，GPS 工具无法工作。仅在你使用定位时才会上报坐标。",
+                style = Type.labelSmall,
+                color = Colors.onSurfaceVariant
+            )
+        }
+        TextButton(
+            onClick = {
+                if (!hasPermission) {
+                    launcher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                }
+            },
+            enabled = !hasPermission
+        ) { Text(if (hasPermission) "已授权" else "授予") }
     }
 }
 

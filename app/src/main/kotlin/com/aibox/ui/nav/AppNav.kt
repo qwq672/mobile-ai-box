@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Home
@@ -58,10 +59,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.aibox.R
 import com.aibox.domain.search.SearchableEntity
 import com.aibox.domain.search.SearchDomain
@@ -75,6 +78,7 @@ import com.aibox.ui.help.HelpScreen
 import com.aibox.ui.home.HomeScreen
 import com.aibox.ui.logviewer.LogScreen
 import com.aibox.ui.models.ModelsScreen
+import com.aibox.ui.models.CloudModelEditScreen
 import com.aibox.ui.optimization.OptimizationSettingsScreen
 import com.aibox.ui.roleplay.RoleplayLauncher
 import com.aibox.ui.roleplay.RoleplayScreen
@@ -121,11 +125,13 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     // 运行日志查看器
     data object Logs : Dest("logs", R.string.nav_settings, Icons.Outlined.History)
     // 帮助与教程（assets/help）
-    data object Help : Dest("help", R.string.nav_settings, Icons.Outlined.Info)
+    data object Help : Dest("help", R.string.nav_help, Icons.Outlined.Info)
+    // 添加 / 编辑云端模型（profileId=0 表示新建）
+    data object CloudModelEdit : Dest("cloud_model_edit/{profileId}", R.string.nav_models, Icons.Outlined.Cloud)
 }
 
 /** 抽屉菜单项（不含 History，History 是独立入口） */
-private val drawerItems = listOf(Dest.Home, Dest.Chat, Dest.Models, Dest.Settings)
+private val drawerItems = listOf(Dest.Home, Dest.Chat, Dest.Models, Dest.Settings, Dest.Help)
 
 /**
  * 提供 drawerState 给子屏幕，让它们在 TopAppBar 里放汉堡图标。
@@ -405,7 +411,24 @@ private fun MainNav() {
                         onBack = { nav.popBackStack() }
                     )
                 }
-                composable(Dest.Models.route)   { ModelsScreen() }
+                composable(Dest.Models.route) {
+                    ModelsScreen(
+                        onAddCloudModel = { nav.navigate("cloud_model_edit/0") },
+                        onEditCloudModel = { id -> nav.navigate("cloud_model_edit/$id") }
+                    )
+                }
+                composable(
+                    route = Dest.CloudModelEdit.route,
+                    arguments = listOf(navArgument("profileId") {
+                        type = NavType.LongType
+                        defaultValue = 0L
+                    })
+                ) { entry ->
+                    CloudModelEditScreen(
+                        profileId = entry.arguments?.getLong("profileId") ?: 0L,
+                        onBack = { nav.popBackStack() }
+                    )
+                }
                 composable(Dest.History.route)  {
                     HistoryScreen(
                         onOpenSession = { sid ->
@@ -439,7 +462,12 @@ private fun MainNav() {
                         onOpenOptimization = { nav.navigate(Dest.Optimization.route) },
                         onOpenDebugChat = { nav.navigate(Dest.DebugChat.route) },
                         onOpenLogs = { nav.navigate(Dest.Logs.route) },
-                        onOpenHelp = { nav.navigate(Dest.Help.route) }
+                        onOpenModels = {
+                            nav.navigate(Dest.Models.route) {
+                                popUpTo(Dest.Home.route) { saveState = true }
+                                launchSingleTop = true
+                            }
+                        }
                     )
                 }
                 composable(Dest.Search.route) {

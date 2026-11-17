@@ -102,8 +102,8 @@ fun SettingsScreen(
     onOpenDebugChat: () -> Unit = {},
     // 运行日志查看器
     onOpenLogs: () -> Unit = {},
-    // 帮助与教程
-    onOpenHelp: () -> Unit = {}
+    // 模型管理（快捷入口）
+    onOpenModels: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val cfg = ui.config
@@ -134,6 +134,39 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            /* ============== 快捷入口（设置项变多后的导航） ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Tune, title = "快捷入口")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(Modifier.padding(vertical = 8.dp)) {
+                        QuickEntryRow(
+                            title = "推理与电量",
+                            subtitle = "HTP 档位 / 低电量阈值 / 提示 / 加载参数",
+                            onClick = onOpenOptimization
+                        )
+                        HorizontalDivider()
+                        QuickEntryRow(
+                            title = "工具与联网",
+                            subtitle = "工具开关 / 搜索 API Key / URL 阅读 / GPS 权限",
+                            onClick = onOpenToolSettings
+                        )
+                        HorizontalDivider()
+                        QuickEntryRow(
+                            title = "模型管理",
+                            subtitle = "本地模型 / 云端模型 / 下载",
+                            onClick = onOpenModels
+                        )
+                    }
+                }
+            }
+
             /* ============== 外观 ============== */
             item {
                 SectionHeader(icon = Icons.Outlined.Palette, title = "外观")
@@ -406,6 +439,26 @@ fun SettingsScreen(
                 )
             }
 
+            /* ============== 实验功能 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Casino, title = "实验功能")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    SwitchRow(
+                        title = "Beta：aibox:choices 选项卡片",
+                        subtitle = "让模型把 2–4 个选项渲染成按钮。离线小模型容易滥用，出现满屏 A/B/C，默认关闭",
+                        checked = ui.choicesBeta,
+                        onCheckedChange = vm::onChoicesBetaChange
+                    )
+                }
+            }
+
             /* ============== 诊断 ============== */
             item {
                 SectionHeader(icon = Icons.Outlined.Info, title = "诊断")
@@ -639,43 +692,6 @@ fun SettingsScreen(
                             ) { vm.resetAllSettings() }
                         }
                     }
-                }
-            }
-
-            /* ============== 帮助 ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.Info, title = "帮助")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    ListItem(
-                        leadingContent = {
-                            Icon(
-                                Icons.Outlined.Info,
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        },
-                        headlineContent = { Text("帮助与教程") },
-                        supportingContent = {
-                            Text("上手指南、设置说明、工具与联网、低电量模式、常见问题")
-                        },
-                        trailingContent = {
-                            Icon(
-                                androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        },
-                        modifier = Modifier.clickable { onOpenHelp() }
-                    )
                 }
             }
 
@@ -985,7 +1001,7 @@ fun SettingsScreen(
 
             /* ============== 云端模型 ============== */
             item {
-                SectionHeader(icon = Icons.Outlined.Cloud, title = "云端模型")
+                SectionHeader(icon = Icons.Outlined.Cloud, title = "云端（当前生效）")
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
@@ -995,6 +1011,11 @@ fun SettingsScreen(
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "推荐在「模型」页添加云端模型并在那里切换；这里显示的是当前生效配置，可手动微调。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         SwitchRow(
                             title = "使用云端模型",
                             subtitle = "OpenAI 兼容协议，支持 DeepSeek / OpenAI / Moonshot / Ollama / vLLM",
@@ -1190,6 +1211,30 @@ fun SettingsScreen(
             }
         )
     }
+}
+
+/** 设置页顶部快捷入口行。 */
+@Composable
+private fun QuickEntryRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        },
+        trailingContent = {
+            Icon(
+                androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        modifier = Modifier.clickable { onClick() }
+    )
 }
 
 /** 重置项：标题 + 说明 + 实际动作，确认后才执行。 */
