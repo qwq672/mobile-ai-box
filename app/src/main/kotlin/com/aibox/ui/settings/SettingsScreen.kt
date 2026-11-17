@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
@@ -40,11 +44,15 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RocketLaunch
 import androidx.compose.material.icons.outlined.Thermostat
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,9 +86,12 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.aibox.domain.cloud.CloudPresets
 import com.aibox.domain.inference.BackendType
 import com.aibox.ui.components.SliderWithLabel
 import com.aibox.ui.components.SwitchRow
@@ -99,6 +110,10 @@ fun SettingsScreen(
     val cfg = ui.config
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    // P3/P4 地基：模块筛选依据（只读展示 + 启动日志）
+    val deviceCaps = remember {
+        com.aibox.domain.device.DeviceCapabilitiesProbe.probe(context)
+    }
     val snackbarHost = remember { SnackbarHostState() }
     val drawerState = com.aibox.ui.nav.LocalDrawerState.current
     val scope = rememberCoroutineScope()
@@ -699,8 +714,22 @@ fun SettingsScreen(
                             checked = ui.cloudEnabled,
                             onCheckedChange = vm::onCloudEnabledChange
                         )
-                        if (ui.cloudEnabled) {
-                            HorizontalDivider()
+                        HorizontalDivider()
+                            // 预设：一键填充 baseUrl / model
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CloudPresets.all.forEach { preset ->
+                                    FilterChip(
+                                        selected = ui.cloudBaseUrl == preset.baseUrl,
+                                        onClick = { vm.onCloudPreset(preset.id) },
+                                        label = { Text(preset.label) }
+                                    )
+                                }
+                            }
                             OutlinedTextField(
                                 value = ui.cloudBaseUrl,
                                 onValueChange = vm::onCloudBaseUrlChange,
@@ -710,15 +739,50 @@ fun SettingsScreen(
                                 singleLine = true,
                                 shape = MaterialTheme.shapes.small
                             )
-                            OutlinedTextField(
-                                value = ui.cloudModel,
-                                onValueChange = vm::onCloudModelChange,
+                            Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("模型名") },
-                                placeholder = { Text("deepseek-chat") },
-                                singleLine = true,
-                                shape = MaterialTheme.shapes.small
-                            )
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = ui.cloudModel,
+                                    onValueChange = vm::onCloudModelChange,
+                                    modifier = Modifier.weight(1f),
+                                    label = { Text("模型名") },
+                                    placeholder = { Text("deepseek-chat") },
+                                    singleLine = true,
+                                    shape = MaterialTheme.shapes.small
+                                )
+                                OutlinedButton(
+                                    onClick = vm::fetchCloudModels,
+                                    enabled = !ui.cloudFetchingModels
+                                ) {
+                                    if (ui.cloudFetchingModels) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(Modifier.size(6.dp))
+                                    }
+                                    Text("获取列表")
+                                }
+                            }
+                            if (ui.cloudModelPickerOpen && ui.cloudModels.isNotEmpty()) {
+                                // 模型可能上百个，用 LazyRow，避免一次性组合全部 chip
+                                LazyRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(ui.cloudModels) { model ->
+                                        FilterChip(
+                                            selected = ui.cloudModel == model,
+                                            onClick = { vm.onCloudModelSelect(model) },
+                                            label = { Text(model) }
+                                        )
+                                    }
+                                }
+                            }
+                            var apiKeyVisible by remember { mutableStateOf(false) }
                             OutlinedTextField(
                                 value = ui.cloudApiKey,
                                 onValueChange = vm::onCloudApiKeyChange,
@@ -726,15 +790,104 @@ fun SettingsScreen(
                                 label = { Text("API Key") },
                                 placeholder = { Text("sk-...") },
                                 singleLine = true,
-                                shape = MaterialTheme.shapes.small
+                                shape = MaterialTheme.shapes.small,
+                                visualTransformation = if (apiKeyVisible) {
+                                    VisualTransformation.None
+                                } else {
+                                    PasswordVisualTransformation()
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                                        Icon(
+                                            if (apiKeyVisible) Icons.Outlined.VisibilityOff
+                                            else Icons.Outlined.Visibility,
+                                            contentDescription = if (apiKeyVisible) "隐藏 API Key" else "显示 API Key"
+                                        )
+                                    }
+                                }
                             )
+                            OutlinedButton(
+                                onClick = vm::testCloud,
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !ui.cloudTesting
+                            ) {
+                                if (ui.cloudTesting) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("测试中…")
+                                } else {
+                                    Text("测试连接")
+                                }
+                            }
+                            ui.cloudTestResult?.let { result ->
+                                Text(
+                                    result.summary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (result.success) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    }
+                                )
+                            }
                             Text(
                                 "开启后聊天优先走云端，并用已启用的工具做 function calling；" +
                                     "关闭则回到本地模型。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        }
+                    }
+                }
+            }
+
+            /* ============== 设备能力 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Memory, title = "设备能力")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        CapabilityLine(
+                            "内存",
+                            "${deviceCaps.totalRamMb / 1024} GB 总 / ${deviceCaps.availableRamMb / 1024} GB 可用"
+                        )
+                        CapabilityLine("ABI", deviceCaps.primaryAbi.ifBlank { "未知" })
+                        CapabilityLine(
+                            "SoC",
+                            listOf(deviceCaps.socManufacturer, deviceCaps.socModel)
+                                .filter { it.isNotBlank() }
+                                .joinToString(" ")
+                                .ifBlank { "未知" }
+                        )
+                        CapabilityLine(
+                            "NPU 架构",
+                            deviceCaps.htpArchHint?.let { "$it（推断）" } ?: "未识别"
+                        )
+                        CapabilityLine(
+                            "NPU 运行时",
+                            if (deviceCaps.qnnRuntimePresent) "已检测到 QNN" else "未检测到 QNN"
+                        )
+                        CapabilityLine(
+                            "MoE 流式",
+                            if (deviceCaps.supportsMoeStreaming) "硬件满足 · 模块规划中"
+                            else "内存不足，不推荐"
+                        )
+                        CapabilityLine(
+                            "NPU 预填充",
+                            if (deviceCaps.supportsNpuPrefill) "硬件满足 · 模块规划中"
+                            else "不支持"
+                        )
                     }
                 }
             }
@@ -1058,6 +1211,25 @@ private fun PermissionCard() {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CapabilityLine(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

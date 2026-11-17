@@ -1,6 +1,7 @@
 package com.aibox.data.repo
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -9,12 +10,18 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.aibox.domain.cloud.CloudConfig
 import com.aibox.domain.inference.BackendType
 import com.aibox.domain.inference.InferenceConfig
+import com.aibox.util.log.LogSystem
+import com.aibox.util.security.CloudKeyCipher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 private val Context.dataStore by preferencesDataStore("settings")
 
 class SettingsRepository(private val context: Context) {
+
+    private val cloudKeyCipher = CloudKeyCipher(context.applicationContext)
 
     private object Keys {
         val BACKEND         = stringPreferencesKey("backend")
@@ -56,7 +63,10 @@ class SettingsRepository(private val context: Context) {
         // 云端模型（OpenAI 兼容协议）
         val CLOUD_ENABLED   = booleanPreferencesKey("cloud_enabled")
         val CLOUD_BASE_URL  = stringPreferencesKey("cloud_base_url")
+        /** 旧字段：明文 API Key，仅用于一次性迁移。 */
         val CLOUD_API_KEY   = stringPreferencesKey("cloud_api_key")
+        /** Keystore AES/GCM 加密后的 API Key（Base64）。 */
+        val CLOUD_API_KEY_ENC = stringPreferencesKey("cloud_api_key_enc")
         val CLOUD_MODEL     = stringPreferencesKey("cloud_model")
     }
 
@@ -109,17 +119,53 @@ class SettingsRepository(private val context: Context) {
         CloudConfig(
             enabled = p[Keys.CLOUD_ENABLED] ?: false,
             baseUrl = p[Keys.CLOUD_BASE_URL] ?: CloudConfig.DEFAULT_BASE_URL,
-            apiKey = p[Keys.CLOUD_API_KEY] ?: "",
+            apiKey = readCloudApiKey(p),
             model = p[Keys.CLOUD_MODEL] ?: CloudConfig.DEFAULT_MODEL
         )
     }
 
+    /**
+     * 读取 API Key：优先解密新字段；只有旧明文时做一次性迁移
+     * （加密写入 `cloud_api_key_enc` 并清掉明文），解密失败回退空串。
+     */
+    private suspend fun readCloudApiKey(p: Preferences): String {
+        val encrypted = p[Keys.CLOUD_API_KEY_ENC]
+        if (!encrypted.isNullOrBlank()) {
+            return withContext(Dispatchers.IO) { cloudKeyCipher.decrypt(encrypted) }
+        }
+        val legacy = p[Keys.CLOUD_API_KEY]
+        if (legacy.isNullOrBlank()) return ""
+        val migrated = withContext(Dispatchers.IO) { cloudKeyCipher.encrypt(legacy) }
+        if (migrated.isNotBlank()) {
+            context.dataStore.edit { prefs ->
+                prefs[Keys.CLOUD_API_KEY_ENC] = migrated
+                prefs.remove(Keys.CLOUD_API_KEY)
+            }
+            LogSystem.info(TAG, "cloud api key migrated to encrypted storage")
+        }
+        return legacy
+    }
+
     suspend fun saveCloud(c: CloudConfig) {
+        val encrypted = if (c.apiKey.isBlank()) {
+            ""
+        } else {
+            withContext(Dispatchers.IO) { cloudKeyCipher.encrypt(c.apiKey) }
+        }
+        if (c.apiKey.isNotBlank() && encrypted.isBlank()) {
+            LogSystem.error(TAG, "cloud api key encryption failed, key not persisted")
+        }
         context.dataStore.edit { p ->
             p[Keys.CLOUD_ENABLED] = c.enabled
             p[Keys.CLOUD_BASE_URL] = c.baseUrl
-            p[Keys.CLOUD_API_KEY] = c.apiKey
             p[Keys.CLOUD_MODEL] = c.model
+            // 明文一律不落盘
+            p.remove(Keys.CLOUD_API_KEY)
+            if (encrypted.isNotBlank()) {
+                p[Keys.CLOUD_API_KEY_ENC] = encrypted
+            } else {
+                p.remove(Keys.CLOUD_API_KEY_ENC)
+            }
         }
     }
 
@@ -198,4 +244,8 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setExaApiKey(key: String) =
         context.dataStore.edit { it[Keys.EXA_API_KEY] = key }
+
+    private companion object {
+        const val TAG = "aibox.settings"
+    }
 }

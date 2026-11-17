@@ -269,6 +269,13 @@ class AppContainer(context: Context) {
                 }
             }
         }
+        // 记录一次设备能力（P3/P4 模块筛选的依据），便于日志里定位"为什么不可用"。
+        appScope.launch {
+            runCatching {
+                val caps = com.aibox.domain.device.DeviceCapabilitiesProbe.probe(appContext)
+                com.aibox.util.log.LogSystem.info("aibox.di", "device caps: ${caps.summary()}")
+            }
+        }
         // 把已安装的后端插件（LiteRT / ONNX / MNN…）绑定起来。
         // 模块页只负责发现，不在这里自动绑定的话，用户装了插件仍会被告知「未安装」。
         appScope.launch {

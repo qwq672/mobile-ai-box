@@ -3,18 +3,27 @@ package com.aibox.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibox.AIBoxApp
+import com.aibox.domain.cloud.CloudConfig
+import com.aibox.domain.cloud.CloudPresets
+import com.aibox.domain.cloud.CloudProbe
+import com.aibox.domain.cloud.CloudProbeError
+import com.aibox.domain.cloud.CloudProbeErrorKind
+import com.aibox.domain.cloud.CloudProbeFailure
+import com.aibox.domain.cloud.CloudProbeResult
 import com.aibox.domain.inference.BackendType
 import com.aibox.domain.inference.HexagonAssets
 import com.aibox.domain.inference.InferenceConfig
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.util.CpuInfo
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -49,13 +58,25 @@ class SettingsViewModel : ViewModel() {
         val openclAvailable: Boolean = false,
         // 云端模型（OpenAI 兼容）
         val cloudEnabled: Boolean = false,
-        val cloudBaseUrl: String = com.aibox.domain.cloud.CloudConfig.DEFAULT_BASE_URL,
-        val cloudModel: String = com.aibox.domain.cloud.CloudConfig.DEFAULT_MODEL,
-        val cloudApiKey: String = ""
+        val cloudBaseUrl: String = CloudConfig.DEFAULT_BASE_URL,
+        val cloudModel: String = CloudConfig.DEFAULT_MODEL,
+        val cloudApiKey: String = "",
+        // 连接测试 / 模型列表
+        val cloudTesting: Boolean = false,
+        val cloudTestResult: CloudProbeResult? = null,
+        val cloudModels: List<String> = emptyList(),
+        val cloudModelPickerOpen: Boolean = false,
+        val cloudFetchingModels: Boolean = false
     )
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
+
+    /** 串行化云端配置写入：输入框逐字触发保存时避免旧值后写入覆盖新值。 */
+    private val cloudEditMutex = Mutex()
+
+    /** 配置每次变更都会自增；测试/拉列表返回时据此丢弃过期结果。 */
+    private var cloudProbeGeneration = 0
 
     init {
         viewModelScope.launch {
@@ -177,17 +198,28 @@ class SettingsViewModel : ViewModel() {
 
     // ---------- 云端模型 ----------
 
-    private fun editCloud(transform: (com.aibox.domain.cloud.CloudConfig) -> com.aibox.domain.cloud.CloudConfig) {
+    private fun editCloud(transform: (CloudConfig) -> CloudConfig) {
+        // 以当前界面值为基准，而不是回读尚未落盘的 DataStore；
+        // 再串行写入，避免逐字输入的旧值后写覆盖新值。
+        val next = transform(currentCloudConfig())
+        cloudProbeGeneration++
+        _ui.value = _ui.value.copy(
+            cloudEnabled = next.enabled,
+            cloudBaseUrl = next.baseUrl,
+            cloudModel = next.model,
+            cloudApiKey = next.apiKey,
+            cloudTestResult = null
+        )
         viewModelScope.launch {
-            val c = container.settingsRepository.cloudConfig.first()
-            container.settingsRepository.saveCloud(transform(c))
+            cloudEditMutex.withLock { container.settingsRepository.saveCloud(next) }
         }
     }
 
     fun onCloudEnabledChange(on: Boolean) {
+        val next = currentCloudConfig().copy(enabled = on)
+        _ui.value = _ui.value.copy(cloudEnabled = on)
         viewModelScope.launch {
-            val c = container.settingsRepository.cloudConfig.first()
-            container.settingsRepository.saveCloud(c.copy(enabled = on))
+            cloudEditMutex.withLock { container.settingsRepository.saveCloud(next) }
             // 同步到推理引擎：打开后聊天直接走云端，关闭回到本地
             container.inferenceEngine.setCloudEnabled(on)
         }
@@ -196,6 +228,98 @@ class SettingsViewModel : ViewModel() {
     fun onCloudBaseUrlChange(v: String) = editCloud { it.copy(baseUrl = v.trim()) }
     fun onCloudModelChange(v: String) = editCloud { it.copy(model = v.trim()) }
     fun onCloudApiKeyChange(v: String) = editCloud { it.copy(apiKey = v.trim()) }
+
+    /** 用当前界面上的配置测连接（两步：模型列表 + 非流式对话）。 */
+    fun testCloud() {
+        if (_ui.value.cloudTesting) return
+        val config = currentCloudConfig()
+        val generation = cloudProbeGeneration
+        _ui.value = _ui.value.copy(cloudTesting = true, cloudTestResult = null)
+        viewModelScope.launch {
+            val result = try {
+                CloudProbe.probe(config)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                CloudProbeResult(
+                    error = CloudProbeError(
+                        CloudProbeErrorKind.OTHER,
+                        null,
+                        (t.message ?: t.javaClass.simpleName).take(300)
+                    )
+                )
+            }
+            if (generation != cloudProbeGeneration) {
+                // 测试期间配置被改过，这次结果已经过期
+                _ui.value = _ui.value.copy(cloudTesting = false)
+                return@launch
+            }
+            _ui.value = _ui.value.copy(
+                cloudTesting = false,
+                cloudTestResult = result,
+                cloudModels = result.models.ifEmpty { _ui.value.cloudModels }
+            )
+            LogSystem.info("aibox.ui.settings", "cloud probe: ${result.summary}")
+        }
+    }
+
+    /** 只拉模型列表，失败也写回 [UiState.cloudTestResult] 以展示分类原因。 */
+    fun fetchCloudModels() {
+        if (_ui.value.cloudFetchingModels) return
+        val config = currentCloudConfig()
+        val generation = cloudProbeGeneration
+        _ui.value = _ui.value.copy(cloudFetchingModels = true, cloudTestResult = null)
+        viewModelScope.launch {
+            try {
+                val models = CloudProbe.listModels(config)
+                if (generation != cloudProbeGeneration) {
+                    _ui.value = _ui.value.copy(cloudFetchingModels = false)
+                    return@launch
+                }
+                _ui.value = _ui.value.copy(
+                    cloudFetchingModels = false,
+                    cloudModels = models,
+                    cloudModelPickerOpen = models.isNotEmpty()
+                )
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                val error = (t as? CloudProbeFailure)?.error
+                    ?: CloudProbeError(
+                        CloudProbeErrorKind.OTHER,
+                        null,
+                        (t.message ?: "获取模型列表失败").take(300)
+                    )
+                _ui.value = _ui.value.copy(
+                    cloudFetchingModels = false,
+                    cloudTestResult = CloudProbeResult(error = error)
+                )
+            }
+        }
+    }
+
+    fun onCloudModelSelect(model: String) {
+        _ui.value = _ui.value.copy(cloudModelPickerOpen = false)
+        editCloud { it.copy(model = model) }
+    }
+
+    /** 预设：填充 Base URL 与模型名，并清空测试结果。 */
+    fun onCloudPreset(id: String) {
+        val preset = CloudPresets.byId(id) ?: return
+        _ui.value = _ui.value.copy(
+            cloudTestResult = null,
+            cloudModels = emptyList(),
+            cloudModelPickerOpen = false
+        )
+        editCloud { it.copy(baseUrl = preset.baseUrl, model = preset.model) }
+    }
+
+    private fun currentCloudConfig() = CloudConfig(
+        enabled = _ui.value.cloudEnabled,
+        baseUrl = _ui.value.cloudBaseUrl,
+        apiKey = _ui.value.cloudApiKey,
+        model = _ui.value.cloudModel
+    )
 
     fun onDarkThemeChange(mode: String) {
         viewModelScope.launch { container.settingsRepository.setDarkTheme(mode) }
