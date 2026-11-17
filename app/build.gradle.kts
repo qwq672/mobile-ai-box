@@ -28,8 +28,8 @@ android {
         applicationId = "com.aibox"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26111614
-        versionName = "v261116-14"
+        versionCode = 26111615
+        versionName = "v261116-15"
 
         ndk {
             // 手机几乎都是 arm64；缩小体积只打这一个

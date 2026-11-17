@@ -24,14 +24,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Verified
@@ -74,6 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -240,23 +245,27 @@ fun ModelsScreen(
                 }
             } else {
                 items(items = ui.models, key = { it.id }) { m ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    // 删除按钮放进卡片内部，避免卡片被右侧按钮挤窄、按钮悬空
+                    Box {
                         ModelCard(
-                            modifier = Modifier.weight(1f),
                             model = m,
                             isActive = ui.activeId == m.id,
                             loading = ui.loading && ui.activeId == m.id,
-                            onClick = { vm.activate(m.id) }
+                            onClick = { vm.activate(m.id) },
+                            modifier = Modifier.padding(end = 40.dp)
                         )
-                        Spacer(Modifier.size(8.dp))
-                        IconButton(onClick = { deleteTarget = m }) {
+                        IconButton(
+                            onClick = { deleteTarget = m },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 2.dp, end = 0.dp)
+                                .size(36.dp)
+                        ) {
                             Icon(
                                 Icons.Outlined.Delete,
                                 contentDescription = "删除",
-                                tint = MaterialTheme.colorScheme.error
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -276,8 +285,11 @@ fun ModelsScreen(
                 PrefabRow(
                     label = p.label,
                     note = p.note,
-                    progress = dlUi.progress[p.file] ?: 0,
-                    onDownload = { dl.downloadPrefab(p) }
+                    task = dlUi.tasks[p.file],
+                    onDownload = { dl.downloadPrefab(p) },
+                    onPause = { dl.pausePrefab(p) },
+                    onResume = { dl.downloadPrefab(p) },
+                    onStop = { dl.stopPrefab(p) }
                 )
             }
 
@@ -309,28 +321,41 @@ fun ModelsScreen(
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("搜索并下载模型", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "按关键词搜索仓库，选择量化版本后直接下载到本机。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onOpenNetworkDownload)
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Outlined.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
                         )
-                        Button(
-                            onClick = onOpenNetworkDownload,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.size(8.dp))
-                            Text("打开模型搜索")
+                        Spacer(Modifier.size(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("搜索并下载模型", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "按关键词搜索仓库，选择量化版本后下载",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+                        Icon(
+                            Icons.AutoMirrored.Outlined.ArrowForward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
             }
 
-            // 给 FAB 留底
+            // 给 FAB 留底（等比 FAB 高度 + 边距，保证最后一项不被遮挡）
             item(key = "bottom_spacer") {
-                Spacer(Modifier.height(88.dp))
+                Spacer(Modifier.height(120.dp))
             }
         }
     }
@@ -402,15 +427,15 @@ private fun SectionHeader(
     title: String,
     count: Int? = null
 ) {
+    // 轻量分组头：不再做成“大按钮”，保证和卡片分层；sticky 时用背景色挡住内容
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.small
+        color = MaterialTheme.colorScheme.background
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(start = 4.dp, top = 10.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -418,28 +443,20 @@ private fun SectionHeader(
                 icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(18.dp)
             )
             Text(
                 title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = FontWeight.SemiBold
             )
             if (count != null) {
-                Spacer(Modifier.size(2.dp))
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(
-                        count.toString(),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+                Text(
+                    count.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
             }
         }
     }
@@ -516,13 +533,26 @@ private fun DownloadSourceCard(
             Text("下载源", style = MaterialTheme.typography.titleSmall)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.horizontalScroll(rememberScrollState())
+                modifier = Modifier.fillMaxWidth()
             ) {
                 sources.forEach { src ->
+                    val short = when (src.id) {
+                        "hf" -> "Hugging Face"
+                        "hf_mirror" -> "HF-Mirror"
+                        "modelscope" -> "魔搭"
+                        else -> src.displayNameZh
+                    }
                     FilterChip(
                         selected = src.id == currentSourceId,
                         onClick = { onSelectSource(src.id) },
-                        label = { Text(src.displayNameZh) }
+                        modifier = Modifier.weight(1f),
+                        label = {
+                            Text(
+                                short,
+                                maxLines = 1,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
                     )
                 }
             }
@@ -592,7 +622,18 @@ private fun AddModelAction(
 /* ---------------- Download Rows ---------------- */
 
 @Composable
-private fun PrefabRow(label: String, note: String, progress: Int, onDownload: () -> Unit) {
+private fun PrefabRow(
+    label: String,
+    note: String,
+    task: DownloadViewModel.DownloadTask?,
+    onDownload: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onStop: () -> Unit
+) {
+    val state = task?.state ?: DownloadViewModel.TaskState.IDLE
+    val pct = task?.percent ?: 0
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
@@ -621,6 +662,7 @@ private fun PrefabRow(label: String, note: String, progress: Int, onDownload: ()
                 )
             }
             Spacer(Modifier.size(12.dp))
+            // 标题永远保留；下载状态与进度条放在标题下方，行高稳定
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -629,40 +671,70 @@ private fun PrefabRow(label: String, note: String, progress: Int, onDownload: ()
                     label,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    note,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (progress in 1..99) {
-                Column(
-                    modifier = Modifier
-                        .padding(start = 12.dp)
-                        .widthIn(min = 104.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    horizontalAlignment = Alignment.End
-                ) {
-                    Text(
-                        "下载中 $progress%",
+                when (state) {
+                    DownloadViewModel.TaskState.RUNNING -> {
+                        Text(
+                            buildString {
+                                append("$pct%")
+                                val total = task?.total ?: -1
+                                if (total > 0) {
+                                    append(" · ${formatBytes(task?.downloaded ?: 0)} / ${formatBytes(total)}")
+                                }
+                                val speed = task?.speed ?: 0
+                                if (speed > 0) append(" · ${formatSpeed(speed)}")
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        LinearProgressIndicator(
+                            progress = { pct / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(MaterialTheme.shapes.small),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                        )
+                    }
+                    DownloadViewModel.TaskState.PAUSED -> Text(
+                        "已暂停 · $pct%",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    LinearProgressIndicator(
-                        progress = { progress / 100f },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(MaterialTheme.shapes.small),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                    DownloadViewModel.TaskState.FAILED -> Text(
+                        "下载失败，可重试",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    DownloadViewModel.TaskState.DONE -> Text(
+                        "已下载",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    else -> Text(
+                        note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-            } else if (progress >= 100) {
-                AssistChip(
+            }
+            Spacer(Modifier.size(8.dp))
+            when (state) {
+                DownloadViewModel.TaskState.RUNNING -> Row {
+                    SmallIconButton(Icons.Outlined.Pause, "暂停", onPause)
+                    SmallIconButton(Icons.Outlined.Close, "停止", onStop)
+                }
+                DownloadViewModel.TaskState.PAUSED -> Row {
+                    SmallIconButton(Icons.Outlined.PlayArrow, "继续", onResume)
+                    SmallIconButton(Icons.Outlined.Close, "停止", onStop)
+                }
+                DownloadViewModel.TaskState.DONE -> AssistChip(
                     onClick = onDownload,
                     label = { Text("已下载", style = MaterialTheme.typography.labelSmall) },
                     leadingIcon = {
@@ -673,16 +745,36 @@ private fun PrefabRow(label: String, note: String, progress: Int, onDownload: ()
                         labelColor = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 )
-            } else {
-                AssistChip(
+                else -> AssistChip(
                     onClick = onDownload,
-                    label = { Text("下载", style = MaterialTheme.typography.labelSmall) },
+                    label = {
+                        Text(
+                            if (state == DownloadViewModel.TaskState.FAILED) "重试" else "下载",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    },
                     leadingIcon = {
                         Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                     }
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SmallIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
+        Icon(
+            icon,
+            contentDescription = description,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -785,6 +877,12 @@ internal fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
     bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
     else -> "$bytes B"
+}
+
+internal fun formatSpeed(bytesPerSecond: Long): String = when {
+    bytesPerSecond >= 1024L * 1024 -> "%.1f MB/s".format(bytesPerSecond / 1024.0 / 1024.0)
+    bytesPerSecond >= 1024L -> "%.0f KB/s".format(bytesPerSecond / 1024.0)
+    else -> "$bytesPerSecond B/s"
 }
 
 /**

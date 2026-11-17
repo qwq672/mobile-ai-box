@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibox.AIBoxApp
 import com.aibox.data.repo.SettingsRepository
+import com.aibox.domain.download.DownloadPausedException
 import com.aibox.domain.download.ModelSource
 import com.aibox.domain.download.RemoteGgufFile
 import com.aibox.domain.download.RemoteModelSummary
@@ -21,6 +22,17 @@ class DownloadViewModel : ViewModel() {
     private val container get() = AIBoxApp.instance.container
     private val settings: SettingsRepository get() = container.settingsRepository
 
+    enum class TaskState { IDLE, RUNNING, PAUSED, DONE, FAILED }
+
+    /** 单个下载任务的状态（UI 行内展示）。 */
+    data class DownloadTask(
+        val state: TaskState = TaskState.IDLE,
+        val percent: Int = 0,
+        val downloaded: Long = 0,
+        val total: Long = -1,
+        val speed: Long = 0
+    )
+
     data class UiState(
         val sources: List<ModelSource> = emptyList(),
         val currentSourceId: String = "hf_mirror",
@@ -28,7 +40,8 @@ class DownloadViewModel : ViewModel() {
         val files: List<RemoteGgufFile> = emptyList(),
         val loading: Boolean = false,
         val error: String? = null,
-        val progress: Map<String, Int> = emptyMap(),
+        /** 每文件下载状态，key = 仓库内路径 */
+        val tasks: Map<String, DownloadTask> = emptyMap(),
         /** HF-Mirror.com 下载失败时是否自动改用 hf-mirror.net */
         val hfMirrorFallback: Boolean = true,
         // ===== 搜索 =====
@@ -71,6 +84,12 @@ class DownloadViewModel : ViewModel() {
     private val _ui = MutableStateFlow(UiState(sources = container.downloadSources))
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
+    /**
+     * 每个 key 的会话号：暂停 / 停止 / 重新开始都会递增，
+     * 旧协程回来时发现会话号变了就不再改状态（避免“暂停后又被写成失败”）。
+     */
+    private val sessions = mutableMapOf<String, Int>()
+
     init {
         viewModelScope.launch {
             settings.downloadSource.collectLatest { src ->
@@ -90,7 +109,6 @@ class DownloadViewModel : ViewModel() {
 
     fun selectSource(id: String) {
         viewModelScope.launch { settings.setDownloadSource(id) }
-        // 换源后旧搜索结果不再可信
         _ui.value = _ui.value.copy(searchResults = emptyList(), files = emptyList(), activeRepo = "")
     }
 
@@ -100,6 +118,54 @@ class DownloadViewModel : ViewModel() {
     }
 
     fun onRepoInput(v: String) { _ui.value = _ui.value.copy(repoInput = v) }
+
+    // ==================== 下载状态 ====================
+
+    private fun destOf(path: String): File =
+        File(FileUtils.modelsDir(container.appContext), path.substringAfterLast('/'))
+
+    private fun nextSession(key: String): Int {
+        val s = (sessions[key] ?: 0) + 1
+        sessions[key] = s
+        return s
+    }
+
+    private fun isCurrent(key: String, session: Int) = sessions[key] == session
+
+    private fun setTask(key: String, session: Int, transform: (DownloadTask) -> DownloadTask) {
+        if (!isCurrent(key, session)) return
+        val cur = _ui.value.tasks[key] ?: DownloadTask()
+        _ui.value = _ui.value.copy(tasks = _ui.value.tasks + (key to transform(cur)))
+    }
+
+    private fun taskOf(key: String): DownloadTask =
+        _ui.value.tasks[key] ?: DownloadTask()
+
+    /** 暂停：中断请求，保留已下载的临时文件。 */
+    fun pauseDownload(file: RemoteGgufFile) {
+        val key = file.path
+        val session = nextSession(key)
+        container.downloadManager.pause(destOf(key))
+        setTask(key, session) { it.copy(state = TaskState.PAUSED, speed = 0) }
+    }
+
+    /** 停止：中断请求并删除残留文件。 */
+    fun stopDownload(file: RemoteGgufFile) {
+        val key = file.path
+        val session = nextSession(key)
+        val dest = destOf(key)
+        container.downloadManager.cancel(dest)
+        runCatching { if (dest.exists()) dest.delete() }
+        setTask(key, session) { DownloadTask() }
+    }
+
+    fun pausePrefab(p: PrefabModel) = pauseDownload(
+        RemoteGgufFile(path = p.file, sizeBytes = 0, lastModified = "")
+    )
+
+    fun stopPrefab(p: PrefabModel) = stopDownload(
+        RemoteGgufFile(path = p.file, sizeBytes = 0, lastModified = "")
+    )
 
     // ==================== 搜索 ====================
 
@@ -152,19 +218,40 @@ class DownloadViewModel : ViewModel() {
         Unit
     }
 
+    // ==================== 下载 ====================
+
+    /** 开始 / 继续下载（已有临时文件时自动续传）。 */
     fun download(repoId: String, file: RemoteGgufFile) {
+        val key = file.path
+        if (taskOf(key).state == TaskState.RUNNING) return
+        val dest = destOf(key)
+        val session = nextSession(key)
+        setTask(key, session) {
+            it.copy(
+                state = TaskState.RUNNING,
+                percent = if (dest.exists() && dest.length() > 0) it.percent else 0,
+                speed = 0
+            )
+        }
+
         viewModelScope.launch {
             val primary = container.sourceById(_ui.value.currentSourceId)
-            val destDir = FileUtils.modelsDir(container.appContext)
-            val dest = File(destDir, file.path.substringAfterLast('/'))
-            val report: (Int) -> Unit = { p ->
-                _ui.value = _ui.value.copy(progress = _ui.value.progress + (file.path to p))
-            }
 
             suspend fun tryDownload(src: ModelSource): Result<Unit> = runCatching {
-                val url = src.fileUrl(repoId, file.path)
-                LogSystem.info("aibox.ui.download", "DownloadVM: $url -> ${dest.absolutePath}")
-                container.downloadManager.download(url, dest, report).getOrThrow()
+                container.downloadManager.download(
+                    url = src.fileUrl(repoId, key),
+                    destFile = dest
+                ) { p ->
+                    setTask(key, session) {
+                        it.copy(
+                            state = TaskState.RUNNING,
+                            percent = p.percent,
+                            downloaded = p.bytesDownloaded,
+                            total = p.totalBytes,
+                            speed = p.bytesPerSecond
+                        )
+                    }
+                }.getOrThrow()
                 container.modelRepository.registerDownloaded(
                     filePath = dest.absolutePath,
                     name = dest.nameWithoutExtension
@@ -173,8 +260,9 @@ class DownloadViewModel : ViewModel() {
             }
 
             var result = tryDownload(primary)
-            // hf-mirror.com 失败 → 可选回退到 hf-mirror.net
-            if (result.isFailure && primary.id == "hf_mirror" && _ui.value.hfMirrorFallback) {
+            val paused = result.exceptionOrNull() is DownloadPausedException
+            // hf-mirror.com 失败 → 可选回退到 hf-mirror.net（暂停不算失败）
+            if (result.isFailure && !paused && primary.id == "hf_mirror" && _ui.value.hfMirrorFallback) {
                 LogSystem.warn(
                     "aibox.ui.download",
                     "DownloadVM: hf-mirror.com failed, retry via hf-mirror.net (${result.exceptionOrNull()?.message})"
@@ -183,9 +271,17 @@ class DownloadViewModel : ViewModel() {
             }
 
             result.onSuccess {
-                LogSystem.info("aibox.ui.download", "DownloadVM: ${file.path} done")
+                LogSystem.info("aibox.ui.download", "DownloadVM: $key done")
+                setTask(key, session) {
+                    it.copy(state = TaskState.DONE, percent = 100, speed = 0)
+                }
             }.onFailure { e ->
-                _ui.value = _ui.value.copy(error = e.message ?: "下载失败")
+                if (e is DownloadPausedException) {
+                    setTask(key, session) { it.copy(state = TaskState.PAUSED, speed = 0) }
+                } else {
+                    setTask(key, session) { it.copy(state = TaskState.FAILED, speed = 0) }
+                    _ui.value = _ui.value.copy(error = e.message ?: "下载失败")
+                }
             }
         }
     }

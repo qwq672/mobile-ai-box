@@ -16,7 +16,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -83,6 +87,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -108,6 +113,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
@@ -201,6 +207,12 @@ fun ChatScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
     var sheetOpen by remember { mutableStateOf(false) }
+    // 加号面板的遮罩透明度：打开淡入、收起淡出
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (sheetOpen) 0.22f else 0f,
+        animationSpec = tween(if (sheetOpen) 180 else 140),
+        label = "plusScrim"
+    )
     // 用户消息编辑：编辑前的内容会作为历史版本保留
     var editTarget by remember { mutableStateOf<ChatMessage?>(null) }
     var editText by remember { mutableStateOf("") }
@@ -482,25 +494,40 @@ fun ChatScreen(
                         )
                 )
 
-                // 加号面板打开时，点内容区任意位置收起（不吃滚动，只接管点击）
-                if (sheetOpen) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { sheetOpen = false }
-                    )
-                }
+                // 加号面板打开时：一层淡遮罩，把面板和聊天内容分开；
+                // 点内容区任意位置收起（不吃滚动，只接管点击）
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = scrimAlpha))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            enabled = sheetOpen
+                        ) { sheetOpen = false }
+                )
 
-                // 加号面板：内联浮层（不用 ModalBottomSheet），避免与 IME / 列表
-                // 重排抢同一段动画导致一卡一卡
+                // 加号面板：整块从输入框上方浮出（位移 + 缩放 + 淡入），
+                // 不做高度展开，避免内容被裁切 / 逐行折纸
                 Column(Modifier.align(Alignment.BottomCenter)) {
                     AnimatedVisibility(
                         visible = sheetOpen,
-                        enter = expandVertically(tween(170)) + fadeIn(tween(120)),
-                        exit = shrinkVertically(tween(150)) + fadeOut(tween(90))
+                        enter = slideInVertically(
+                            animationSpec = tween(200),
+                            initialOffsetY = { it / 2 }
+                        ) + fadeIn(tween(160)) + scaleIn(
+                            animationSpec = tween(200),
+                            initialScale = 0.94f,
+                            transformOrigin = TransformOrigin(0f, 1f)
+                        ),
+                        exit = slideOutVertically(
+                            animationSpec = tween(140),
+                            targetOffsetY = { it / 2 }
+                        ) + fadeOut(tween(110)) + scaleOut(
+                            animationSpec = tween(140),
+                            targetScale = 0.96f,
+                            transformOrigin = TransformOrigin(0f, 1f)
+                        )
                     ) {
                         ComposerPlusPanel(
                             thinkingLevel = ui.thinkingLevel,
@@ -711,14 +738,14 @@ private fun UserChoiceDialog(
     )
 }
 
-/* ==================== 加号面板（内联） ==================== */
+/* ==================== 加号面板（内联浮层） ==================== */
 
 /**
- * 输入区加号面板。
+ * 输入区加号面板：紧凑浮层，而不是把一块设置页贴在输入框上。
  *
- * 刻意不用 ModalBottomSheet：sheet 是独立窗口，弹/收时要和 IME 动画、
- * 消息列表重排同时进行，低端机上很容易一卡一卡。这里改成聊天气泡流里
- * 内联展开的托盘，只有一段自身的高度动画。
+ * - 有遮罩（在 ChatScreen 里画），与聊天内容分层；
+ * - chip 无描边、字号收小，选中态用主色 tint；
+ * - 照片 / 文件是左对齐的小胶囊，不再用 weight 平分。
  */
 @Composable
 private fun ComposerPlusPanel(
@@ -732,18 +759,21 @@ private fun ComposerPlusPanel(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 4.dp)
+            .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-            )
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 8.dp
         ) {
-            Column(Modifier.padding(vertical = 8.dp)) {
+            Column(Modifier.padding(top = 12.dp, bottom = 10.dp)) {
+                Text(
+                    "本轮设置",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 18.dp, bottom = 2.dp)
+                )
                 PanelChipRow(
                     label = "思考",
                     options = listOf(
@@ -757,8 +787,11 @@ private fun ComposerPlusPanel(
                 )
                 PanelChipRow(
                     label = "联网",
-                    options = com.aibox.domain.tool.NetworkMode.values()
-                        .map { it.name to it.label },
+                    options = listOf(
+                        com.aibox.domain.tool.NetworkMode.OFF.name to "关",
+                        com.aibox.domain.tool.NetworkMode.READ.name to "阅读",
+                        com.aibox.domain.tool.NetworkMode.SEARCH.name to "搜索"
+                    ),
                     selected = networkMode.name,
                     onSelect = { id ->
                         com.aibox.domain.tool.NetworkMode.values()
@@ -767,25 +800,21 @@ private fun ComposerPlusPanel(
                     }
                 )
                 HorizontalDivider(
-                    Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                    Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                 )
                 Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    Modifier.padding(horizontal = 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     PanelAction(
                         icon = Icons.Outlined.Image,
                         label = "照片",
-                        modifier = Modifier.weight(1f),
                         onClick = onPhoto
                     )
                     PanelAction(
                         icon = Icons.Outlined.AttachFile,
                         label = "文件",
-                        modifier = Modifier.weight(1f),
                         onClick = onFile
                     )
                 }
@@ -804,28 +833,33 @@ private fun PanelChipRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
+            .padding(start = 18.dp, end = 14.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             label,
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .widthIn(min = 40.dp)
-                .padding(start = 14.dp)
+            modifier = Modifier.width(36.dp)
         )
         Row(
             Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(end = 14.dp),
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             options.forEach { (id, text) ->
                 FilterChip(
                     selected = selected == id,
                     onClick = { onSelect(id) },
-                    label = { Text(text, style = MaterialTheme.typography.labelMedium) }
+                    label = { Text(text, style = MaterialTheme.typography.labelMedium) },
+                    shape = RoundedCornerShape(10.dp),
+                    border = null,
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = Color.Transparent,
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
                 )
             }
         }
@@ -836,28 +870,32 @@ private fun PanelChipRow(
 private fun PanelAction(
     icon: ImageVector,
     label: String,
-    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(22.dp)
-        )
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
     }
 }
 
@@ -1605,15 +1643,16 @@ private fun Composer(
             input = ""
         }
     }
-    // 圆角跟随外观设置，但设上限：半径过大时四角会“啃”掉文字左侧的留白
-    val shapeRadius = (20 * LocalCornerScale.current).toInt().coerceIn(12, 22)
+    // 跟随外观设置里的圆角倍率（与卡片/弹窗同一套规则，不再单独封顶）；
+    // 倍率高时半径会自然变成胶囊，不会“啃”到文字——水平内边距同步加大
+    val shapeRadius = (28 * LocalCornerScale.current).toInt().coerceAtLeast(14)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .imePadding()
             .navigationBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 8.dp)
     ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1622,7 +1661,7 @@ private fun Composer(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
         shadowElevation = 6.dp
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 4.dp)) {
+        Column(Modifier.padding(start = 20.dp, end = 10.dp, top = 18.dp, bottom = 10.dp)) {
             PendingAttachmentBar(
                 attachments = attachments,
                 onRemove = onRemoveAttachment,
@@ -1634,12 +1673,12 @@ private fun Composer(
                 modifier = Modifier
                     .fillMaxWidth()
                     // 给文字本身留出呼吸高度，避免输入区看起来只有一条细线
-                    .heightIn(min = 34.dp),
+                    .heightIn(min = 40.dp),
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     color = if (enabled) MaterialTheme.colorScheme.onSurface
                     else MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 20.sp
+                    lineHeight = 22.sp
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 maxLines = 6,
@@ -1647,7 +1686,7 @@ private fun Composer(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { doSend() }),
                 decorationBox = { inner ->
-                    Box(Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 3.dp)) {
+                    Box(Modifier.fillMaxWidth().padding(top = 2.dp)) {
                         if (input.isEmpty()) {
                             Text(
                                 if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型",
@@ -1659,17 +1698,16 @@ private fun Composer(
                     }
                 }
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 CircleAction(
-                    size = 36,
+                    size = 40,
                     container = MaterialTheme.colorScheme.primaryContainer,
                     enabled = enabled,
-                    // composer 左右内边距不对称（左 14 / 右 8），往左挪 4dp 后
-                    // 与右侧发送按钮的视觉边距保持一致
+                    // composer 左内边距 20 / 右 10，往左挪 4dp 让两侧视觉边距接近
                     modifier = Modifier.offset(x = (-4).dp),
                     onClick = onOpenPlus
                 ) {
@@ -1677,7 +1715,7 @@ private fun Composer(
                         Icons.Outlined.Add,
                         contentDescription = "添加",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(Modifier.width(8.dp))
@@ -1689,7 +1727,7 @@ private fun Composer(
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
-                        .size(36.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
                         .clickable(enabled = enabled, onClick = onMic),
                     contentAlignment = Alignment.Center
@@ -1698,7 +1736,7 @@ private fun Composer(
                         Icons.Outlined.Mic,
                         contentDescription = "语音",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
                 Spacer(Modifier.width(4.dp))
@@ -1714,7 +1752,7 @@ private fun Composer(
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 CircleAction(
-                    size = 36,
+                    size = 40,
                     container = circleColor,
                     enabled = streaming || canSend,
                     onClick = { if (streaming) onStop() else doSend() }
@@ -1724,14 +1762,14 @@ private fun Composer(
                             Icons.Outlined.Stop,
                             contentDescription = "停止",
                             tint = iconTint,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     } else {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
                             contentDescription = "发送",
                             tint = iconTint,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }

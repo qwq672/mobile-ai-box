@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,8 +20,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -291,8 +296,11 @@ fun NetworkDownloadScreen(
                 items(items = ui.files, key = { it.path }) { f ->
                     DownloadFileCard(
                         file = f,
-                        progress = ui.progress[f.path] ?: 0,
-                        onDownload = { vm.download(ui.activeRepo, f) }
+                        task = ui.tasks[f.path],
+                        onDownload = { vm.download(ui.activeRepo, f) },
+                        onPause = { vm.pauseDownload(f) },
+                        onResume = { vm.download(ui.activeRepo, f) },
+                        onStop = { vm.stopDownload(f) }
                     )
                 }
             }
@@ -346,11 +354,16 @@ private fun SearchResultRow(summary: RemoteModelSummary, onClick: () -> Unit) {
 @Composable
 private fun DownloadFileCard(
     file: RemoteGgufFile,
-    progress: Int,
-    onDownload: () -> Unit
+    task: DownloadViewModel.DownloadTask?,
+    onDownload: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onStop: () -> Unit
 ) {
     val name = file.path.substringAfterLast('/')
     val quant = quantizationOf(name)
+    val state = task?.state ?: DownloadViewModel.TaskState.IDLE
+    val pct = task?.percent ?: 0
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -379,7 +392,7 @@ private fun DownloadFileCard(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -398,28 +411,75 @@ private fun DownloadFileCard(
                     )
                 }
             }
-            when {
-                progress in 1..99 -> {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LinearProgressIndicator(
-                            progress = { progress / 100f },
+            when (state) {
+                DownloadViewModel.TaskState.RUNNING -> {
+                    Text(
+                        buildString {
+                            append("$pct%")
+                            val total = task?.total ?: -1
+                            if (total > 0) {
+                                append(" · ${formatBytes(task?.downloaded ?: 0)} / ${formatBytes(total)}")
+                            }
+                            val speed = task?.speed ?: 0
+                            if (speed > 0) append(" · ${formatSpeed(speed)}")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    LinearProgressIndicator(
+                        progress = { pct / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(MaterialTheme.shapes.small),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onPause, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Outlined.Pause, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("暂停")
+                        }
+                        OutlinedButton(
+                            onClick = onStop,
                             modifier = Modifier.weight(1f),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                        )
-                        Spacer(Modifier.size(10.dp))
-                        Text(
-                            "$progress%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(Icons.Outlined.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("停止")
+                        }
                     }
                 }
-                progress >= 100 -> {
+                DownloadViewModel.TaskState.PAUSED -> {
+                    Text(
+                        "已暂停 · $pct%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = onResume, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Outlined.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("继续")
+                        }
+                        OutlinedButton(
+                            onClick = onStop,
+                            modifier = Modifier.weight(1f),
+                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(Icons.Outlined.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("停止")
+                        }
+                    }
+                }
+                DownloadViewModel.TaskState.DONE -> {
                     Text(
                         "已下载",
                         style = MaterialTheme.typography.labelSmall,
@@ -428,13 +488,20 @@ private fun DownloadFileCard(
                     )
                 }
                 else -> {
+                    if (state == DownloadViewModel.TaskState.FAILED) {
+                        Text(
+                            "下载失败，可重试",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     FilledTonalButton(
                         onClick = onDownload,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.size(8.dp))
-                        Text("下载")
+                        Text(if (state == DownloadViewModel.TaskState.FAILED) "重试" else "下载")
                     }
                 }
             }
