@@ -494,37 +494,38 @@ fun ChatScreen(
                     )
                 }
 
-                // 加号面板：内联展开（不用 ModalBottomSheet），避免与 IME / 列表
+                // 加号面板：内联浮层（不用 ModalBottomSheet），避免与 IME / 列表
                 // 重排抢同一段动画导致一卡一卡
-                AnimatedVisibility(
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                    visible = sheetOpen,
-                    enter = expandVertically(tween(170)) + fadeIn(tween(120)),
-                    exit = shrinkVertically(tween(150)) + fadeOut(tween(90))
-                ) {
-                    ComposerPlusPanel(
-                        thinkingLevel = ui.thinkingLevel,
-                        onThinkingLevel = vm::setThinkingLevel,
-                        networkMode = networkMode,
-                        onNetworkMode = vm::setNetworkMode,
-                        onPhoto = {
-                            sheetOpen = false
-                            photoPicker.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
-                        onFile = {
-                            sheetOpen = false
-                            filePicker.launch(
-                                arrayOf(
-                                    "text/*",
-                                    "application/json",
-                                    "application/xml",
-                                    "application/octet-stream"
+                Column(Modifier.align(Alignment.BottomCenter)) {
+                    AnimatedVisibility(
+                        visible = sheetOpen,
+                        enter = expandVertically(tween(170)) + fadeIn(tween(120)),
+                        exit = shrinkVertically(tween(150)) + fadeOut(tween(90))
+                    ) {
+                        ComposerPlusPanel(
+                            thinkingLevel = ui.thinkingLevel,
+                            onThinkingLevel = vm::setThinkingLevel,
+                            networkMode = networkMode,
+                            onNetworkMode = vm::setNetworkMode,
+                            onPhoto = {
+                                sheetOpen = false
+                                photoPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
-                            )
-                        }
-                    )
+                            },
+                            onFile = {
+                                sheetOpen = false
+                                filePicker.launch(
+                                    arrayOf(
+                                        "text/*",
+                                        "application/json",
+                                        "application/xml",
+                                        "application/octet-stream"
+                                    )
+                                )
+                            }
+                        )
+                    }
                 }
 
             }
