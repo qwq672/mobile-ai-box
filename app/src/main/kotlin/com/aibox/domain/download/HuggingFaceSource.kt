@@ -4,6 +4,7 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import retrofit2.http.GET
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /** HuggingFace 原始源 */
 open class HuggingFaceSource : ModelSource {
@@ -26,6 +27,18 @@ open class HuggingFaceSource : ModelSource {
 
     override fun fileUrl(repo: String, path: String): String =
         "$baseUrl/$repo/resolve/main/$path"
+
+    override suspend fun searchModels(query: String): List<RemoteModelSummary> {
+        if (query.isBlank()) return emptyList()
+        return api.searchModels(query = query.trim()).map {
+            RemoteModelSummary(
+                repo = it.id,
+                downloads = it.downloads ?: 0,
+                likes = it.likes ?: 0,
+                note = it.pipelineTag ?: ""
+            )
+        }
+    }
 }
 
 @JsonClass(generateAdapter = true)
@@ -46,7 +59,18 @@ data class HfCommit(
 interface HfApi {
     @GET("api/models/{repo}/tree/main?recursive=true")
     suspend fun listTree(@Path("repo") repo: String): List<HfTreeItem>
+
+    @GET("api/models?filter=gguf&sort=downloads&direction=-1&limit=30")
+    suspend fun searchModels(@Query("search") query: String): List<HfModelSummary>
 }
+
+@JsonClass(generateAdapter = true)
+data class HfModelSummary(
+    @Json(name = "id") val id: String,
+    @Json(name = "downloads") val downloads: Long? = null,
+    @Json(name = "likes") val likes: Long? = null,
+    @Json(name = "pipeline_tag") val pipelineTag: String? = null
+)
 
 internal fun retrofitBuild(baseUrl: String): retrofit2.Retrofit {
     return retrofit2.Retrofit.Builder()

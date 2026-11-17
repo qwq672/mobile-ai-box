@@ -13,12 +13,15 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,7 +87,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -93,7 +95,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -480,6 +481,52 @@ fun ChatScreen(
                             )
                         )
                 )
+
+                // 加号面板打开时，点内容区任意位置收起（不吃滚动，只接管点击）
+                if (sheetOpen) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { sheetOpen = false }
+                    )
+                }
+
+                // 加号面板：内联展开（不用 ModalBottomSheet），避免与 IME / 列表
+                // 重排抢同一段动画导致一卡一卡
+                AnimatedVisibility(
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    visible = sheetOpen,
+                    enter = expandVertically(tween(170)) + fadeIn(tween(120)),
+                    exit = shrinkVertically(tween(150)) + fadeOut(tween(90))
+                ) {
+                    ComposerPlusPanel(
+                        thinkingLevel = ui.thinkingLevel,
+                        onThinkingLevel = vm::setThinkingLevel,
+                        networkMode = networkMode,
+                        onNetworkMode = vm::setNetworkMode,
+                        onPhoto = {
+                            sheetOpen = false
+                            photoPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        onFile = {
+                            sheetOpen = false
+                            filePicker.launch(
+                                arrayOf(
+                                    "text/*",
+                                    "application/json",
+                                    "application/xml",
+                                    "application/octet-stream"
+                                )
+                            )
+                        }
+                    )
+                }
+
             }
 
             // 运行状态：仅在生成时出现，不生成时完全隐形
@@ -511,7 +558,7 @@ fun ChatScreen(
                 onCycleNetwork = vm::cycleNetworkMode,
                 onSend = { txt -> vm.send(txt); keyboard?.hide() },
                 onStop = { vm.stop() },
-                onOpenPlus = { sheetOpen = true },
+                onOpenPlus = { sheetOpen = !sheetOpen },
                 onMic = requestMic,
                 modifier = Modifier.graphicsLayer {
                     alpha = composerProgress
@@ -521,105 +568,6 @@ fun ChatScreen(
         }
     }
 
-    if (sheetOpen) {
-        ModalBottomSheet(
-            onDismissRequest = { sheetOpen = false },
-            sheetState = rememberModalBottomSheetState()
-        ) {
-            Column(
-                Modifier
-                    .navigationBarsPadding()
-                    .padding(bottom = 16.dp)
-            ) {
-                Text(
-                    "本轮设置",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-                )
-                Text(
-                    "思考档位",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf(
-                        "off" to "关",
-                        "low" to "低",
-                        "medium" to "中",
-                        "high" to "高"
-                    ).forEach { (id, label) ->
-                        FilterChip(
-                            selected = ui.thinkingLevel == id,
-                            onClick = { vm.setThinkingLevel(id) },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-                Text(
-                    "联网",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 24.dp)
-                        .padding(bottom = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    com.aibox.domain.tool.NetworkMode.values().forEach { mode ->
-                        FilterChip(
-                            selected = networkMode == mode,
-                            onClick = { vm.setNetworkMode(mode) },
-                            label = { Text(mode.label) }
-                        )
-                    }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                Text(
-                    "添加到当前消息",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-                )
-                SheetAction(
-                    icon = Icons.Outlined.Image,
-                    title = "照片",
-                    subtitle = "从相册选择图片，发给多模态模型"
-                ) {
-                    sheetOpen = false
-                    photoPicker.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                }
-                SheetAction(
-                    icon = Icons.Outlined.AttachFile,
-                    title = "文件",
-                    subtitle = "导入 txt / md / json / csv / 代码等文本文件"
-                ) {
-                    sheetOpen = false
-                    filePicker.launch(
-                        arrayOf(
-                            "text/*",
-                            "application/json",
-                            "application/xml",
-                            "application/octet-stream"
-                        )
-                    )
-                }
-            }
-        }
-    }
 
     if (clearOpen) {
         AlertDialog(
@@ -762,38 +710,153 @@ private fun UserChoiceDialog(
     )
 }
 
+/* ==================== 加号面板（内联） ==================== */
+
+/**
+ * 输入区加号面板。
+ *
+ * 刻意不用 ModalBottomSheet：sheet 是独立窗口，弹/收时要和 IME 动画、
+ * 消息列表重排同时进行，低端机上很容易一卡一卡。这里改成聊天气泡流里
+ * 内联展开的托盘，只有一段自身的高度动画。
+ */
 @Composable
-private fun SheetAction(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
+private fun ComposerPlusPanel(
+    thinkingLevel: String,
+    onThinkingLevel: (String) -> Unit,
+    networkMode: com.aibox.domain.tool.NetworkMode,
+    onNetworkMode: (com.aibox.domain.tool.NetworkMode) -> Unit,
+    onPhoto: () -> Unit,
+    onFile: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 4.dp)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(Modifier.padding(vertical = 8.dp)) {
+                PanelChipRow(
+                    label = "思考",
+                    options = listOf(
+                        "off" to "关",
+                        "low" to "低",
+                        "medium" to "中",
+                        "high" to "高"
+                    ),
+                    selected = thinkingLevel,
+                    onSelect = onThinkingLevel
+                )
+                PanelChipRow(
+                    label = "联网",
+                    options = com.aibox.domain.tool.NetworkMode.values()
+                        .map { it.name to it.label },
+                    selected = networkMode.name,
+                    onSelect = { id ->
+                        com.aibox.domain.tool.NetworkMode.values()
+                            .firstOrNull { it.name == id }
+                            ?.let(onNetworkMode)
+                    }
+                )
+                HorizontalDivider(
+                    Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    PanelAction(
+                        icon = Icons.Outlined.Image,
+                        label = "照片",
+                        modifier = Modifier.weight(1f),
+                        onClick = onPhoto
+                    )
+                    PanelAction(
+                        icon = Icons.Outlined.AttachFile,
+                        label = "文件",
+                        modifier = Modifier.weight(1f),
+                        onClick = onFile
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PanelChipRow(
+    label: String,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .widthIn(min = 40.dp)
+                .padding(start = 14.dp)
+        )
+        Row(
             Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center
+                .horizontalScroll(rememberScrollState())
+                .padding(end = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            options.forEach { (id, text) ->
+                FilterChip(
+                    selected = selected == id,
+                    onClick = { onSelect(id) },
+                    label = { Text(text, style = MaterialTheme.typography.labelMedium) }
+                )
+            }
         }
-        Column {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+    }
+}
+
+@Composable
+private fun PanelAction(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp)
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 
@@ -1541,7 +1604,8 @@ private fun Composer(
             input = ""
         }
     }
-    val shapeRadius = (26 * LocalCornerScale.current).toInt().coerceAtLeast(10)
+    // 圆角跟随外观设置，但设上限：半径过大时四角会“啃”掉文字左侧的留白
+    val shapeRadius = (20 * LocalCornerScale.current).toInt().coerceIn(12, 22)
 
     Box(
         modifier = modifier
@@ -1557,7 +1621,7 @@ private fun Composer(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
         shadowElevation = 6.dp
     ) {
-        Column(Modifier.padding(start = 14.dp, end = 8.dp, top = 9.dp, bottom = 6.dp)) {
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 4.dp)) {
             PendingAttachmentBar(
                 attachments = attachments,
                 onRemove = onRemoveAttachment,
@@ -1566,7 +1630,10 @@ private fun Composer(
             BasicTextField(
                 value = input,
                 onValueChange = { input = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 给文字本身留出呼吸高度，避免输入区看起来只有一条细线
+                    .heightIn(min = 34.dp),
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     color = if (enabled) MaterialTheme.colorScheme.onSurface
@@ -1579,7 +1646,7 @@ private fun Composer(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { doSend() }),
                 decorationBox = { inner ->
-                    Box(Modifier.padding(top = 1.dp, bottom = 2.dp)) {
+                    Box(Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 3.dp)) {
                         if (input.isEmpty()) {
                             Text(
                                 if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型",
@@ -1591,7 +1658,7 @@ private fun Composer(
                     }
                 }
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically

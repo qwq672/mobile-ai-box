@@ -14,7 +14,12 @@
 
     <!-- 读取用户导入的模型文件 (pocket-llm 风格) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
     <!-- 多模态 / 语音相关运行时权限（在设置 → 权限 中按需申请） -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

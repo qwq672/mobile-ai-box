@@ -20,12 +20,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Thermostat
@@ -78,6 +80,7 @@ import com.aibox.ui.help.HelpScreen
 import com.aibox.ui.home.HomeScreen
 import com.aibox.ui.logviewer.LogScreen
 import com.aibox.ui.models.ModelsScreen
+import com.aibox.ui.models.NetworkDownloadScreen
 import com.aibox.ui.models.CloudModelEditScreen
 import com.aibox.ui.optimization.OptimizationSettingsScreen
 import com.aibox.ui.roleplay.RoleplayLauncher
@@ -128,6 +131,12 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object Help : Dest("help", R.string.nav_help, Icons.Outlined.Info)
     // 添加 / 编辑云端模型（profileId=0 表示新建）
     data object CloudModelEdit : Dest("cloud_model_edit/{profileId}", R.string.nav_models, Icons.Outlined.Cloud)
+    // 推理参数与采样
+    data object InferenceParams : Dest("inference_params", R.string.nav_settings, Icons.Filled.Tune)
+    // 重置设置
+    data object ResetSettings : Dest("reset_settings", R.string.nav_settings, Icons.Outlined.RestartAlt)
+    // 网络下载模型（搜索 / 选量化 / 下载）
+    data object NetworkDownload : Dest("network_download", R.string.nav_models, Icons.Outlined.CloudDownload)
 }
 
 /** 抽屉菜单项（不含 History，History 是独立入口） */
@@ -414,8 +423,13 @@ private fun MainNav() {
                 composable(Dest.Models.route) {
                     ModelsScreen(
                         onAddCloudModel = { nav.navigate("cloud_model_edit/0") },
-                        onEditCloudModel = { id -> nav.navigate("cloud_model_edit/$id") }
+                        onEditCloudModel = { id -> nav.navigate("cloud_model_edit/$id") },
+                        onOpenNetworkDownload = { nav.navigate(Dest.NetworkDownload.route) },
+                        onOpenLogs = { nav.navigate(Dest.Logs.route) }
                     )
+                }
+                composable(Dest.NetworkDownload.route) {
+                    NetworkDownloadScreen(onBack = { nav.popBackStack() })
                 }
                 composable(
                     route = Dest.CloudModelEdit.route,
@@ -467,7 +481,9 @@ private fun MainNav() {
                                 popUpTo(Dest.Home.route) { saveState = true }
                                 launchSingleTop = true
                             }
-                        }
+                        },
+                        onOpenInferenceParams = { nav.navigate(Dest.InferenceParams.route) },
+                        onOpenReset = { nav.navigate(Dest.ResetSettings.route) }
                     )
                 }
                 composable(Dest.Search.route) {
@@ -549,6 +565,12 @@ private fun MainNav() {
                 }
                 composable(Dest.Help.route) {
                     HelpScreen(onBack = { nav.popBackStack() })
+                }
+                composable(Dest.InferenceParams.route) {
+                    com.aibox.ui.settings.InferenceParamsScreen(onBack = { nav.popBackStack() })
+                }
+                composable(Dest.ResetSettings.route) {
+                    com.aibox.ui.settings.ResetSettingsScreen(onBack = { nav.popBackStack() })
                 }
             }
         }

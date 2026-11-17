@@ -46,6 +46,15 @@ data class InferenceConfig(
      * 开启后量化 KV（q8_0/q4_0）才可能真正生效，否则会被降级为 f16。
      */
     val forceFlashAttention: Boolean = false,
+    /**
+     * FlashAttention 总开关（加载时生效）。
+     *
+     * 与 [forceFlashAttention] 的区别：这里是“正常开启”，
+     * 强制开关保留给需要覆盖后端默认判断的场景。native 侧二者取或。
+     */
+    val flashAttention: Boolean = true,
+    /** GPU 后端是否使用 Vulkan（关闭则走 OpenCL）。 */
+    val gpuUseVulkan: Boolean = true,
     // 注：autoLoadModel 字段已删除（G-settings-fix）
     // "模型预加载" 开关归 OptimizationSettings.preloadModel 统一管理
     // （开关式优化 → OptimizationSettings；本字段原属 V1 dead code 无消费方）

@@ -32,11 +32,15 @@ class SettingsRepository(private val context: Context) {
         val MIN_P           = stringPreferencesKey("min_p")
         val REPEAT_PENALTY  = stringPreferencesKey("repeat_penalty")
         val REPEAT_LAST_N   = intPreferencesKey("repeat_last_n")
+        val FLASH_ATTENTION = booleanPreferencesKey("flash_attention")
+        val GPU_USE_VULKAN  = booleanPreferencesKey("gpu_use_vulkan")
         // 注：AUTO_LOAD key 已删除（G-settings-fix）
         // "模型预加载" 开关归 OptimizationSettings.preloadModel 统一管理
         // 详见 docs/ARCHITECTURE.md §配置分层
         val SYSTEM_PROMPT   = stringPreferencesKey("system_prompt")
         val DOWNLOAD_SOURCE = stringPreferencesKey("dl_source")
+        // HF-Mirror.com 下载失败时回退到 hf-mirror.net
+        val HF_MIRROR_FALLBACK = booleanPreferencesKey("hf_mirror_fallback")
         val LANGUAGE        = stringPreferencesKey("lang")
         val LAST_MODEL_ID   = intPreferencesKey("last_model_id")
         // 外观 & 日志
@@ -90,11 +94,17 @@ class SettingsRepository(private val context: Context) {
             minP = (p[Keys.MIN_P] ?: "0.05").toFloat().coerceIn(0f, 1f),
             repeatPenalty = (p[Keys.REPEAT_PENALTY] ?: "1.1").toFloat(),
             repeatLastN = (p[Keys.REPEAT_LAST_N] ?: 256).coerceIn(32, 2048),
+            flashAttention = p[Keys.FLASH_ATTENTION] ?: true,
+            gpuUseVulkan = p[Keys.GPU_USE_VULKAN] ?: true,
             systemPrompt = p[Keys.SYSTEM_PROMPT] ?: ""
         )
     }
 
     val downloadSource: Flow<String> = context.dataStore.data.map { it[Keys.DOWNLOAD_SOURCE] ?: "hf_mirror" }
+
+    /** HF-Mirror.com 失败时是否自动改用 hf-mirror.net。 */
+    val hfMirrorFallback: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.HF_MIRROR_FALLBACK] ?: true }
     val language: Flow<String> = context.dataStore.data.map { it[Keys.LANGUAGE] ?: "zh" }
     val lastModelId: Flow<Long> = context.dataStore.data.map { (it[Keys.LAST_MODEL_ID] ?: -1L).toLong() }
     /** 思考强度："off" / "low" / "medium" / "high"。旧数据回退到 thinking_mode 开关。 */
@@ -163,12 +173,17 @@ class SettingsRepository(private val context: Context) {
             p[Keys.MIN_P] = c.minP.toString()
             p[Keys.REPEAT_PENALTY] = c.repeatPenalty.toString()
             p[Keys.REPEAT_LAST_N] = c.repeatLastN
+            p[Keys.FLASH_ATTENTION] = c.flashAttention
+            p[Keys.GPU_USE_VULKAN] = c.gpuUseVulkan
             p[Keys.SYSTEM_PROMPT] = c.systemPrompt
         }
     }
 
     suspend fun setDownloadSource(src: String) =
         context.dataStore.edit { it[Keys.DOWNLOAD_SOURCE] = src }
+
+    suspend fun setHfMirrorFallback(on: Boolean) =
+        context.dataStore.edit { it[Keys.HF_MIRROR_FALLBACK] = on }
 
     suspend fun setLanguage(lang: String) =
         context.dataStore.edit { it[Keys.LANGUAGE] = lang }
@@ -280,7 +295,8 @@ class SettingsRepository(private val context: Context) {
             Keys.BACKEND, Keys.N_GPU_LAYERS, Keys.CPU_THREADS, Keys.ANTI_ROLLBACK,
             Keys.PHYSICAL_BATCH, Keys.BATCH, Keys.KV_QUANT, Keys.CONTEXT_LEN,
             Keys.TEMPERATURE, Keys.TOP_K, Keys.TOP_P, Keys.MIN_P,
-            Keys.REPEAT_PENALTY, Keys.REPEAT_LAST_N, Keys.SYSTEM_PROMPT
+            Keys.REPEAT_PENALTY, Keys.REPEAT_LAST_N, Keys.SYSTEM_PROMPT,
+            Keys.FLASH_ATTENTION, Keys.GPU_USE_VULKAN
         ).forEach { p.remove(it) }
         LogSystem.info("aibox.settings", "resetInference done")
     }

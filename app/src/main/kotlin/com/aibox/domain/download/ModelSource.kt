@@ -23,7 +23,20 @@ interface ModelSource {
      * 拿到某文件的下载 URL。
      */
     fun fileUrl(repo: String, path: String): String
+
+    /**
+     * 搜索仓库（可选）。默认不支持，返回空列表。
+     */
+    suspend fun searchModels(query: String): List<RemoteModelSummary> = emptyList()
 }
+
+/** 搜索结果里的仓库摘要。 */
+data class RemoteModelSummary(
+    val repo: String,
+    val downloads: Long = 0,
+    val likes: Long = 0,
+    val note: String = ""
+)
 
 data class RemoteGgufFile(
     val path: String,        // 仓库内相对路径，如 "qwen2.5-1.5b-instruct-q4_k_m.gguf"

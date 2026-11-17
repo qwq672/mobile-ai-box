@@ -645,21 +645,86 @@ class ChatViewModel : ViewModel() {
         persistUpdate(updated)
     }
 
-    /** 编辑用户消息：旧内容自动保留为一个版本，可随时切回。 */
+    /**
+     * 编辑用户消息：保留旧内容为版本，并以编辑后的消息重新发送。
+     *
+     * - 被编辑消息之后的所有消息会被删除（UI + DB），避免出现“旧回答还挂在后面”
+     * - 重新生成不再创建用户消息副本，只追加一条新的助手回复
+     * - 如果只是“重新生成”而不编辑，仍走 [regenerate]（保留回答版本）
+     */
     fun editMessage(message: ChatMessage, newText: String) {
         if (_ui.value.streaming) return
         val text = newText.trim()
         if (text.isEmpty() || text == message.content) return
-        val base = if (message.versions.isEmpty()) listOf(message.content) else message.versions
-        val versions = base + text
+        val sid = _ui.value.sessionId
+        if (sid == 0L) return
+        val idx = _ui.value.messages.indexOfFirst { it.id == message.id && it.ts == message.ts }
+        if (idx < 0) return
+
+        // 删除被编辑消息之后的所有消息：编辑 = 从这一条重新开始
+        val tail = _ui.value.messages.drop(idx + 1)
+        tail.forEach { old ->
+            if (old.id > 0) {
+                viewModelScope.launch {
+                    runCatching { chatRepo.deleteMessage(old.id) }
+                        .onFailure { LogSystem.warn("aibox.ui.chat", "delete tail msg failed: ${it.message}") }
+                }
+            }
+        }
+
+        // 编辑即重发：用户消息只保留编辑后的内容，不再挂 1/2 历史版本
         val updated = message.copy(
             content = text,
-            versions = versions,
-            versionIndex = versions.lastIndex,
-            parts = emptyList()
+            versions = listOf(text),
+            versionIndex = 0
         )
-        replaceMessage(message, updated)
-        persistUpdate(updated)
+        val history = _ui.value.messages.take(idx) + updated
+        toolInvocationViewModel.clearHistory()
+        _ui.value = _ui.value.copy(
+            messages = history,
+            streaming = true,
+            currentStream = "",
+            streamParts = emptyList(),
+            errorMessage = null
+        )
+
+        viewModelScope.launch {
+            runCatching {
+                if (updated.id > 0) chatRepo.updateMessage(updated)
+                else chatRepo.addMessage(sid, updated)
+            }.onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist edited msg failed", it) }
+
+            val gen = generate(sid, history)
+            if (gen.text.isBlank()) {
+                _ui.value = _ui.value.copy(
+                    streaming = false,
+                    currentStream = "",
+                    streamParts = emptyList(),
+                    errorMessage = gen.error
+                        ?: "模型本轮没有产生可见文本。可以重试一次。"
+                )
+                return@launch
+            }
+            val assistant = ChatMessage(
+                role = "assistant",
+                content = gen.text,
+                sessionId = sid,
+                tokensPerSecond = gen.tps,
+                parts = gen.parts,
+                versions = listOf(gen.text),
+                versionIndex = 0
+            )
+            _ui.value = _ui.value.copy(
+                messages = _ui.value.messages + assistant,
+                streaming = false,
+                currentStream = "",
+                streamParts = emptyList(),
+                errorMessage = gen.error
+            )
+            runCatching { chatRepo.addMessage(sid, assistant) }
+                .onSuccess { newId -> setPersistedId(assistant.ts, assistant.role, newId) }
+                .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist edited assistant failed", it) }
+        }
     }
 
     private fun replaceMessage(old: ChatMessage, updated: ChatMessage) {

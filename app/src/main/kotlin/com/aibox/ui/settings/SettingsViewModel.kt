@@ -214,6 +214,37 @@ class SettingsViewModel : ViewModel() {
         update(_ui.value.config.copy(backend = b))
     }
 
+    /**
+     * 统一后端选择：CPU / GPU / NPU。
+     *
+     * GPU 在配置层仍映射到 Vulkan 或 OpenCL，由 [onGpuUseVulkanChange] 决定。
+     */
+    fun onUnifiedBackendChange(kind: String) {
+        val cfg = _ui.value.config
+        val target = when (kind) {
+            "gpu" -> if (cfg.gpuUseVulkan) BackendType.VULKAN else BackendType.OPENCL
+            "npu" -> BackendType.NPU
+            else -> BackendType.CPU
+        }
+        update(cfg.copy(backend = target))
+    }
+
+    /** GPU 后端是否使用 Vulkan（关闭则 OpenCL）；切换后端时立即同步。 */
+    fun onGpuUseVulkanChange(on: Boolean) {
+        val cfg = _ui.value.config
+        update(cfg.copy(gpuUseVulkan = on, backend = if (on) BackendType.VULKAN else BackendType.OPENCL))
+    }
+
+    /** FlashAttention 总开关（加载时生效）。 */
+    fun onFlashAttentionChange(on: Boolean) {
+        update(_ui.value.config.copy(flashAttention = on))
+    }
+
+    /** 强制 FlashAttention（加载时生效）。 */
+    fun onForceFlashAttentionChange(on: Boolean) {
+        update(_ui.value.config.copy(forceFlashAttention = on))
+    }
+
     fun onKvQuantChange(q: String) {
         update(_ui.value.config.copy(kvQuant = q))
     }

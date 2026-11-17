@@ -83,6 +83,8 @@ data class FrameworkOverride(
         repeatPenalty   = repeatPenalty   ?: base.repeatPenalty,
         repeatLastN     = repeatLastN     ?: base.repeatLastN,
         forceFlashAttention = base.forceFlashAttention,
+        flashAttention  = base.flashAttention,
+        gpuUseVulkan    = base.gpuUseVulkan,
         systemPrompt    = base.systemPrompt   // 框架覆盖不涉及 system prompt
     )
 }

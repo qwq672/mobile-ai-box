@@ -38,7 +38,7 @@ class OpenClBackend(
             batch = config.batch,
             contextLength = config.contextLength,
             kvQuant = config.kvQuant,
-            forceFa = config.forceFlashAttention
+            forceFa = config.flashAttention || config.forceFlashAttention
         )
         loaded = ok
         if (ok) native.llamaSetSampler(

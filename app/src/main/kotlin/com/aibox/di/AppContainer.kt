@@ -78,8 +78,13 @@ class AppContainer(context: Context) {
         ModelScopeSource()
     )
 
-    fun sourceById(id: String): ModelSource =
-        downloadSources.first { it.id == id }
+    fun sourceById(id: String): ModelSource = when (id) {
+        "hf_mirror_net" -> hfMirrorNetSource
+        else -> downloadSources.first { it.id == id }
+    }
+
+    /** HF-Mirror 备用域名（.net），仅在用户开启回退且 .com 失败时使用。 */
+    val hfMirrorNetSource: ModelSource = com.aibox.domain.download.HfMirrorNetSource()
 
     // ===================================================
     // E：快捷方式持久化（主页 Hybrid 设计）

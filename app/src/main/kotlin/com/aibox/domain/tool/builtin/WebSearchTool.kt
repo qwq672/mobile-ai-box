@@ -73,7 +73,7 @@ class WebSearchTool(
         ToolOptionSpec(
             key = "default_engine",
             title = "默认搜索引擎",
-            description = "自动：配置了 Tavily/Exa 就用它，否则用 DuckDuckGo（免费、无需 key）",
+            description = "自动：优先用已启用且配置了 key 的服务商，最后回落到 DuckDuckGo",
             type = ToolOptionType.CHOICE,
             defaultValue = "auto",
             choices = listOf(
@@ -82,6 +82,27 @@ class WebSearchTool(
                 ToolOptionChoice("tavily", "Tavily"),
                 ToolOptionChoice("exa", "Exa")
             )
+        ),
+        ToolOptionSpec(
+            key = "enable_duckduckgo",
+            title = "启用 DuckDuckGo",
+            description = "免费、无需 key；作为兜底服务商建议保持开启",
+            type = ToolOptionType.BOOLEAN,
+            defaultValue = "true"
+        ),
+        ToolOptionSpec(
+            key = "enable_tavily",
+            title = "启用 Tavily",
+            description = "关闭后自动模式不会再选它，模型显式指定时也会被忽略",
+            type = ToolOptionType.BOOLEAN,
+            defaultValue = "true"
+        ),
+        ToolOptionSpec(
+            key = "enable_exa",
+            title = "启用 Exa",
+            description = "关闭后自动模式不会再选它，模型显式指定时也会被忽略",
+            type = ToolOptionType.BOOLEAN,
+            defaultValue = "true"
         ),
         ToolOptionSpec(
             key = "max_results",
@@ -149,7 +170,11 @@ class WebSearchTool(
         val maxResults = maxResultsRaw.coerceIn(1, 20)
 
         val requestedEngine = (params["search_engine"] as? String)?.takeIf { it.isNotBlank() }
-        val engine = resolveEngine(requestedEngine ?: optionEngine)
+        val enabled = enabledEngines(opts)
+        val engine = resolveEngine(requestedEngine ?: optionEngine, enabled)
+            ?: return Outcome.Failure(
+                "所有联网搜索服务商都被关闭了，请在「设置 → 工具调用 → 联网搜索」中至少启用一个"
+            )
 
         return try {
             LogSystem.info(TAG, "WebSearch: query='$query', engine=$engine, max=$maxResults")
@@ -196,17 +221,38 @@ class WebSearchTool(
     }
 
     /**
-     * 解析最终引擎：显式指定优先；auto 时按已配置的 API key 选择。
+     * 用户启用了哪些服务商（设置 → 工具调用 → 联网搜索）。
+     * 未写过选项时默认全部启用，保证老用户行为不变。
      */
-    private suspend fun resolveEngine(requested: String): String {
+    private fun enabledEngines(opts: Map<String, String>): Set<String> {
+        fun on(key: String) = opts[key]?.trim()?.lowercase() != "false"
+        return buildSet {
+            if (on("enable_duckduckgo")) add("duckduckgo")
+            if (on("enable_tavily")) add("tavily")
+            if (on("enable_exa")) add("exa")
+        }
+    }
+
+    /**
+     * 解析最终引擎：显式指定优先（但必须在启用集合里）；auto 时按 key 选。
+     * 全部关闭时返回 null，由调用方给出明确错误。
+     */
+    private suspend fun resolveEngine(requested: String, enabled: Set<String>): String? {
         val id = requested.trim().lowercase()
-        if (id != "auto") return id
-        val tavily = apiKeyFor("tavily")
-        val exa = apiKeyFor("exa")
+        if (id != "auto") {
+            if (id in enabled) return id
+            LogSystem.warn(TAG, "engine '$id' is disabled, fallback to auto")
+        }
+        val tavily = if ("tavily" in enabled) apiKeyFor("tavily") else ""
+        val exa = if ("exa" in enabled) apiKeyFor("exa") else ""
         return when {
-            tavily.isNotBlank() -> "tavily"
-            exa.isNotBlank() -> "exa"
-            else -> "duckduckgo"
+            "tavily" in enabled && tavily.isNotBlank() -> "tavily"
+            "exa" in enabled && exa.isNotBlank() -> "exa"
+            "duckduckgo" in enabled -> "duckduckgo"
+            // 只剩付费服务商：照用，缺 key 时会给出服务商自己的报错
+            "tavily" in enabled -> "tavily"
+            "exa" in enabled -> "exa"
+            else -> null
         }
     }
 

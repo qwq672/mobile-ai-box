@@ -6,6 +6,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material3.AlertDialog
@@ -41,20 +44,24 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -82,11 +89,18 @@ fun ModelsScreen(
     vm: ModelsViewModel = viewModel(),
     dl: DownloadViewModel = viewModel(),
     onAddCloudModel: () -> Unit = {},
-    onEditCloudModel: (Long) -> Unit = {}
+    onEditCloudModel: (Long) -> Unit = {},
+    onOpenNetworkDownload: () -> Unit = {},
+    onOpenLogs: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val dlUi by dl.ui.collectAsStateWithLifecycle()
     val snackbarHost = remember { SnackbarHostState() }
+
+    val settingsRepo = remember { com.aibox.AIBoxApp.instance.container.settingsRepository }
+    val scope = rememberCoroutineScope()
+
+    var addSheetOpen by remember { mutableStateOf(false) }
 
     val pickFile = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -114,7 +128,6 @@ fun ModelsScreen(
     }
 
     val drawerState = com.aibox.ui.nav.LocalDrawerState.current
-    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -126,17 +139,17 @@ fun ModelsScreen(
                 },
                 title = { Text("模型", style = MaterialTheme.typography.titleLarge) },
                 actions = {
-                    IconButton(onClick = onAddCloudModel) {
-                        Icon(Icons.Outlined.Cloud, contentDescription = "添加云端模型")
+                    IconButton(onClick = onOpenLogs) {
+                        Icon(Icons.Outlined.ReceiptLong, contentDescription = "运行日志")
                     }
                 }
             )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                text = { Text("导入本地模型") },
+                text = { Text("添加模型") },
                 icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                onClick = launchImport
+                onClick = { addSheetOpen = true }
             )
         },
         snackbarHost = { SnackbarHost(snackbarHost) }
@@ -268,79 +281,96 @@ fun ModelsScreen(
                 )
             }
 
-            // ===== Section 3: 从仓库浏览 =====
-            stickyHeader(key = "header_browse") {
+            // ===== Section 3: 下载设置 =====
+            stickyHeader(key = "header_dl") {
                 SectionHeader(
-                    icon = Icons.Outlined.Search,
-                    title = "从仓库浏览"
+                    icon = Icons.Outlined.CloudDownload,
+                    title = "下载设置"
                 )
             }
 
-            item(key = "browse_input") {
+            item(key = "dl_settings") {
+                DownloadSourceCard(
+                    sources = dlUi.sources,
+                    currentSourceId = dlUi.currentSourceId,
+                    fallback = dlUi.hfMirrorFallback,
+                    onSelectSource = dl::selectSource,
+                    onFallbackChange = { on ->
+                        scope.launch { settingsRepo.setHfMirrorFallback(on) }
+                    }
+                )
+            }
+
+            item(key = "network_download") {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.medium,
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    Column(
-                        Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        // 源 chip 行
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            dlUi.sources.forEach { src ->
-                                FilterChip(
-                                    selected = src.id == dlUi.currentSourceId,
-                                    onClick = { dl.selectSource(src.id) },
-                                    label = { Text(src.displayNameZh) }
-                                )
-                            }
-                        }
-                        OutlinedTextField(
-                            value = dlUi.repoInput,
-                            onValueChange = dl::onRepoInput,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("仓库 ID") },
-                            placeholder = { Text("例：Qwen/Qwen2.5-1.5B-Instruct-GGUF") },
-                            singleLine = true,
-                            shape = MaterialTheme.shapes.small
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("搜索并下载模型", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "按关键词搜索仓库，选择量化版本后直接下载到本机。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Button(
-                            onClick = { dl.listFiles() },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !dlUi.loading
+                            onClick = onOpenNetworkDownload,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.size(8.dp))
-                            Text(if (dlUi.loading) "正在列出…" else "列出文件")
-                        }
-                        if (dlUi.loading) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text("打开模型搜索")
                         }
                     }
                 }
             }
 
-            if (dlUi.files.isEmpty() && !dlUi.loading) {
-                item(key = "empty_files") {
-                    EmptyBrowseState()
-                }
-            }
-
-            items(items = dlUi.files, key = { it.path }) { f ->
-                RemoteFileRow(
-                    file = f,
-                    progress = dlUi.progress[f.path] ?: 0,
-                    onDownload = { dl.download(dlUi.repoInput, f) }
-                )
-            }
-
             // 给 FAB 留底
             item(key = "bottom_spacer") {
                 Spacer(Modifier.height(88.dp))
+            }
+        }
+    }
+
+    // 统一「添加模型」入口：云端 / 本地 / 网络下载
+    if (addSheetOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { addSheetOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(Modifier.padding(bottom = 16.dp)) {
+                Text(
+                    "添加模型",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                )
+                AddModelAction(
+                    icon = Icons.Outlined.Cloud,
+                    title = "添加云端模型",
+                    subtitle = "DeepSeek / OpenAI / Ollama 等 API 服务"
+                ) {
+                    addSheetOpen = false
+                    onAddCloudModel()
+                }
+                AddModelAction(
+                    icon = Icons.Outlined.Memory,
+                    title = "添加已下载的本地模型",
+                    subtitle = "导入手机里的 .gguf 文件"
+                ) {
+                    addSheetOpen = false
+                    launchImport()
+                }
+                AddModelAction(
+                    icon = Icons.Outlined.CloudDownload,
+                    title = "从网络下载模型",
+                    subtitle = "通过 Hugging Face / HF-Mirror / 魔搭搜索并下载"
+                ) {
+                    addSheetOpen = false
+                    onOpenNetworkDownload()
+                }
             }
         }
     }
@@ -462,32 +492,97 @@ private fun EmptyDownloadedState(onImport: () -> Unit) {
     }
 }
 
+/* ---------------- 下载源设置 ---------------- */
+
 @Composable
-private fun EmptyBrowseState() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 16.dp),
-        contentAlignment = Alignment.Center
+private fun DownloadSourceCard(
+    sources: List<com.aibox.domain.download.ModelSource>,
+    currentSourceId: String,
+    fallback: Boolean,
+    onSelectSource: (String) -> Unit,
+    onFallbackChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("下载源", style = MaterialTheme.typography.titleSmall)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState())
+            ) {
+                sources.forEach { src ->
+                    FilterChip(
+                        selected = src.id == currentSourceId,
+                        onClick = { onSelectSource(src.id) },
+                        label = { Text(src.displayNameZh) }
+                    )
+                }
+            }
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("HF-Mirror 失败时改用 .net", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "hf-mirror.com 下载失败时自动重试 hf-mirror.net",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = fallback, onCheckedChange = onFallbackChange)
+            }
+        }
+    }
+}
+
+/* ---------------- 添加模型入口 ---------------- */
+
+@Composable
+private fun AddModelAction(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
-                Icons.Outlined.CloudDownload,
+                icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(20.dp)
             )
+        }
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(
-                "暂无文件",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                "输入仓库 ID 后点击「列出文件」",
-                style = MaterialTheme.typography.bodyMedium,
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -592,7 +687,7 @@ private fun PrefabRow(label: String, note: String, progress: Int, onDownload: ()
 }
 
 @Composable
-private fun RemoteFileRow(file: RemoteGgufFile, progress: Int, onDownload: () -> Unit) {
+internal fun RemoteFileRow(file: RemoteGgufFile, progress: Int, onDownload: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.medium,
@@ -686,7 +781,7 @@ private fun RemoteFileRow(file: RemoteGgufFile, progress: Int, onDownload: () ->
 private fun formatSize(mb: Long): String =
     if (mb >= 1024) "%.2f GB".format(mb / 1024.0) else "$mb MB"
 
-private fun formatBytes(bytes: Long): String = when {
+internal fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
     bytes >= 1024L * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
     else -> "$bytes B"

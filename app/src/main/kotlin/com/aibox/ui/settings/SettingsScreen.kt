@@ -103,11 +103,14 @@ fun SettingsScreen(
     // 运行日志查看器
     onOpenLogs: () -> Unit = {},
     // 模型管理（快捷入口）
-    onOpenModels: () -> Unit = {}
+    onOpenModels: () -> Unit = {},
+    // 推理参数与采样（独立子页）
+    onOpenInferenceParams: () -> Unit = {},
+    // 重置设置（独立子页）
+    onOpenReset: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val cfg = ui.config
-    var pendingReset by remember { mutableStateOf<ResetTarget?>(null) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val snackbarHost = remember { SnackbarHostState() }
@@ -134,9 +137,9 @@ fun SettingsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            /* ============== 快捷入口（设置项变多后的导航） ============== */
+            /* ============== 常用（所有子页入口统一走箭头） ============== */
             item {
-                SectionHeader(icon = Icons.Outlined.Tune, title = "快捷入口")
+                SectionHeader(icon = Icons.Outlined.Tune, title = "常用")
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
@@ -147,21 +150,33 @@ fun SettingsScreen(
                 ) {
                     Column(Modifier.padding(vertical = 8.dp)) {
                         QuickEntryRow(
-                            title = "推理与电量",
-                            subtitle = "HTP 档位 / 低电量阈值 / 提示 / 加载参数",
+                            title = "推理参数与采样",
+                            subtitle = "CPU / GPU / NPU · Vulkan · FlashAttention · 线程 / KV / 上下文 · 采样",
+                            onClick = onOpenInferenceParams
+                        )
+                        HorizontalDivider()
+                        QuickEntryRow(
+                            title = "推理优化与电量",
+                            subtitle = "HTP 档位 / 低电量阈值与提示 / 模型预加载 / KV 连续布局 / 空闲卸载",
                             onClick = onOpenOptimization
                         )
                         HorizontalDivider()
                         QuickEntryRow(
                             title = "工具与联网",
-                            subtitle = "工具开关 / 搜索 API Key / URL 阅读 / GPS 权限",
+                            subtitle = "工具开关 / 搜索服务商与 Key / URL 阅读 / GPS 权限",
                             onClick = onOpenToolSettings
                         )
                         HorizontalDivider()
                         QuickEntryRow(
-                            title = "模型管理",
-                            subtitle = "本地模型 / 云端模型 / 下载",
+                            title = "模型与云端",
+                            subtitle = "本地模型 / 云端模型 / 下载源与搜索下载",
                             onClick = onOpenModels
+                        )
+                        HorizontalDivider()
+                        QuickEntryRow(
+                            title = "重置设置",
+                            subtitle = "按分类重置 / 重置所有设置（带确认）",
+                            onClick = onOpenReset
                         )
                     }
                 }
@@ -308,9 +323,10 @@ fun SettingsScreen(
                 }
             }
 
-            /* ============== 后端 ============== */
+
+            /* ============== 对话 ============== */
             item {
-                SectionHeader(icon = Icons.Outlined.RocketLaunch, title = "后端")
+                SectionHeader(icon = Icons.Outlined.ChatBubbleOutline, title = "对话")
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
@@ -319,31 +335,71 @@ fun SettingsScreen(
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        BackendSelector(cfg.backend, vm::onBackendChange, ui)
-                        HelpText(
-                            buildString {
-                                append("仅 Vulkan / NPU / OpenCL 后端可调节 GPU 层数。")
-                                if (!ui.npuAvailable) {
-                                    append(" NPU 需要 Hexagon 专用构建（普通 CI 包不含 ggml-hexagon 与 skel）；")
-                                }
-                                append("不可用的后端会禁用。")
-                            }
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = cfg.systemPrompt,
+                            onValueChange = { vm.update(cfg.copy(systemPrompt = it)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("系统提示词（System Prompt）") },
+                            placeholder = { Text("例：你是一个严谨的助手，用中文简洁回答。留空则不附加。") },
+                            minLines = 2,
+                            maxLines = 5,
+                            shape = MaterialTheme.shapes.small
                         )
-                        SliderWithLabel(
-                            title = "GPU/NPU 层数",
-                            value = cfg.nGpuLayers.toFloat(),
-                            valueRange = 0f..100f,
-                            valueText = if (cfg.nGpuLayers == 0) "自动（NPU=全部）" else cfg.nGpuLayers.toString(),
-                            onValueChange = { vm.update(cfg.copy(nGpuLayers = it.toInt())) }
+                        HorizontalDivider()
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Outlined.Psychology,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(Modifier.size(12.dp))
+                                Text(
+                                    "思考强度",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Spacer(Modifier.size(4.dp))
+                            Text(
+                                "仅对支持思考的模型生效：本地需 Qwen3 等带思考模板的模型，云端按供应商下发（DeepSeek thinking / 通义 enable_thinking / OpenAI reasoning_effort）。普通对话模型无论选哪档都不会有变化。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                val opts = listOf(
+                                    "off" to "关闭",
+                                    "low" to "低",
+                                    "medium" to "中",
+                                    "high" to "高"
+                                )
+                                opts.forEachIndexed { i, (id, label) ->
+                                    SegmentedButton(
+                                        selected = ui.thinkingLevel == id,
+                                        onClick = { vm.onThinkingLevelChange(id) },
+                                        shape = SegmentedButtonDefaults.itemShape(i, opts.size)
+                                    ) { Text(label) }
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+                        ListItem(
+                            headlineContent = { Text("文档流消息样式") },
+                            supportingContent = { Text(
+                                "开启后助手回复不带气泡，正文直接铺在背景上（类似 ChatGPT / Claude），长回答更好读。" +
+                                "关闭则用户与助手都使用气泡。") },
+                            trailingContent = { Switch(checked = ui.chatDocStyle, onCheckedChange = vm::onChatDocStyleChange) },
+                            leadingContent = { Icon(Icons.Outlined.FormatAlignLeft, contentDescription = null, modifier = Modifier.size(24.dp)) }
                         )
                     }
                 }
             }
 
-            /* ============== 性能 ============== */
+            /* ============== 实验功能 ============== */
             item {
-                SectionHeader(icon = Icons.Outlined.Bolt, title = "性能")
+                SectionHeader(icon = Icons.Outlined.Casino, title = "实验功能")
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
@@ -352,52 +408,19 @@ fun SettingsScreen(
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    Column(Modifier.padding(vertical = 8.dp)) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                            SliderWithLabel(
-                                title = "CPU 线程数",
-                                value = cfg.cpuThreads.toFloat(),
-                                valueRange = 0f..8f,
-                                steps = 7,
-                                valueText = if (cfg.cpuThreads == 0) "自动（按大核数）" else cfg.cpuThreads.toString(),
-                                onValueChange = { vm.update(cfg.copy(cpuThreads = it.toInt())) }
-                            )
-                            SliderWithLabel(
-                                title = "物理批处理 (physical batch)",
-                                value = cfg.physicalBatch.toFloat(),
-                                valueRange = 64f..4096f,
-                                valueText = cfg.physicalBatch.toString(),
-                                onValueChange = { vm.update(cfg.copy(physicalBatch = it.toInt())) }
-                            )
-                            SliderWithLabel(
-                                title = "逻辑批处理 (batch)",
-                                value = cfg.batch.toFloat(),
-                                valueRange = 256f..8192f,
-                                valueText = cfg.batch.toString(),
-                                onValueChange = { vm.update(cfg.copy(batch = it.toInt())) }
-                            )
-                        }
-                        HorizontalDivider()
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            Text(
-                                "KV Cache 量化",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.size(6.dp))
-                            KvQuantSelector(cfg.kvQuant, vm::onKvQuantChange)
-                            Spacer(Modifier.size(6.dp))
-                            HelpText("更高级别量化 → 内存占用↓、带宽↓、温度↓；质量略降")
-                            SliderWithLabel(
-                                title = "上下文长度",
-                                value = cfg.contextLength.toFloat(),
-                                valueRange = 512f..32768f,
-                                valueText = cfg.contextLength.toString(),
-                                onValueChange = { vm.update(cfg.copy(contextLength = it.toInt())) }
-                            )
-                        }
-                    }
+                    SwitchRow(
+                        title = "Beta：aibox:choices 选项卡片",
+                        subtitle = "让模型把 2–4 个选项渲染成按钮。离线小模型容易滥用，出现满屏 A/B/C，默认关闭",
+                        checked = ui.choicesBeta,
+                        onCheckedChange = vm::onChoicesBetaChange
+                    )
                 }
+            }
+
+            /* ============== 权限 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.Lock, title = "权限")
+                PermissionsCard()
             }
 
             /* ============== 设备状态（A2 ThermalMonitorCard + 综合状态） ============== */
@@ -439,23 +462,49 @@ fun SettingsScreen(
                 )
             }
 
-            /* ============== 实验功能 ============== */
+            /* ============== 热管理（危险区） ============== */
             item {
-                SectionHeader(icon = Icons.Outlined.Casino, title = "实验功能")
+                SectionHeader(icon = Icons.Outlined.Warning, title = "热管理")
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.large,
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                        containerColor = MaterialTheme.colorScheme.errorContainer
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                 ) {
-                    SwitchRow(
-                        title = "Beta：aibox:choices 选项卡片",
-                        subtitle = "让模型把 2–4 个选项渲染成按钮。离线小模型容易滥用，出现满屏 A/B/C，默认关闭",
-                        checked = ui.choicesBeta,
-                        onCheckedChange = vm::onChoicesBetaChange
-                    )
+                    Column(Modifier.padding(8.dp)) {
+                        ListItem(
+                            leadingContent = {
+                                Icon(
+                                    Icons.Outlined.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            },
+                            headlineContent = {
+                                Text(
+                                    "防回退（Anti-Rollback）",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            },
+                            supportingContent = {
+                                Text(
+                                    "开：保持 GPU/NPU 频率不被热降档，性能优先但发热更明显\n关：允许热感知软降（推荐，发烫治理）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            },
+                            trailingContent = {
+                                Switch(
+                                    checked = cfg.antiRollback,
+                                    onCheckedChange = { vm.update(cfg.copy(antiRollback = it)) }
+                                )
+                            }
+                        )
+                    }
                 }
             }
 
@@ -614,460 +663,6 @@ fun SettingsScreen(
                 }
             }
 
-            /* ============== 重置 ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.RestartAlt, title = "重置")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(Modifier.padding(vertical = 8.dp)) {
-                        ResetRow(
-                            title = "重置推理参数",
-                            subtitle = "后端 / 线程 / 批大小 / KV / 上下文 / 采样 / 系统提示词"
-                        ) {
-                            pendingReset = ResetTarget(
-                                title = "重置推理参数？",
-                                message = "当前已加载的模型不会立即变化，重新加载后生效。"
-                            ) { vm.resetInference() }
-                        }
-                        HorizontalDivider()
-                        ResetRow(
-                            title = "重置外观",
-                            subtitle = "动态取色 / 主题 / 主色 / 圆角 / 消息呈现"
-                        ) {
-                            pendingReset = ResetTarget("重置外观？", "界面会立即恢复默认外观。") {
-                                vm.resetAppearance()
-                            }
-                        }
-                        HorizontalDivider()
-                        ResetRow(
-                            title = "重置行为与搜索",
-                            subtitle = "下载源 / 思考档位 / 日志开关 / Tavily、Exa API key"
-                        ) {
-                            pendingReset = ResetTarget("重置行为与搜索设置？", "API key 也会被清空。") {
-                                vm.resetBehavior()
-                            }
-                        }
-                        HorizontalDivider()
-                        ResetRow(
-                            title = "重置云端模型",
-                            subtitle = "清空 API key / Base URL / 模型名，并关闭云端"
-                        ) {
-                            pendingReset = ResetTarget("重置云端模型配置？", "需要重新填写 API key。") {
-                                vm.resetCloud()
-                            }
-                        }
-                        HorizontalDivider()
-                        ResetRow(
-                            title = "重置工具设置",
-                            subtitle = "工具开关恢复默认、自动确认白名单与工具选项清空"
-                        ) {
-                            pendingReset = ResetTarget("重置工具设置？", "基础工具会恢复默认开启，高级工具默认关闭。") {
-                                vm.resetToolSettings()
-                            }
-                        }
-                        HorizontalDivider()
-                        ResetRow(
-                            title = "重置推理优化设置",
-                            subtitle = "TTFT / TG / 能耗开关恢复默认档"
-                        ) {
-                            pendingReset = ResetTarget("重置推理优化设置？", "会恢复到「默认（均衡）」档。") {
-                                vm.resetOptimizationSettings()
-                            }
-                        }
-                        HorizontalDivider()
-                        ResetRow(
-                            title = "重置所有设置",
-                            subtitle = "以上全部 + 常规设置；模型文件与欢迎页状态保留",
-                            danger = true
-                        ) {
-                            pendingReset = ResetTarget(
-                                title = "重置所有设置？",
-                                message = "该操作不可撤销。模型文件、聊天记录与模型列表不会被删除。"
-                            ) { vm.resetAllSettings() }
-                        }
-                    }
-                }
-            }
-
-            /* ============== 工具调用（B7 工具设置面板入口） ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.Build, title = "工具调用")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(Modifier.padding(vertical = 8.dp)) {
-                        ListItem(
-                            leadingContent = {
-                                Icon(
-                                    Icons.Outlined.Build,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            headlineContent = { Text("工具调用设置") },
-                            supportingContent = { Text("管理 LLM 可调用的工具：启用 / 禁用、高级工具确认、自动确认白名单") },
-                            trailingContent = {
-                                Icon(
-                                    androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            },
-                            modifier = Modifier.clickable { onOpenToolSettings() }
-                        )
-                    }
-                }
-            }
-
-            /* ============== 热管理（危险区） ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.Warning, title = "热管理")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(Modifier.padding(8.dp)) {
-                        ListItem(
-                            leadingContent = {
-                                Icon(
-                                    Icons.Outlined.Warning,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            },
-                            headlineContent = {
-                                Text(
-                                    "防回退（Anti-Rollback）",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            },
-                            supportingContent = {
-                                Text(
-                                    "开：保持 GPU/NPU 频率不被热降档，性能优先但发热更明显\n关：允许热感知软降（推荐，发烫治理）",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            },
-                            trailingContent = {
-                                Switch(
-                                    checked = cfg.antiRollback,
-                                    onCheckedChange = { vm.update(cfg.copy(antiRollback = it)) }
-                                )
-                            }
-                        )
-                    }
-                }
-            }
-
-            /* ============== 采样 ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.Casino, title = "采样")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SliderWithLabel(
-                            title = "Temperature",
-                            value = cfg.temperature,
-                            valueRange = 0.01f..2f,
-                            valueText = "%.2f".format(cfg.temperature),
-                            onValueChange = { vm.update(cfg.copy(temperature = it)) }
-                        )
-                        HelpText("越高越发散、越低越保守。小模型（≤2B）建议 0.6~0.8，过高更容易胡编。")
-                        SliderWithLabel(
-                            title = "Top-K",
-                            value = cfg.topK.toFloat(),
-                            valueRange = 1f..200f,
-                            valueText = cfg.topK.toString(),
-                            onValueChange = { vm.update(cfg.copy(topK = it.toInt())) }
-                        )
-                        HelpText("每步只保留概率最高的 K 个候选；40 是通用默认值。")
-                        SliderWithLabel(
-                            title = "Top-P",
-                            value = cfg.topP,
-                            valueRange = 0.1f..1f,
-                            valueText = "%.2f".format(cfg.topP),
-                            onValueChange = { vm.update(cfg.copy(topP = it)) }
-                        )
-                        HelpText("累积概率阈值；0.9~0.95 通常足够，越低越保守。")
-                        SliderWithLabel(
-                            title = "Min-P",
-                            value = cfg.minP,
-                            valueRange = 0f..0.5f,
-                            valueText = if (cfg.minP <= 0f) "关闭" else "%.2f".format(cfg.minP),
-                            onValueChange = { vm.update(cfg.copy(minP = it)) }
-                        )
-                        HelpText(
-                            "只保留相对最大概率不低于该比例的候选。0.05 是稳妥值，0 表示关闭；" +
-                                "比单纯压 Top-P 更不容易误删正确但概率略低的词。"
-                        )
-                        SliderWithLabel(
-                            title = "Repeat Penalty",
-                            value = cfg.repeatPenalty,
-                            valueRange = 1f..2f,
-                            valueText = "%.2f".format(cfg.repeatPenalty),
-                            onValueChange = { vm.update(cfg.copy(repeatPenalty = it)) }
-                        )
-                        HelpText(
-                            "对最近若干 token 做重复惩罚。1.1 是通用值；调太高会让小模型用词变怪，" +
-                                "调太低容易复读。改动即时生效，无需重新加载模型。"
-                        )
-                        SliderWithLabel(
-                            title = "Repeat 窗口",
-                            value = cfg.repeatLastN.toFloat(),
-                            valueRange = 32f..1024f,
-                            valueText = "${cfg.repeatLastN} tokens",
-                            onValueChange = { vm.update(cfg.copy(repeatLastN = it.toInt())) }
-                        )
-                        HelpText(
-                            "参与重复统计的最近 token 数。256 覆盖常见段落复读；" +
-                                "长文创作可降到 128，短问答可升到 384 减少复读。"
-                        )
-                        HorizontalDivider()
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "当前生效：temp=${"%.2f".format(cfg.temperature)} · " +
-                                    "top_k=${cfg.topK} · top_p=${"%.2f".format(cfg.topP)} · " +
-                                    "min_p=${if (cfg.minP <= 0f) "关" else "%.2f".format(cfg.minP)} · " +
-                                    "repeat=${"%.2f".format(cfg.repeatPenalty)}/${cfg.repeatLastN}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedButton(
-                                onClick = {
-                                    vm.update(
-                                        cfg.copy(
-                                            temperature = 0.8f,
-                                            topK = 40,
-                                            topP = 0.95f,
-                                            minP = 0.05f,
-                                            repeatPenalty = 1.1f,
-                                            repeatLastN = 256
-                                        )
-                                    )
-                                }
-                            ) { Text("恢复推荐值") }
-                        }
-                    }
-                }
-            }
-
-            /* ============== 推理优化（G-settings-fix：归口开关式优化）============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.Tune, title = "推理优化")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(Modifier.padding(vertical = 8.dp)) {
-                        ListItem(
-                            leadingContent = {
-                                Icon(
-                                    Icons.Outlined.Tune,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            headlineContent = { Text("推理优化与电量") },
-                            supportingContent = {
-                                Text(
-                                    "电量与性能档（HTP 档位 / 低电量阈值与提示）/ 模型预加载 / " +
-                                    "Flash Attention / KV 连续布局 / 空闲超时卸载等统一在此管理"
-                                )
-                            },
-                            trailingContent = {
-                                Icon(
-                                    androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            },
-                            modifier = Modifier.clickable { onOpenOptimization() }
-                        )
-                        HorizontalDivider()
-                        HelpText(
-                            "「启动时自动加载上次模型」开关已合并到此处「模型预加载」。"
-                        )
-                    }
-                }
-            }
-
-            /* G-settings-fix：原"启动行为"autoLoadModel 开关已删除
-             * （重叠 OptimizationSettings.preloadModel，用户只在推理优化页改）。 */
-
-            /* ============== 对话 ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.ChatBubbleOutline, title = "对话")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = cfg.systemPrompt,
-                            onValueChange = { vm.update(cfg.copy(systemPrompt = it)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("系统提示词（System Prompt）") },
-                            placeholder = { Text("例：你是一个严谨的助手，用中文简洁回答。留空则不附加。") },
-                            minLines = 2,
-                            maxLines = 5,
-                            shape = MaterialTheme.shapes.small
-                        )
-                        HorizontalDivider()
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Outlined.Psychology,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(Modifier.size(12.dp))
-                                Text(
-                                    "思考强度",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            Spacer(Modifier.size(4.dp))
-                            Text(
-                                "仅对支持思考的模型生效：本地需 Qwen3 等带思考模板的模型，云端按供应商下发（DeepSeek thinking / 通义 enable_thinking / OpenAI reasoning_effort）。普通对话模型无论选哪档都不会有变化。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.size(8.dp))
-                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                val opts = listOf(
-                                    "off" to "关闭",
-                                    "low" to "低",
-                                    "medium" to "中",
-                                    "high" to "高"
-                                )
-                                opts.forEachIndexed { i, (id, label) ->
-                                    SegmentedButton(
-                                        selected = ui.thinkingLevel == id,
-                                        onClick = { vm.onThinkingLevelChange(id) },
-                                        shape = SegmentedButtonDefaults.itemShape(i, opts.size)
-                                    ) { Text(label) }
-                                }
-                            }
-                        }
-                        HorizontalDivider()
-                        ListItem(
-                            headlineContent = { Text("文档流消息样式") },
-                            supportingContent = { Text(
-                                "开启后助手回复不带气泡，正文直接铺在背景上（类似 ChatGPT / Claude），长回答更好读。" +
-                                "关闭则用户与助手都使用气泡。") },
-                            trailingContent = { Switch(checked = ui.chatDocStyle, onCheckedChange = vm::onChatDocStyleChange) },
-                            leadingContent = { Icon(Icons.Outlined.FormatAlignLeft, contentDescription = null, modifier = Modifier.size(24.dp)) }
-                        )
-                    }
-                }
-            }
-
-            /* ============== 云端模型 ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.Cloud, title = "云端（当前生效）")
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            "推荐在「模型」页添加云端模型并在那里切换；这里显示的是当前生效配置，可手动微调。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        SwitchRow(
-                            title = "使用云端模型",
-                            subtitle = "OpenAI 兼容协议，支持 DeepSeek / OpenAI / Moonshot / Ollama / vLLM",
-                            checked = ui.cloudEnabled,
-                            onCheckedChange = vm::onCloudEnabledChange
-                        )
-                        if (ui.cloudEnabled) {
-                            HorizontalDivider()
-                            OutlinedTextField(
-                                value = ui.cloudBaseUrl,
-                                onValueChange = vm::onCloudBaseUrlChange,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("Base URL") },
-                                placeholder = { Text("https://api.deepseek.com/v1") },
-                                singleLine = true,
-                                shape = MaterialTheme.shapes.small
-                            )
-                            OutlinedTextField(
-                                value = ui.cloudModel,
-                                onValueChange = vm::onCloudModelChange,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("模型名") },
-                                placeholder = { Text("deepseek-chat") },
-                                singleLine = true,
-                                shape = MaterialTheme.shapes.small
-                            )
-                            OutlinedTextField(
-                                value = ui.cloudApiKey,
-                                onValueChange = vm::onCloudApiKeyChange,
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("API Key") },
-                                placeholder = { Text("sk-...") },
-                                singleLine = true,
-                                shape = MaterialTheme.shapes.small
-                            )
-                            Text(
-                                "开启后聊天优先走云端，并用已启用的工具做 function calling；" +
-                                    "关闭则回到本地模型。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-
-            /* ============== 权限 ============== */
-            item {
-                SectionHeader(icon = Icons.Outlined.Lock, title = "权限")
-                PermissionCard()
-            }
-
             /* ============== 日志 ============== */
             item {
                 SectionHeader(icon = Icons.Outlined.Edit, title = "日志")
@@ -1186,31 +781,6 @@ fun SettingsScreen(
             item { Spacer(Modifier.size(16.dp)) }
         }
     }
-
-    // 重置确认对话框（所有重置都走这里，避免误触）
-    pendingReset?.let { target ->
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pendingReset = null },
-            title = { Text(target.title) },
-            text = { Text(target.message) },
-            confirmButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = {
-                        target.action()
-                        pendingReset = null
-                        scope.launch {
-                            snackbarHost.showSnackbar("已重置：${target.title.removeSuffix("？")}")
-                        }
-                    }
-                ) { Text("确认重置", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { pendingReset = null }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
 }
 
 /** 设置页顶部快捷入口行。 */
@@ -1231,44 +801,6 @@ private fun QuickEntryRow(
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        },
-        modifier = Modifier.clickable { onClick() }
-    )
-}
-
-/** 重置项：标题 + 说明 + 实际动作，确认后才执行。 */
-private data class ResetTarget(
-    val title: String,
-    val message: String,
-    val action: () -> Unit
-)
-
-/** 重置列表中的一行。 */
-@Composable
-private fun ResetRow(
-    title: String,
-    subtitle: String,
-    danger: Boolean = false,
-    onClick: () -> Unit
-) {
-    ListItem(
-        headlineContent = {
-            Text(
-                title,
-                color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-            )
-        },
-        supportingContent = {
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        },
-        trailingContent = {
-            Icon(
-                androidx.compose.material.icons.Icons.AutoMirrored.Outlined.ArrowForward,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = if (danger) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurfaceVariant
             )
         },
         modifier = Modifier.clickable { onClick() }
