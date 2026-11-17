@@ -60,13 +60,13 @@ class InferenceEngine(
      * 开启后 [completionChat] 会优先走云端，本地模型的状态保持不变；
      * 关闭后回到本地模型（或未加载状态）。
      */
-    fun setCloudEnabled(on: Boolean) {
+    fun setCloudEnabled(on: Boolean, displayName: String? = null) {
         val svc = cloudService ?: return
         svc.setEnabled(on)
         if (on) {
             _state.value = _state.value.copy(
                 loaded = true,
-                modelPath = "cloud",
+                modelPath = displayName?.takeIf { it.isNotBlank() }?.let { "cloud:$it" } ?: "cloud",
                 error = null
             )
         } else if (currentBackend == null && !v2Active) {

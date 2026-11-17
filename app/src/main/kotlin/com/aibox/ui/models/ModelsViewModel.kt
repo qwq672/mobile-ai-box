@@ -376,7 +376,7 @@ class ModelsViewModel : ViewModel() {
             try {
                 unloadCurrentSilently()
                 settings.saveCloud(container.cloudModelRepository.toConfig(profile, enabled = true))
-                engine.setCloudEnabled(true)
+                engine.setCloudEnabled(true, profile.name)
                 container.cloudModelRepository.setActive(profile.id)
                 LogSystem.info("aibox.ui.models", "cloud model activated: ${profile.name} (${profile.model})")
             } catch (t: Throwable) {
