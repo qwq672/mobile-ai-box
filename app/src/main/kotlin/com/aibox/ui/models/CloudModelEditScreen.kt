@@ -1,5 +1,6 @@
 package com.aibox.ui.models
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -126,7 +127,9 @@ fun CloudModelEditScreen(
                 color = MaterialTheme.colorScheme.primary
             )
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 CloudPresets.all.forEach { preset ->
