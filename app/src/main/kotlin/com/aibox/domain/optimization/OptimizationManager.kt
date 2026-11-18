@@ -106,8 +106,8 @@ class OptimizationManager(
      *
      * 幂等：重复调用会先 cancel 旧的订阅 / watchdog job 再重启，不会启动多份。
      */
-    fun onAppStart() {
-        LogSystem.info(tag, "onAppStart requested, launching on internal scope")
+    fun onAppStart(safeMode: Boolean = false) {
+        LogSystem.info(tag, "onAppStart requested, safeMode=$safeMode, launching on internal scope")
         scope.launch {
             // 1. 拉一次初始设置
             val initial = settingsRepository.current()
@@ -152,7 +152,12 @@ class OptimizationManager(
 
             // 5. 异步预加载模型：云端模式 / 设备已经偏热时不加载本地权重，
             //    否则启动即 mmap + 预热会让手机在没发消息时也持续发热。
+            //    安全模式下完全跳过，先保证 UI 能起来。
             preloadJob?.cancel()
+            if (safeMode) {
+                LogSystem.warn(tag, "startup safe mode: skip preload")
+                return@launch
+            }
             preloadJob = scope.launch {
                 if (cloudActive) {
                     LogSystem.info(tag, "cloud active, skip startup preload")

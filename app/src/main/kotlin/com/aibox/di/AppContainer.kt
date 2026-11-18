@@ -31,10 +31,12 @@ import com.aibox.domain.tool.ToolSettingsRepository
 import com.aibox.infra.benchmark.BenchmarkSystem
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.infra.plugin.PluginManager
+import com.aibox.infra.startup.StartupGuard
 import com.aibox.util.CpuInfo
 import com.aibox.util.ThermalMonitor
 import com.aibox.util.log.LogLevel
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -287,38 +289,53 @@ class AppContainer(context: Context) {
     )
 
     init {
-        // 云端开关是持久化的，引擎里的运行态不是：启动时恢复一次，
-        // 否则重启后设置页显示"已开启"，实际聊天却仍走本地。
-        appScope.launch {
-            runCatching {
-                if (settingsRepository.cloudConfig.first().enabled) {
-                    inferenceEngine.setCloudEnabled(true)
+        // 安全模式：上一次启动 ANR/崩溃，本次只保证 UI 能起来，
+        // 不做云端恢复、插件绑定、设备探测等可能拖慢启动的工作。
+        if (StartupGuard.safeMode) {
+            LogSystem.warn(
+                "aibox.di",
+                "startup safe mode: skip cloud restore / cloud observer / device probe / plugin sync"
+            )
+        } else {
+            // 云端开关是持久化的，引擎里的运行态不是：启动时恢复一次，
+            // 否则重启后设置页显示"已开启"，实际聊天却仍走本地。
+            appScope.launch {
+                runCatching {
+                    if (settingsRepository.cloudConfig.first().enabled) {
+                        inferenceEngine.setCloudEnabled(true)
+                    }
                 }
             }
-        }
-        // 云端开关变化时同步给优化器：切到云端立刻取消启动预加载，
-        // 避免本机在没发消息时还在 mmap/预热本地模型。
-        appScope.launch {
-            settingsRepository.cloudConfig.collectLatest { c ->
-                optimizationManager.setCloudActive(c.enabled)
-            }
-        }
-        // 记录一次设备能力（P3/P4 模块筛选依据），便于日志定位"为什么不可用"。
-        appScope.launch {
-            runCatching {
-                val caps = com.aibox.domain.device.DeviceCapabilitiesProbe.probe(appContext)
-                com.aibox.util.log.LogSystem.info("aibox.di", "device caps: ${caps.summary()}")
-            }
-        }
-        // 把已安装的后端插件（LiteRT / ONNX / MNN…）绑定起来。
-        // 模块页只负责发现，不在这里自动绑定的话，用户装了插件仍会被告知「未安装」。
-        appScope.launch {
-            runCatching { pluginManager.syncInstalledBackendPlugins() }
-                .onFailure {
-                    com.aibox.util.log.LogSystem.warn(
-                        "aibox.di", "syncInstalledBackendPlugins failed: ${it.message}", it
-                    )
+            // 云端开关变化时同步给优化器：切到云端立刻取消启动预加载，
+            // 避免本机在没发消息时还在 mmap/预热本地模型。
+            appScope.launch {
+                settingsRepository.cloudConfig.collectLatest { c ->
+                    optimizationManager.setCloudActive(c.enabled)
                 }
+            }
+            // 记录一次设备能力（P3/P4 模块筛选依据），便于日志定位"为什么不可用"。
+            appScope.launch {
+                runCatching {
+                    val caps = com.aibox.domain.device.DeviceCapabilitiesProbe.probe(appContext)
+                    com.aibox.util.log.LogSystem.info("aibox.di", "device caps: ${caps.summary()}")
+                }
+            }
+            // 把已安装的后端插件（LiteRT / ONNX / MNN…）绑定起来。
+            // 模块页只负责发现，不在这里自动绑定的话，用户装了插件仍会被告知「未安装」。
+            // 延迟到首帧之后，避免和 Compose 首帧、模型初始化抢主线程/IO。
+            appScope.launch {
+                delay(2_500L)
+                if (StartupGuard.safeMode) {
+                    LogSystem.warn("aibox.di", "plugin sync skipped: entered safe mode")
+                    return@launch
+                }
+                runCatching { pluginManager.syncInstalledBackendPlugins() }
+                    .onFailure {
+                        com.aibox.util.log.LogSystem.warn(
+                            "aibox.di", "syncInstalledBackendPlugins failed: ${it.message}", it
+                        )
+                    }
+            }
         }
     }
 

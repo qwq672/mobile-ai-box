@@ -41,8 +41,11 @@ object LogSystem {
         synchronized(this) {
             if (initialized) return
 
-            // 日志目录：/sdcard/Android/data/com.aibox/files/aibox/logs/
-            val logDir = File(context.getExternalFilesDir(null), "aibox/logs")
+            // 日志目录：优先外部专属目录，可插拔存储/权限异常时回退内部目录，
+            // 避免 OEM 上 getExternalFilesDir 返回 null 导致日志直接丢。
+            val externalBase = context.getExternalFilesDir(null)
+            val base = externalBase ?: context.filesDir
+            val logDir = File(base, "aibox/logs")
 
             // 1. RingBuffer（崩溃前紧急刷盘）
             val ring = RingBufferLogSink(
@@ -67,7 +70,7 @@ object LogSystem {
 
             initialized = true
 
-            info(TAG, "LogSystem initialized, dir=${logDir.absolutePath}")
+            info(TAG, "LogSystem initialized, dir=${logDir.absolutePath}, external=${externalBase != null}")
         }
     }
 

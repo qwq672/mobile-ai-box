@@ -8,6 +8,7 @@ import com.aibox.di.AppContainer
 import com.aibox.infra.crash.CrashHandler
 import com.aibox.infra.crash.NativeCrashHandler
 import com.aibox.infra.jni.NativeBridge
+import com.aibox.infra.startup.StartupGuard
 import com.aibox.util.log.LogLevel
 import com.aibox.util.log.LogSystem
 
@@ -27,6 +28,12 @@ class AIBoxApp : Application(), Configuration.Provider {
         LogSystem.setTagLevel("aibox.ui", LogLevel.INFO)        // UI 噪声降低
         LogSystem.setTagLevel("aibox.thermal", LogLevel.INFO)
         LogSystem.info(TAG, "AIBox Application onCreate starting")
+        // 启动诊断：必须在 LogSystem 之后、其他重活之前初始化。
+        // 它会读上次是否 ANR/崩溃，决定本次是否进入安全模式。
+        StartupGuard.init(this)
+        StartupGuard.phase("log-ready")
+        // 必须在重活之前启动：后台线程 watchdog，主线程被 AppContainer 卡住时也能记录。
+        StartupGuard.startWatchdog()
 
         // ===================================================
         // Phase 2: 桥接 native 日志到 LogSystem
@@ -38,6 +45,7 @@ class AIBoxApp : Application(), Configuration.Provider {
         } catch (e: Throwable) {
             LogSystem.error(TAG, "Failed to install native log bridge", e)
         }
+        StartupGuard.phase("native-log-ready")
 
         // ===================================================
         // Phase 3: 安装崩溃捕获器（在 super.onCreate 之前，确保后续崩溃都能捕获）
@@ -46,7 +54,9 @@ class AIBoxApp : Application(), Configuration.Provider {
 
         super.onCreate()
         instance = this
+        StartupGuard.phase("container-begin")
         container = AppContainer(this)
+        StartupGuard.phase("container-ready", "safeMode=${StartupGuard.safeMode}")
 
         // ggml 默认只在 /system/bin 和 cwd 找 libggml-*.so，Android 上永远找不到
         // APK 自带的 backend；把 nativeLibraryDir 传给 native 侧按路径加载。
@@ -58,14 +68,16 @@ class AIBoxApp : Application(), Configuration.Provider {
         // ===================================================
         runCatching { WorkManager.initialize(this, workManagerConfiguration) }
             .onFailure { LogSystem.error(TAG, "WorkManager init failed", it) }
+        StartupGuard.phase("workmanager-ready")
 
         // ===================================================
         // Phase 5: 启动优化管理器（P3）
         // 非阻塞：内部把所有工作丢到自己的 CoroutineScope 里执行
         // （拉初始设置 + 订阅设置变化 + 订阅热档位 + 启动 idle watchdog + 异步预加载模型）
         // ===================================================
-        runCatching { container.optimizationManager.onAppStart() }
+        runCatching { container.optimizationManager.onAppStart(StartupGuard.safeMode) }
             .onFailure { LogSystem.error(TAG, "OptimizationManager onAppStart failed", it) }
+        StartupGuard.phase("optimization-started")
 
         // ===================================================
         // Phase 6: 注册内置工具（B1 工具调用抽象层）
@@ -76,7 +88,8 @@ class AIBoxApp : Application(), Configuration.Provider {
         runCatching { container.toolBootstrap.registerBuiltinTools() }
             .onFailure { LogSystem.error(TAG, "ToolBootstrap registerBuiltinTools failed", it) }
 
-        LogSystem.info(TAG, "AIBox Application onCreate completed, version=${getAppVersion()}")
+        LogSystem.info(TAG, "AIBox Application onCreate completed, version=${getAppVersion()}, safeMode=${StartupGuard.safeMode}")
+        StartupGuard.phase("onCreate-done")
     }
 
     override val workManagerConfiguration: Configuration
