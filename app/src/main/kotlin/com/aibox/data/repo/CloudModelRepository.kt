@@ -29,6 +29,8 @@ data class CloudModelProfile(
     val baseUrl: String,
     val apiKey: String = "",
     val model: String,
+    /** 接口格式 id（openai_chat / openai_responses / anthropic_messages / ollama_native）。 */
+    val protocol: String = "openai_chat",
     val supportsVision: Boolean = false,
     val supportsAudio: Boolean = false,
     val builtinWebSearch: Boolean = false,
@@ -99,6 +101,7 @@ class CloudModelRepository(private val context: Context) {
         baseUrl = profile.baseUrl.trim(),
         apiKey = profile.apiKey.trim(),
         model = profile.model.trim(),
+        protocol = com.aibox.domain.cloud.CloudProtocol.fromId(profile.protocol),
         supportsVision = profile.supportsVision,
         supportsAudio = profile.supportsAudio,
         builtinWebSearch = profile.builtinWebSearch,

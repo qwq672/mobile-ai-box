@@ -74,6 +74,8 @@ class SettingsRepository(private val context: Context) {
         val CLOUD_API_KEY   = stringPreferencesKey("cloud_api_key")
         val CLOUD_API_KEY_ENC = stringPreferencesKey("cloud_api_key_enc")
         val CLOUD_MODEL     = stringPreferencesKey("cloud_model")
+        // 接口格式：openai_chat / openai_responses / anthropic_messages / ollama_native
+        val CLOUD_PROTOCOL  = stringPreferencesKey("cloud_protocol")
         val CLOUD_VISION    = booleanPreferencesKey("cloud_supports_vision")
         val CLOUD_AUDIO     = booleanPreferencesKey("cloud_supports_audio")
         val CLOUD_WEB       = booleanPreferencesKey("cloud_builtin_web_search")
@@ -149,6 +151,7 @@ class SettingsRepository(private val context: Context) {
             baseUrl = p[Keys.CLOUD_BASE_URL] ?: CloudConfig.DEFAULT_BASE_URL,
             apiKey = readCloudApiKey(p),
             model = p[Keys.CLOUD_MODEL] ?: CloudConfig.DEFAULT_MODEL,
+            protocol = com.aibox.domain.cloud.CloudProtocol.fromId(p[Keys.CLOUD_PROTOCOL]),
             supportsVision = p[Keys.CLOUD_VISION] ?: false,
             supportsAudio = p[Keys.CLOUD_AUDIO] ?: false,
             builtinWebSearch = p[Keys.CLOUD_WEB] ?: false,
@@ -188,6 +191,7 @@ class SettingsRepository(private val context: Context) {
             p[Keys.CLOUD_ENABLED] = c.enabled
             p[Keys.CLOUD_BASE_URL] = c.baseUrl
             p[Keys.CLOUD_MODEL] = c.model
+            p[Keys.CLOUD_PROTOCOL] = c.protocol.id
             p[Keys.CLOUD_VISION] = c.supportsVision
             p[Keys.CLOUD_AUDIO] = c.supportsAudio
             p[Keys.CLOUD_WEB] = c.builtinWebSearch

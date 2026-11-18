@@ -48,6 +48,7 @@ import com.aibox.AIBoxApp
 import com.aibox.data.repo.CloudModelProfile
 import com.aibox.domain.cloud.CloudConfig
 import com.aibox.domain.cloud.CloudPresets
+import com.aibox.domain.cloud.CloudProtocol
 import com.aibox.domain.cloud.CloudProbe
 import com.aibox.domain.cloud.CloudProbeFailure
 import com.aibox.domain.cloud.CloudProbeResult
@@ -72,6 +73,7 @@ fun CloudModelEditScreen(
     var name by remember { mutableStateOf("") }
     var baseUrl by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
+    var protocol by remember { mutableStateOf(CloudProtocol.OPENAI_CHAT) }
     var apiKey by remember { mutableStateOf("") }
     var keyVisible by remember { mutableStateOf(false) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -91,6 +93,7 @@ fun CloudModelEditScreen(
                 name = p.name
                 baseUrl = p.baseUrl
                 model = p.model
+                protocol = CloudProtocol.fromId(p.protocol)
                 apiKey = p.apiKey
                 vision = p.supportsVision
                 audio = p.supportsAudio
@@ -138,6 +141,7 @@ fun CloudModelEditScreen(
                         onClick = {
                             baseUrl = preset.baseUrl
                             model = preset.model
+                            protocol = CloudProtocol.OPENAI_CHAT
                             if (name.isBlank()) name = preset.label
                         },
                         label = { Text(preset.label) }
@@ -161,6 +165,33 @@ fun CloudModelEditScreen(
                 placeholder = { Text("https://api.deepseek.com/v1") },
                 singleLine = true
             )
+            Text(
+                "接口格式",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CloudProtocol.entries.forEach { p ->
+                    FilterChip(
+                        selected = protocol == p,
+                        onClick = { protocol = p },
+                        enabled = p.supported,
+                        label = { Text(p.label) }
+                    )
+                }
+            }
+            if (!protocol.supported) {
+                Text(
+                    "该格式尚未实现，保存后无法用于对话；请先选择 OpenAI Chat Completions。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -256,7 +287,7 @@ fun CloudModelEditScreen(
                     probeResult = null
                     probeMessage = null
                     scope.launch {
-                        probeResult = try {
+                        val result = try {
                             CloudProbe.probe(
                                 CloudConfig(
                                     baseUrl = base,
@@ -275,6 +306,9 @@ fun CloudModelEditScreen(
                                 )
                             )
                         }
+                        probeResult = result
+                        // 自动识别成功时回填协议，避免用户手选错格式
+                        result.detectedProtocol?.let { protocol = it }
                         testing = false
                     }
                 },
@@ -337,6 +371,7 @@ fun CloudModelEditScreen(
                                     baseUrl = baseUrl.trim(),
                                     apiKey = apiKey.trim(),
                                     model = model.trim(),
+                                    protocol = protocol.id,
                                     supportsVision = vision,
                                     supportsAudio = audio,
                                     builtinWebSearch = builtinWeb,

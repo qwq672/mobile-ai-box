@@ -73,6 +73,8 @@ data class CloudProbeResult(
     val models: List<String> = emptyList(),
     val latencyMs: Long = 0,
     val chatOk: Boolean = false,
+    /** 探测出的接口格式（目前只识别 OpenAI Chat Completions）。 */
+    val detectedProtocol: CloudProtocol? = null,
     val error: CloudProbeError? = null,
     val modelsError: CloudProbeError? = null
 ) {
@@ -201,6 +203,7 @@ object CloudProbe {
             models = models,
             latencyMs = latencyMs,
             chatOk = chatOk,
+            detectedProtocol = if (chatOk) CloudProtocol.OPENAI_CHAT else null,
             error = error,
             modelsError = modelsError
         )

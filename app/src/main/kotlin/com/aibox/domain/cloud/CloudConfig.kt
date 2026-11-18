@@ -7,11 +7,35 @@ package com.aibox.domain.cloud
  * 因此一套实现可以覆盖 OpenAI / DeepSeek / Moonshot / Ollama / vLLM / LM Studio。
  * baseUrl 允许自定义，本地局域网里的推理服务也能直接接。
  */
+/**
+ * 云端接口格式。
+ *
+ * 目前只有 [OPENAI_CHAT] 有完整实现（流式、工具调用、多模态）。
+ * 其余格式先占位，UI 中标记「即将支持」，避免用户选中后请求直接失败。
+ */
+enum class CloudProtocol(
+    val id: String,
+    val label: String,
+    val supported: Boolean = true
+) {
+    OPENAI_CHAT("openai_chat", "OpenAI Chat Completions"),
+    OPENAI_RESPONSES("openai_responses", "OpenAI Responses（即将支持）", supported = false),
+    ANTHROPIC_MESSAGES("anthropic_messages", "Anthropic Messages（即将支持）", supported = false),
+    OLLAMA_NATIVE("ollama_native", "Ollama 原生（即将支持）", supported = false);
+
+    companion object {
+        fun fromId(id: String?): CloudProtocol =
+            entries.firstOrNull { it.id == id } ?: OPENAI_CHAT
+    }
+}
+
 data class CloudConfig(
     val enabled: Boolean = false,
     val baseUrl: String = DEFAULT_BASE_URL,
     val apiKey: String = "",
     val model: String = DEFAULT_MODEL,
+    /** 接口格式；决定请求/流式/工具调用用哪套实现。 */
+    val protocol: CloudProtocol = CloudProtocol.OPENAI_CHAT,
     val temperature: Float = 0.7f,
     val maxTokens: Int = 2048,
     /** 供应商/模型是否支持图片输入（多模态）。 */
@@ -25,7 +49,7 @@ data class CloudConfig(
 ) {
     /** 配置是否可用于发起请求。 */
     val usable: Boolean
-        get() = enabled && baseUrl.isNotBlank() && model.isNotBlank()
+        get() = enabled && baseUrl.isNotBlank() && model.isNotBlank() && protocol.supported
 
     /** UI 上展示的短名，如 `deepseek-chat`。 */
     val label: String
