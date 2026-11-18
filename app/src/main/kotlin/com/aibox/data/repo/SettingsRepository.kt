@@ -66,6 +66,8 @@ class SettingsRepository(private val context: Context) {
         val EXA_API_KEY     = stringPreferencesKey("exa_api_key")
         // 聊天消息呈现：true = 文档流（助手无气泡），false = 双方气泡
         val CHAT_DOC_STYLE  = booleanPreferencesKey("chat_doc_style")
+        // 输入框回车行为：true = 回车发送，false = 回车换行（默认）
+        val ENTER_TO_SEND   = booleanPreferencesKey("enter_to_send")
         // 云端模型（OpenAI 兼容协议）
         val CLOUD_ENABLED   = booleanPreferencesKey("cloud_enabled")
         val CLOUD_BASE_URL  = stringPreferencesKey("cloud_base_url")
@@ -129,6 +131,9 @@ class SettingsRepository(private val context: Context) {
 
     /** 聊天消息呈现：true = 文档流（助手无气泡），false = 双方气泡 */
     val chatDocStyle: Flow<Boolean> = context.dataStore.data.map { it[Keys.CHAT_DOC_STYLE] ?: true }
+
+    /** 输入框回车行为：true = 回车发送，false = 回车换行（默认，发送走按钮）。 */
+    val enterToSend: Flow<Boolean> = context.dataStore.data.map { it[Keys.ENTER_TO_SEND] ?: false }
 
     /** Material You 取色 */
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.DYNAMIC_COLOR] ?: true }
@@ -261,6 +266,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setChatDocStyle(on: Boolean) =
         context.dataStore.edit { it[Keys.CHAT_DOC_STYLE] = on }
+
+    suspend fun setEnterToSend(on: Boolean) =
+        context.dataStore.edit { it[Keys.ENTER_TO_SEND] = on }
 
     // ===================================================
     // B3 WebSearchTool：第三方搜索引擎 API key

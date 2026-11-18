@@ -334,7 +334,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    ThinkingPill(level = ui.thinkingLevel, onChange = vm::setThinkingLevel)
                     IconButton(onClick = onOpenSearch) {
                         Icon(Icons.Outlined.Search, contentDescription = "搜索")
                     }
@@ -560,6 +559,7 @@ fun ChatScreen(
                 onMic = requestMic,
                 voiceText = voiceText,
                 onVoiceConsumed = { voiceText = null },
+                enterToSend = ui.enterToSend,
                 modifier = Modifier.graphicsLayer {
                     alpha = composerProgress
                     translationY = (1f - composerProgress) * 26f
@@ -1655,24 +1655,29 @@ private fun Composer(
     streaming: Boolean,
     enabled: Boolean,
     attachments: List<ChatAttachment>,
-    voiceText: String?,
-    onVoiceConsumed: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onOpenPlus: () -> Unit,
     onMic: () -> Unit,
+    voiceText: String? = null,
+    onVoiceConsumed: () -> Unit = {},
+    enterToSend: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var input by rememberSaveable { mutableStateOf("") }
-    // 系统语音识别返回的文本：追加到现有输入，光标由 BasicTextField 自己维护
+    // 展开态锁存：一旦进入多行就保持，直到文本明显变短或清空。
+    // 避免中文组合文本宽度变化导致单行/多行来回切，把输入框反复重建。
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
     LaunchedEffect(voiceText) {
-        val spoken = voiceText?.trim().orEmpty()
-        if (spoken.isNotEmpty()) {
-            input = if (input.isBlank()) spoken else input.trimEnd() + " " + spoken
+        val v = voiceText?.trim().orEmpty()
+        if (v.isNotEmpty()) {
+            input = if (input.isBlank()) v else input.trimEnd() + " " + v
             onVoiceConsumed()
         }
     }
+
     val canSend = enabled && (input.isNotBlank() || attachments.isNotEmpty()) && !streaming
     val doSend: () -> Unit = {
         if (canSend) {
@@ -1685,7 +1690,7 @@ private fun Composer(
         color = if (enabled) MaterialTheme.colorScheme.onSurface
         else MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 17.sp,
-        lineHeight = 24.sp
+        lineHeight = 26.sp
     )
     val placeholder = if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型"
     val measurer = rememberTextMeasurer()
@@ -1694,15 +1699,12 @@ private fun Composer(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            // 底部只应用一次 inset：键盘与导航栏取并集，
-            // 避免 imePadding + navigationBarsPadding 叠加出多余空隙。
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 12.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)
     ) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            // 单行内联时文本可用宽度：左右内边距 8 + 加号 36 + 间距 6 + 操作键 36 + 间距 6
             val inlineTextWidth = maxWidth - 100.dp
-            val naturalTextWidth = if (input.isBlank()) {
+            val naturalWidth = if (input.isBlank()) {
                 0.dp
             } else with(density) {
                 measurer.measure(
@@ -1712,105 +1714,128 @@ private fun Composer(
                     softWrap = false
                 ).size.width.toDp()
             }
-            val expanded = attachments.isNotEmpty() ||
+            val mustExpand = attachments.isNotEmpty() ||
                 input.contains('\n') ||
-                naturalTextWidth > inlineTextWidth
+                naturalWidth > inlineTextWidth
+            val shouldCollapse = (input.isBlank() && attachments.isEmpty()) ||
+                (expanded && naturalWidth < inlineTextWidth * 0.8f)
+            LaunchedEffect(mustExpand, shouldCollapse) {
+                if (mustExpand) expanded = true
+                else if (shouldCollapse) expanded = false
+            }
+
             val radius by animateDpAsState(
-                targetValue = if (expanded) (26f * cornerScale).dp else 28.dp,
+                targetValue = if (expanded) {
+                    (24f * cornerScale).dp.coerceAtMost(32.dp)
+                } else {
+                    28.dp
+                },
                 animationSpec = tween(180),
                 label = "composerRadius"
             )
-            // 圆角越大，按钮越要向内收，才能与弧线保持一致的视觉距离。
-            val visualInset = if (expanded) {
-                maxOf(8.dp, (26f * cornerScale * 0.293f).dp)
+            // 0.85r：矩形文字块的角不进入圆弧，保留至少 15% 的呼吸间距
+            val textInset = if (expanded) {
+                (radius * 0.85f).coerceAtLeast(18.dp)
+            } else {
+                50.dp
+            }
+            val buttonInset = if (expanded) {
+                (radius * 0.5f).coerceIn(12.dp, 18.dp)
             } else {
                 8.dp
             }
 
             Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .animateContentSize(),
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(radius),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 border = BorderStroke(
                     1.dp,
                     MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
                 ),
-                shadowElevation = 6.dp
+                // 浅色主题下 6dp 投影会形成硬边 + 双描边，改为纯边框分层
+                shadowElevation = 0.dp
             ) {
-                if (expanded) {
-                    Column(
+                Column(Modifier.fillMaxWidth()) {
+                    PendingAttachmentBar(
+                        attachments = attachments,
+                        onRemove = onRemoveAttachment,
+                        modifier = Modifier.padding(
+                            start = textInset,
+                            end = textInset,
+                            top = 12.dp
+                        )
+                    )
+                    Box(
                         Modifier
                             .fillMaxWidth()
-                            .padding(
-                                start = visualInset,
-                                end = visualInset,
-                                top = 8.dp,
-                                bottom = visualInset
-                            )
+                            .heightIn(min = 56.dp)
                     ) {
-                        PendingAttachmentBar(
-                            attachments = attachments,
-                            onRemove = onRemoveAttachment,
-                            modifier = Modifier.padding(bottom = 2.dp)
-                        )
+                        // 唯一的输入框实例：形态切换只改 padding，不重建节点，IME 连接不断
                         ComposerInput(
                             input = input,
                             onValueChange = { input = it },
                             enabled = enabled,
                             textStyle = textStyle,
                             placeholder = placeholder,
+                            enterToSend = enterToSend,
                             onSend = doSend,
-                            maxLines = 6,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(
+                                    start = textInset,
+                                    end = textInset,
+                                    top = if (expanded) 20.dp else 15.dp,
+                                    bottom = if (expanded) 60.dp else 15.dp
+                                )
                         )
-                        Spacer(Modifier.height(6.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            ComposerPlusButton(enabled = enabled, onClick = onOpenPlus)
-                            Spacer(Modifier.weight(1f))
-                            ComposerActionButton(
-                                streaming = streaming,
-                                canSend = canSend,
-                                enabled = enabled,
-                                onSend = doSend,
-                                onStop = onStop,
-                                onMic = onMic
-                            )
+                        if (expanded) {
+                            Row(
+                                Modifier
+                                    .align(Alignment.BottomStart)
+                                    .fillMaxWidth()
+                                    .padding(
+                                        start = buttonInset,
+                                        end = buttonInset,
+                                        bottom = 12.dp
+                                    ),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                ComposerPlusButton(enabled = enabled, onClick = onOpenPlus)
+                                Spacer(Modifier.weight(1f))
+                                ComposerActionButton(
+                                    streaming = streaming,
+                                    canSend = canSend,
+                                    enabled = enabled,
+                                    onSend = doSend,
+                                    onStop = onStop,
+                                    onMic = onMic
+                                )
+                            }
+                        } else {
+                            Row(
+                                Modifier
+                                    .align(Alignment.CenterStart)
+                                    .padding(start = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                ComposerPlusButton(enabled = enabled, onClick = onOpenPlus)
+                            }
+                            Box(
+                                Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 8.dp)
+                            ) {
+                                ComposerActionButton(
+                                    streaming = streaming,
+                                    canSend = canSend,
+                                    enabled = enabled,
+                                    onSend = doSend,
+                                    onStop = onStop,
+                                    onMic = onMic
+                                )
+                            }
                         }
-                    }
-                } else {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        ComposerPlusButton(enabled = enabled, onClick = onOpenPlus)
-                        Spacer(Modifier.width(6.dp))
-                        ComposerInput(
-                            input = input,
-                            onValueChange = { input = it },
-                            enabled = enabled,
-                            textStyle = textStyle,
-                            placeholder = placeholder,
-                            onSend = doSend,
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        ComposerActionButton(
-                            streaming = streaming,
-                            canSend = canSend,
-                            enabled = enabled,
-                            onSend = doSend,
-                            onStop = onStop,
-                            onMic = onMic
-                        )
                     }
                 }
             }
@@ -1825,8 +1850,8 @@ private fun ComposerInput(
     enabled: Boolean,
     textStyle: TextStyle,
     placeholder: String,
+    enterToSend: Boolean,
     onSend: () -> Unit,
-    maxLines: Int,
     modifier: Modifier = Modifier
 ) {
     BasicTextField(
@@ -1836,10 +1861,12 @@ private fun ComposerInput(
         enabled = enabled,
         textStyle = textStyle,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        maxLines = maxLines,
+        maxLines = 6,
         minLines = 1,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-        keyboardActions = KeyboardActions(onSend = { onSend() }),
+        keyboardOptions = KeyboardOptions(
+            imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default
+        ),
+        keyboardActions = KeyboardActions(onSend = { if (enterToSend) onSend() }),
         decorationBox = { inner ->
             Box(Modifier.fillMaxWidth()) {
                 if (input.isEmpty()) {
@@ -1945,7 +1972,6 @@ private fun ComposerActionButton(
         }
     }
 }
-
 
 private fun formatCtx(n: Int): String = when {
     n >= 1024 -> "%.1fK".format(n / 1024.0)

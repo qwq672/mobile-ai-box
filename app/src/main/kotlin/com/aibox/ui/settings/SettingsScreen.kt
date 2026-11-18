@@ -393,6 +393,15 @@ fun SettingsScreen(
                             trailingContent = { Switch(checked = ui.chatDocStyle, onCheckedChange = vm::onChatDocStyleChange) },
                             leadingContent = { Icon(Icons.Outlined.FormatAlignLeft, contentDescription = null, modifier = Modifier.size(24.dp)) }
                         )
+                        HorizontalDivider()
+                        ListItem(
+                            headlineContent = { Text("回车发送") },
+                            supportingContent = { Text(
+                                "关闭（默认）：回车换行，发送只走输入框右侧按钮；开启：回车直接发送。"
+                            ) },
+                            trailingContent = { Switch(checked = ui.enterToSend, onCheckedChange = vm::onEnterToSendChange) },
+                            leadingContent = { Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(24.dp)) }
+                        )
                     }
                 }
             }

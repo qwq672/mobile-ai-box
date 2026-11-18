@@ -252,14 +252,14 @@ fun OptimizationSettingsScreen(
                     SwitchRow(
                         key = "opt.preloadModel",
                         title = "模型预加载",
-                        description = "App 启动时异步加载常用模型，避开用户首次点击对话时的冷启动延迟",
+                        description = "App 启动时异步加载常用模型，避开首次点击对话时的冷启动延迟。默认关闭；开启后启动即加载本地权重，会增加发热与耗电",
                         value = settings.preloadModel,
                         onValueChange = { v -> vm.update { s -> s.copy(preloadModel = v) } }
                     )
                     SwitchRow(
                         key = "opt.warmupAfterLoad",
                         title = "加载后预热",
-                        description = "加载完成后立即跑 1 token 假推理，初始化所有内部状态",
+                        description = "加载完成后立即跑 1 token 假推理，初始化所有内部状态。默认关闭；开启后每次加载模型都会额外发热",
                         value = settings.warmupAfterLoad,
                         onValueChange = { v -> vm.update { s -> s.copy(warmupAfterLoad = v) } }
                     )

@@ -68,8 +68,8 @@ class OptimizationSettingsRepository(private val context: Context) {
         context.optimizationDataStore.data.map { p ->
             OptimizationSettings(
                 // TTFT
-                preloadModel                = p[Keys.PRELOAD_MODEL]                ?: true,
-                warmupAfterLoad            = p[Keys.WARMUP_AFTER_LOAD]            ?: true,
+                preloadModel                = p[Keys.PRELOAD_MODEL]                ?: false,
+                warmupAfterLoad            = p[Keys.WARMUP_AFTER_LOAD]            ?: false,
                 preallocateKV              = p[Keys.PREALLOCATE_KV]               ?: true,
                 prebuildSampler            = p[Keys.PREBUILD_SAMPLER]             ?: true,
                 streamFirstTokenImmediately = p[Keys.STREAM_FIRST_TOKEN_IMMEDIATE] ?: true,
@@ -103,8 +103,8 @@ class OptimizationSettingsRepository(private val context: Context) {
         context.optimizationDataStore.edit { p ->
             // 读当前 → 转换 → 写回；缺省值与 OptimizationSettings.DEFAULT 一致
             val current = OptimizationSettings(
-                preloadModel                = p[Keys.PRELOAD_MODEL]                ?: true,
-                warmupAfterLoad            = p[Keys.WARMUP_AFTER_LOAD]            ?: true,
+                preloadModel                = p[Keys.PRELOAD_MODEL]                ?: false,
+                warmupAfterLoad            = p[Keys.WARMUP_AFTER_LOAD]            ?: false,
                 preallocateKV              = p[Keys.PREALLOCATE_KV]               ?: true,
                 prebuildSampler            = p[Keys.PREBUILD_SAMPLER]             ?: true,
                 streamFirstTokenImmediately = p[Keys.STREAM_FIRST_TOKEN_IMMEDIATE] ?: true,

@@ -35,6 +35,7 @@ import com.aibox.util.CpuInfo
 import com.aibox.util.ThermalMonitor
 import com.aibox.util.log.LogLevel
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -293,6 +294,13 @@ class AppContainer(context: Context) {
                 if (settingsRepository.cloudConfig.first().enabled) {
                     inferenceEngine.setCloudEnabled(true)
                 }
+            }
+        }
+        // 云端开关变化时同步给优化器：切到云端立刻取消启动预加载，
+        // 避免本机在没发消息时还在 mmap/预热本地模型。
+        appScope.launch {
+            settingsRepository.cloudConfig.collectLatest { c ->
+                optimizationManager.setCloudActive(c.enabled)
             }
         }
         // 记录一次设备能力（P3/P4 模块筛选依据），便于日志定位"为什么不可用"。

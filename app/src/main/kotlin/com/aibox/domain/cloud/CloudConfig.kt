@@ -74,7 +74,11 @@ object CloudPresets {
     val all: List<CloudPreset> = listOf(
         CloudPreset("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
         CloudPreset("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
-        CloudPreset("moonshot", "Moonshot", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+        CloudPreset("moonshot", "Kimi（Moonshot）", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+        CloudPreset("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+        CloudPreset("dashscope", "通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+        CloudPreset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"),
+        CloudPreset("siliconflow", "硅基流动", "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
         CloudPreset("ollama", "Ollama（本机）", "http://127.0.0.1:11434/v1", "qwen2.5:7b", needsKey = false)
     )
 

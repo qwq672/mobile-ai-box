@@ -55,7 +55,7 @@ class TtftOptimizer(
      *
      * 不抛异常：所有失败路径仅 LogSystem.warn，不影响 App 启动。
      */
-    suspend fun preloadOnAppStart() {
+    suspend fun preloadOnAppStart(shouldAbort: () -> Boolean = { false }) {
         if (!settings.preloadModel) {
             LogSystem.debug(tag, "preloadModel disabled by user, skip")
             return
@@ -72,6 +72,10 @@ class TtftOptimizer(
             return
         }
         kotlinx.coroutines.delay(STARTUP_GRACE_MS)
+        if (shouldAbort()) {
+            LogSystem.info(tag, "preload aborted during startup grace period (cloud / thermal)")
+            return
+        }
         if (userActivatedModel || backendManager.listLoadedModels().isNotEmpty()) {
             LogSystem.info(tag, "model loaded during startup grace period, skip preload")
             return

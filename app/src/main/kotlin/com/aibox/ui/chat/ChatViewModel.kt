@@ -130,6 +130,8 @@ class ChatViewModel : ViewModel() {
         val errorMessage: String? = null,
         val hasModel: Boolean = false,
         val modelName: String = "",
+        /** 输入框回车行为：true = 回车发送，false = 回车换行。 */
+        val enterToSend: Boolean = false,
         val contextUsed: Int = 0,
         val contextMax: Int = 0,
         val sessionId: Long = 0,
@@ -189,6 +191,11 @@ class ChatViewModel : ViewModel() {
             }
         }
         viewModelScope.launch {
+            settings.enterToSend.collectLatest { on ->
+                _ui.value = _ui.value.copy(enterToSend = on)
+            }
+        }
+        viewModelScope.launch {
             container.thermalMonitor.celsius.collectLatest { c ->
                 _ui.value = _ui.value.copy(thermalCelsius = c)
             }
@@ -198,7 +205,8 @@ class ChatViewModel : ViewModel() {
                 _ui.value = _ui.value.copy(
                     tokensPerSecond = s.tokensPerSecond,
                     thermalPercent = s.thermalPercent,
-                    backendName = s.backend.displayNameZh,
+                    // 云端模式不显示本地 CPU/GPU 后端标签
+                    backendName = if (engine.isCloudActive()) "云端" else s.backend.displayNameZh,
                     contextUsed = s.contextUsed,
                     contextMax = s.contextMax
                 )
@@ -206,9 +214,16 @@ class ChatViewModel : ViewModel() {
         }
         viewModelScope.launch {
             engine.state.collectLatest { st ->
+                val path = st.modelPath
+                val cloud = path?.startsWith("cloud") == true
                 _ui.value = _ui.value.copy(
                     hasModel = st.loaded,
-                    modelName = st.modelPath?.substringAfterLast('/') ?: "",
+                    backendName = if (cloud) "云端" else _ui.value.backendName,
+                    modelName = if (cloud) {
+                        path.orEmpty().substringAfter("cloud:", "").ifBlank { "云端模型" }
+                    } else {
+                        path?.substringAfterLast('/') ?: ""
+                    },
                     errorMessage = st.error
                 )
             }

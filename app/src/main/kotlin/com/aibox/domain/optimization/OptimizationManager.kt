@@ -73,6 +73,23 @@ class OptimizationManager(
     /** 设置变化订阅 job；[onAppStart] 启动，[onAppStop] 取消。 */
     @Volatile private var settingsJob: Job? = null
 
+    /** 启动预加载 job；切到云端 / 进入后台时取消，避免无意义地加载本地模型发热。 */
+    @Volatile private var preloadJob: Job? = null
+
+    /** 云端模式标记：由 AppContainer 订阅云端开关后写入。 */
+    @Volatile private var cloudActive: Boolean = false
+
+    fun setCloudActive(active: Boolean) {
+        cloudActive = active
+        if (active) cancelPreload()
+    }
+
+    /** 取消尚未完成的启动预加载（已经完成的加载由 EnergyOptimizer 的空闲卸载处理）。 */
+    fun cancelPreload() {
+        preloadJob?.cancel()
+        preloadJob = null
+    }
+
     /**
      * App 启动时调用（由 [com.aibox.AIBoxApp.onCreate] 在 container 初始化后调用）。
      *
@@ -133,8 +150,20 @@ class OptimizationManager(
             // 4. 启动 idle watchdog
             energyOpt.startIdleWatchdog()
 
-            // 5. 异步预加载模型
-            scope.launch { ttftOpt.preloadOnAppStart() }
+            // 5. 异步预加载模型：云端模式 / 设备已经偏热时不加载本地权重，
+            //    否则启动即 mmap + 预热会让手机在没发消息时也持续发热。
+            preloadJob?.cancel()
+            preloadJob = scope.launch {
+                if (cloudActive) {
+                    LogSystem.info(tag, "cloud active, skip startup preload")
+                    return@launch
+                }
+                if (thermalMonitor.thermalPercent() >= 60) {
+                    LogSystem.info(tag, "device hot (${thermalMonitor.thermalPercent()}%), skip startup preload")
+                    return@launch
+                }
+                ttftOpt.preloadOnAppStart { cloudActive || thermalMonitor.thermalPercent() >= 60 }
+            }
         }
     }
 
@@ -144,6 +173,7 @@ class OptimizationManager(
     fun onAppStop() {
         thermalJob?.cancel()
         settingsJob?.cancel()
+        preloadJob?.cancel()
         energyOpt.stopIdleWatchdog()
         LogSystem.info(tag, "onAppStop: stopped thermal / settings / watchdog jobs")
     }

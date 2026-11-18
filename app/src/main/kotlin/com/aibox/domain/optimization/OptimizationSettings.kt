@@ -30,9 +30,9 @@ data class OptimizationSettings(
 
     // === TTFT 优化（首 token 延迟） ===
     /** 启动时即 mmap 权重，而非首次推理时再加载。 */
-    val preloadModel: Boolean = true,
+    val preloadModel: Boolean = false,
     /** 加载后立即跑一次空输入预热，避免首次真实推理的编译 / 预热开销。 */
-    val warmupAfterLoad: Boolean = true,
+    val warmupAfterLoad: Boolean = false,
     /** 加载时按 contextLength 一次性分配 KV cache，避免逐 token 增长触发 realloc。 */
     val preallocateKV: Boolean = true,
     /** 加载时即构建采样器对象，避免首次推理时重建。 */
