@@ -1,6 +1,7 @@
 package com.aibox.data.repo
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -10,12 +11,17 @@ import com.aibox.domain.cloud.CloudConfig
 import com.aibox.domain.inference.BackendType
 import com.aibox.domain.inference.InferenceConfig
 import com.aibox.util.log.LogSystem
+import com.aibox.util.security.CloudKeyCipher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 private val Context.dataStore by preferencesDataStore("settings")
 
 class SettingsRepository(private val context: Context) {
+
+    private val cloudKeyCipher = CloudKeyCipher(context.applicationContext)
 
     private object Keys {
         val BACKEND         = stringPreferencesKey("backend")
@@ -64,6 +70,7 @@ class SettingsRepository(private val context: Context) {
         val CLOUD_ENABLED   = booleanPreferencesKey("cloud_enabled")
         val CLOUD_BASE_URL  = stringPreferencesKey("cloud_base_url")
         val CLOUD_API_KEY   = stringPreferencesKey("cloud_api_key")
+        val CLOUD_API_KEY_ENC = stringPreferencesKey("cloud_api_key_enc")
         val CLOUD_MODEL     = stringPreferencesKey("cloud_model")
         val CLOUD_VISION    = booleanPreferencesKey("cloud_supports_vision")
         val CLOUD_AUDIO     = booleanPreferencesKey("cloud_supports_audio")
@@ -135,7 +142,7 @@ class SettingsRepository(private val context: Context) {
         CloudConfig(
             enabled = p[Keys.CLOUD_ENABLED] ?: false,
             baseUrl = p[Keys.CLOUD_BASE_URL] ?: CloudConfig.DEFAULT_BASE_URL,
-            apiKey = p[Keys.CLOUD_API_KEY] ?: "",
+            apiKey = readCloudApiKey(p),
             model = p[Keys.CLOUD_MODEL] ?: CloudConfig.DEFAULT_MODEL,
             supportsVision = p[Keys.CLOUD_VISION] ?: false,
             supportsAudio = p[Keys.CLOUD_AUDIO] ?: false,
@@ -144,16 +151,49 @@ class SettingsRepository(private val context: Context) {
         )
     }
 
+    /** 优先读加密字段；仅存在旧明文时做一次性迁移，失败回退空串。 */
+    private suspend fun readCloudApiKey(p: Preferences): String {
+        val encrypted = p[Keys.CLOUD_API_KEY_ENC]
+        if (!encrypted.isNullOrBlank()) {
+            return withContext(Dispatchers.IO) { cloudKeyCipher.decrypt(encrypted) }
+        }
+        val legacy = p[Keys.CLOUD_API_KEY]
+        if (legacy.isNullOrBlank()) return ""
+        val migrated = withContext(Dispatchers.IO) { cloudKeyCipher.encrypt(legacy) }
+        if (migrated.isNotBlank()) {
+            context.dataStore.edit { prefs ->
+                prefs[Keys.CLOUD_API_KEY_ENC] = migrated
+                prefs.remove(Keys.CLOUD_API_KEY)
+            }
+            LogSystem.info(TAG, "cloud api key migrated to encrypted storage")
+        }
+        return legacy
+    }
+
     suspend fun saveCloud(c: CloudConfig) {
+        val encrypted = if (c.apiKey.isBlank()) {
+            ""
+        } else {
+            withContext(Dispatchers.IO) { cloudKeyCipher.encrypt(c.apiKey) }
+        }
+        if (c.apiKey.isNotBlank() && encrypted.isBlank()) {
+            LogSystem.error(TAG, "cloud api key encryption failed, key not persisted")
+        }
         context.dataStore.edit { p ->
             p[Keys.CLOUD_ENABLED] = c.enabled
             p[Keys.CLOUD_BASE_URL] = c.baseUrl
-            p[Keys.CLOUD_API_KEY] = c.apiKey
             p[Keys.CLOUD_MODEL] = c.model
             p[Keys.CLOUD_VISION] = c.supportsVision
             p[Keys.CLOUD_AUDIO] = c.supportsAudio
             p[Keys.CLOUD_WEB] = c.builtinWebSearch
             p[Keys.CLOUD_URL] = c.builtinUrlReader
+            // 明文一律不落盘
+            p.remove(Keys.CLOUD_API_KEY)
+            if (encrypted.isNotBlank()) {
+                p[Keys.CLOUD_API_KEY_ENC] = encrypted
+            } else {
+                p.remove(Keys.CLOUD_API_KEY_ENC)
+            }
         }
     }
 
@@ -339,5 +379,9 @@ class SettingsRepository(private val context: Context) {
         // 重置后不再弹欢迎页（用户已经在用了），也保留上次选择的模型 id
         p[Keys.ONBOARDING_DONE] = true
         LogSystem.info("aibox.settings", "resetAllSettings done")
+    }
+
+    private companion object {
+        const val TAG = "aibox.settings"
     }
 }

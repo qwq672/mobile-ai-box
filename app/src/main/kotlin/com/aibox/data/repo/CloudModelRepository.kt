@@ -5,9 +5,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aibox.domain.cloud.CloudConfig
+import com.aibox.util.security.CloudKeyCipher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -46,9 +49,12 @@ class CloudModelRepository(private val context: Context) {
     private val profilesKey = stringPreferencesKey("profiles_json")
     private val activeKey = stringPreferencesKey("active_id")
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val keyCipher = CloudKeyCipher(context.applicationContext)
 
     val profiles: Flow<List<CloudModelProfile>> = context.cloudModelsDataStore.data.map { p ->
-        decode(p[profilesKey])
+        withContext(Dispatchers.IO) {
+            decode(p[profilesKey]).map { it.copy(apiKey = decryptKey(it.apiKey)) }
+        }
     }
 
     /** 当前选中的云端模型 id（0 = 未选）。 */
@@ -62,7 +68,12 @@ class CloudModelRepository(private val context: Context) {
 
     suspend fun upsert(profile: CloudModelProfile): Long {
         val id = if (profile.id > 0) profile.id else System.currentTimeMillis()
-        val saved = profile.copy(id = id)
+        val saved = profile.copy(
+            id = id,
+            apiKey = withContext(Dispatchers.IO) {
+                if (profile.apiKey.isBlank()) "" else keyCipher.encrypt(profile.apiKey)
+            }
+        )
         context.cloudModelsDataStore.edit { p ->
             val current = decode(p[profilesKey]).filterNot { it.id == id } + saved
             p[profilesKey] = json.encodeToString(current.sortedBy { it.createdAt })
@@ -93,6 +104,12 @@ class CloudModelRepository(private val context: Context) {
         builtinWebSearch = profile.builtinWebSearch,
         builtinUrlReader = profile.builtinUrlReader
     )
+
+    private fun decryptKey(raw: String): String {
+        if (raw.isBlank()) return ""
+        // 旧版本存的是明文：解密失败时按明文处理，下次保存会自动迁移成密文
+        return keyCipher.decrypt(raw).ifBlank { raw }
+    }
 
     private fun decode(raw: String?): List<CloudModelProfile> {
         if (raw.isNullOrBlank()) return emptyList()

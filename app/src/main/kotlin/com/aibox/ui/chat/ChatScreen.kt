@@ -5,9 +5,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.InfiniteRepeatableSpec
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.keyframes
@@ -24,6 +26,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -125,9 +128,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1642,27 +1649,29 @@ private fun MiniAction(icon: ImageVector, label: String, onClick: () -> Unit) {
  * └──────────────────────────────────┘
  * ```
  */
+
 @Composable
 private fun Composer(
     streaming: Boolean,
     enabled: Boolean,
     attachments: List<ChatAttachment>,
+    voiceText: String?,
+    onVoiceConsumed: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onOpenPlus: () -> Unit,
     onMic: () -> Unit,
-    voiceText: String? = null,
-    onVoiceConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var input by rememberSaveable { mutableStateOf("") }
-
-    // 系统语音识别结果：追加到当前输入，而不是覆盖用户已经打好的字
+    // 系统语音识别返回的文本：追加到现有输入，光标由 BasicTextField 自己维护
     LaunchedEffect(voiceText) {
-        val v = voiceText ?: return@LaunchedEffect
-        input = if (input.isBlank()) v else "$input $v"
-        onVoiceConsumed()
+        val spoken = voiceText?.trim().orEmpty()
+        if (spoken.isNotEmpty()) {
+            input = if (input.isBlank()) spoken else input.trimEnd() + " " + spoken
+            onVoiceConsumed()
+        }
     }
     val canSend = enabled && (input.isNotBlank() || attachments.isNotEmpty()) && !streaming
     val doSend: () -> Unit = {
@@ -1671,156 +1680,272 @@ private fun Composer(
             input = ""
         }
     }
-    // 跟随外观设置里的圆角倍率（与卡片/弹窗同一套规则，不再单独封顶）；
-    // 倍率高时半径会自然变成胶囊，不会“啃”到文字——水平内边距同步加大
-    val shapeRadius = (28 * LocalCornerScale.current).toInt().coerceAtLeast(14)
+    val cornerScale = LocalCornerScale.current
+    val textStyle = MaterialTheme.typography.bodyLarge.copy(
+        color = if (enabled) MaterialTheme.colorScheme.onSurface
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 17.sp,
+        lineHeight = 24.sp
+    )
+    val placeholder = if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型"
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            // 只取 ime 与导航栏的较大值：两者叠加时输入框会“悬”在键盘上方一段
+            // 底部只应用一次 inset：键盘与导航栏取并集，
+            // 避免 imePadding + navigationBarsPadding 叠加出多余空隙。
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-            // 左右下等距，卡片不再往下沉
-            .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 12.dp)
     ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(shapeRadius.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
-        shadowElevation = 6.dp
-    ) {
-        Column(Modifier.padding(start = 20.dp, end = 10.dp, top = 18.dp, bottom = 10.dp)) {
-            PendingAttachmentBar(
-                attachments = attachments,
-                onRemove = onRemoveAttachment,
-                modifier = Modifier.padding(end = 6.dp)
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // 单行内联时文本可用宽度：左右内边距 8 + 加号 36 + 间距 6 + 操作键 36 + 间距 6
+            val inlineTextWidth = maxWidth - 100.dp
+            val naturalTextWidth = if (input.isBlank()) {
+                0.dp
+            } else with(density) {
+                measurer.measure(
+                    text = AnnotatedString(input),
+                    style = textStyle,
+                    maxLines = 1,
+                    softWrap = false
+                ).size.width.toDp()
+            }
+            val expanded = attachments.isNotEmpty() ||
+                input.contains('\n') ||
+                naturalTextWidth > inlineTextWidth
+            val radius by animateDpAsState(
+                targetValue = if (expanded) (26f * cornerScale).dp else 28.dp,
+                animationSpec = tween(180),
+                label = "composerRadius"
             )
-            BasicTextField(
-                value = input,
-                onValueChange = { input = it },
-                // 不再强制 40dp 最小高度：单行时下方会多出一条“空行”，
-                // 高度由行高 + 上下内边距自然决定
-                modifier = Modifier.fillMaxWidth(),
-                enabled = enabled,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 22.sp
+            // 圆角越大，按钮越要向内收，才能与弧线保持一致的视觉距离。
+            val visualInset = if (expanded) {
+                maxOf(8.dp, (26f * cornerScale * 0.293f).dp)
+            } else {
+                8.dp
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .animateContentSize(),
+                shape = RoundedCornerShape(radius),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
                 ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                maxLines = 6,
-                minLines = 1,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { doSend() }),
-                decorationBox = { inner ->
-                    Box(Modifier.fillMaxWidth()) {
-                        if (input.isEmpty()) {
-                            Text(
-                                if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                shadowElevation = 6.dp
+            ) {
+                if (expanded) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = visualInset,
+                                end = visualInset,
+                                top = 8.dp,
+                                bottom = visualInset
+                            )
+                    ) {
+                        PendingAttachmentBar(
+                            attachments = attachments,
+                            onRemove = onRemoveAttachment,
+                            modifier = Modifier.padding(bottom = 2.dp)
+                        )
+                        ComposerInput(
+                            input = input,
+                            onValueChange = { input = it },
+                            enabled = enabled,
+                            textStyle = textStyle,
+                            placeholder = placeholder,
+                            onSend = doSend,
+                            maxLines = 6,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ComposerPlusButton(enabled = enabled, onClick = onOpenPlus)
+                            Spacer(Modifier.weight(1f))
+                            ComposerActionButton(
+                                streaming = streaming,
+                                canSend = canSend,
+                                enabled = enabled,
+                                onSend = doSend,
+                                onStop = onStop,
+                                onMic = onMic
                             )
                         }
-                        inner()
                     }
-                }
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                CircleAction(
-                    size = 40,
-                    container = MaterialTheme.colorScheme.primaryContainer,
-                    enabled = enabled,
-                    // composer 左内边距 20 / 右 10，往左挪 4dp 让两侧视觉边距接近
-                    modifier = Modifier.offset(x = (-4).dp),
-                    onClick = onOpenPlus
-                ) {
-                    Icon(
-                        Icons.Outlined.Add,
-                        contentDescription = "添加",
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Box(
-                    Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .clickable(enabled = enabled, onClick = onMic),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Outlined.Mic,
-                        contentDescription = "语音",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(Modifier.width(4.dp))
-                // 发送 / 停止：与左侧加号同一套圆形底 + 线性图标，不再用实心三角
-                val circleColor = if (streaming) {
-                    MaterialTheme.colorScheme.errorContainer
                 } else {
-                    MaterialTheme.colorScheme.primaryContainer
-                }
-                val iconTint = if (streaming) {
-                    MaterialTheme.colorScheme.onErrorContainer
-                } else {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                }
-                CircleAction(
-                    size = 40,
-                    container = circleColor,
-                    enabled = streaming || canSend,
-                    onClick = { if (streaming) onStop() else doSend() }
-                ) {
-                    if (streaming) {
-                        Icon(
-                            Icons.Outlined.Stop,
-                            contentDescription = "停止",
-                            tint = iconTint,
-                            modifier = Modifier.size(18.dp)
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ComposerPlusButton(enabled = enabled, onClick = onOpenPlus)
+                        Spacer(Modifier.width(6.dp))
+                        ComposerInput(
+                            input = input,
+                            onValueChange = { input = it },
+                            enabled = enabled,
+                            textStyle = textStyle,
+                            placeholder = placeholder,
+                            onSend = doSend,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
                         )
-                    } else {
-                        Icon(
-                            Icons.Outlined.ArrowUpward,
-                            contentDescription = "发送",
-                            tint = iconTint,
-                            modifier = Modifier.size(20.dp)
+                        Spacer(Modifier.width(6.dp))
+                        ComposerActionButton(
+                            streaming = streaming,
+                            canSend = canSend,
+                            enabled = enabled,
+                            onSend = doSend,
+                            onStop = onStop,
+                            onMic = onMic
                         )
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ComposerInput(
+    input: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean,
+    textStyle: TextStyle,
+    placeholder: String,
+    onSend: () -> Unit,
+    maxLines: Int,
+    modifier: Modifier = Modifier
+) {
+    BasicTextField(
+        value = input,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        enabled = enabled,
+        textStyle = textStyle,
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        maxLines = maxLines,
+        minLines = 1,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { onSend() }),
+        decorationBox = { inner ->
+            Box(Modifier.fillMaxWidth()) {
+                if (input.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = textStyle,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                inner()
+            }
+        }
+    )
+}
+
+@Composable
+private fun ComposerPlusButton(enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(
+                MaterialTheme.colorScheme.surfaceContainerHighest.copy(
+                    alpha = if (enabled) 1f else 0.5f
+                )
+            )
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            Icons.Outlined.Add,
+            contentDescription = "添加",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
 @Composable
-private fun CircleAction(
-    size: Int,
-    container: Color,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-    content: @Composable () -> Unit
+private fun ComposerActionButton(
+    streaming: Boolean,
+    canSend: Boolean,
+    enabled: Boolean,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+    onMic: () -> Unit
 ) {
+    val container = when {
+        streaming -> MaterialTheme.colorScheme.errorContainer
+        canSend || enabled -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val tint = when {
+        streaming -> MaterialTheme.colorScheme.onErrorContainer
+        canSend || enabled -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Box(
-        modifier
-            .size(size.dp)
+        Modifier
+            .size(36.dp)
             .clip(CircleShape)
-            .background(if (enabled) container else container.copy(alpha = 0.5f))
-            .clickable(enabled = enabled, onClick = onClick),
+            .background(container)
+            .clickable(enabled = streaming || canSend || enabled) {
+                when {
+                    streaming -> onStop()
+                    canSend -> onSend()
+                    else -> onMic()
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
-        content()
+        Crossfade(
+            targetState = when {
+                streaming -> 0
+                canSend -> 1
+                else -> 2
+            },
+            animationSpec = tween(150),
+            label = "composerAction"
+        ) { mode ->
+            when (mode) {
+                0 -> Icon(
+                    Icons.Outlined.Stop,
+                    contentDescription = "停止",
+                    tint = tint,
+                    modifier = Modifier.size(18.dp)
+                )
+                1 -> Icon(
+                    Icons.Outlined.ArrowUpward,
+                    contentDescription = "发送",
+                    tint = tint,
+                    modifier = Modifier.size(20.dp)
+                )
+                else -> Icon(
+                    Icons.Outlined.Mic,
+                    contentDescription = "语音输入",
+                    tint = tint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 }
+
 
 private fun formatCtx(n: Int): String = when {
     n >= 1024 -> "%.1fK".format(n / 1024.0)
