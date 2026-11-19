@@ -61,11 +61,27 @@ class GpuGuard(appContext: Context?) {
 
     /** 推理正常结束：清标记；GPU 后端跑通说明驱动可用，把连续崩溃计数清零。 */
     fun onInferenceEnd(backend: BackendType) {
+        onInferenceEnd(backend, clearedSuccessfully = true)
+    }
+
+    /**
+     * 结束一次受保护的操作并清标记。
+     *
+     * @param clearedSuccessfully 操作是否"真正跑通"。只有真正跑通才把 GPU 连续崩溃计数清零；
+     *   仅"进程没崩但加载失败"（如 load() 返回 false、设备初始化抛 C++ 异常被转成失败）
+     *   不应清零，否则反复软失败会让 MAX_STRIKES 永远凑不齐、护栏形同虚设。
+     *
+     * 注意：本方法在进程被 SIGSEGV 带走时根本不会执行，in-flight 标记因此残留，
+     * 由下次启动的 [init] 累计 strike —— 这正是崩溃护栏生效的原理。
+     */
+    fun onInferenceEnd(backend: BackendType, clearedSuccessfully: Boolean) {
         val p = prefs ?: return
         val e = p.edit().putBoolean(KEY_IN_FLIGHT, false).remove(KEY_BACKEND)
         if (backend == BackendType.VULKAN || backend == BackendType.OPENCL) {
-            e.putInt(KEY_STRIKES, 0)
-            vulkanBlocked = false
+            if (clearedSuccessfully) {
+                e.putInt(KEY_STRIKES, 0)
+                vulkanBlocked = false
+            }
         }
         e.apply()
     }

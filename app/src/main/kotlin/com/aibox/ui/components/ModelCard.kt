@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.aibox.data.model.ModelInfo
+import com.aibox.ui.theme.Colors
 
 @Composable
 fun ModelCard(
@@ -35,10 +36,10 @@ fun ModelCard(
     modifier: Modifier = Modifier,
     loading: Boolean = false
 ) {
-    val container = if (isActive) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceContainerLow
-    val onContainer = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer
-                      else MaterialTheme.colorScheme.onSurface
+    val container = if (isActive) Colors.primaryContainer
+                    else Colors.surfaceContainerLow
+    val onContainer = if (isActive) Colors.onPrimaryContainer
+                      else Colors.onSurface
 
     Card(
         onClick = onClick,
@@ -58,8 +59,8 @@ fun ModelCard(
                 modifier = Modifier
                     .size(48.dp)
                     .background(
-                        color = if (isActive) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.primaryContainer,
+                        color = if (isActive) Colors.primary
+                               else Colors.primaryContainer,
                         shape = MaterialTheme.shapes.small
                     ),
                 contentAlignment = Alignment.Center
@@ -67,8 +68,8 @@ fun ModelCard(
                 Icon(
                     Icons.Outlined.Memory,
                     contentDescription = null,
-                    tint = if (isActive) MaterialTheme.colorScheme.onPrimary
-                          else MaterialTheme.colorScheme.onPrimaryContainer,
+                    tint = if (isActive) Colors.onPrimary
+                          else Colors.onPrimaryContainer,
                     modifier = Modifier.size(26.dp)
                 )
             }
@@ -103,7 +104,7 @@ fun ModelCard(
                 loading -> CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.5.dp,
-                    color = MaterialTheme.colorScheme.primary
+                    color = Colors.primary
                 )
                 isActive -> AssistChip(
                     onClick = onClick,
@@ -121,9 +122,9 @@ fun ModelCard(
                         )
                     },
                     colors = AssistChipDefaults.assistChipColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        labelColor = MaterialTheme.colorScheme.onPrimary,
-                        leadingIconContentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = Colors.primary,
+                        labelColor = Colors.onPrimary,
+                        leadingIconContentColor = Colors.onPrimary
                     )
                 )
                 else -> Spacer(Modifier.size(56.dp))
@@ -140,16 +141,16 @@ private fun TagChip(text: String, isActive: Boolean = false) {
             Text(
                 text,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (isActive) Colors.onPrimaryContainer
+                        else Colors.onSurfaceVariant
             )
         },
         shape = MaterialTheme.shapes.small,
         colors = AssistChipDefaults.assistChipColors(
-            containerColor = if (isActive) MaterialTheme.colorScheme.surface
-                            else MaterialTheme.colorScheme.surfaceContainerHigh,
-            leadingIconContentColor = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer
-                                      else MaterialTheme.colorScheme.onSurfaceVariant
+            containerColor = if (isActive) Colors.surface
+                            else Colors.surfaceContainerHigh,
+            leadingIconContentColor = if (isActive) Colors.onPrimaryContainer
+                                      else Colors.onSurfaceVariant
         )
     )
 }

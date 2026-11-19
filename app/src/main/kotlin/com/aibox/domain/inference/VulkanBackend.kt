@@ -42,8 +42,12 @@ class VulkanBackend(
         val is1BitModel = modelPath.contains("bonsai", ignoreCase = true) ||
                          modelPath.contains("q1_0", ignoreCase = true) ||
                          modelPath.contains("ternary", ignoreCase = true)
+        // 1-bit / ternary 量化在 Vulkan 上内核覆盖不全，驱动会在 prompt eval 阶段 SIGSEGV。
+        // native 层 llamaLoad 对这类模型会强制把 n_gpu_layers 归零；这里同步传 0，
+        // 避免 Kotlin 传 999 与 native 归零两套策略打架（且让 native 走干净的 CPU device +
+        // no_host 路径，防止权重落进 Vulkan_Host buffer 触发闪退）。稳定性优先，即使"自动"档也不上 GPU。
         val gpuLayers = when {
-            config.nGpuLayers == 0 && is1BitModel -> 999
+            is1BitModel -> 0
             config.nGpuLayers == 0 -> 12
             else -> config.nGpuLayers
         }

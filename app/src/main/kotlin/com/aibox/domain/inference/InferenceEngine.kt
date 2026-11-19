@@ -175,27 +175,41 @@ class InferenceEngine(
                         continue
                     }
                     LogSystem.info("aibox.inference.engine", "InferenceEngine: trying $type ...")
-                    runCatching {
-                        // 每次尝试都先卸载旧的
-                        currentBackend?.close()
-                        currentBackend = null
-                        val backend = createBackend(type)
-                        if (!backend.isAvailable()) {
-                            error("后端 $type isAvailable()=false")
+                    // GPU 驱动崩溃最常发生在 load 阶段（设备初始化 / 权重搬运），而非只有推理期。
+                    // native 层 try-catch 抓不住 SIGSEGV，进程会直接消失；因此必须在 load 之前
+                    // 同步落盘 in-flight 标记，让下次启动的 GpuGuard 能累计 strike 并回退 CPU，
+                    // 否则会出现「每次加载 Vulkan 都闪退、反复重试」的死循环。
+                    val guardedByGpu = type == BackendType.VULKAN || type == BackendType.OPENCL
+                    if (guardedByGpu) gpuGuard.onInferenceStart(type)
+                    var loadedOk = false
+                    try {
+                        runCatching {
+                            // 每次尝试都先卸载旧的
+                            currentBackend?.close()
+                            currentBackend = null
+                            val backend = createBackend(type)
+                            if (!backend.isAvailable()) {
+                                error("后端 $type isAvailable()=false")
+                            }
+                            val ok = backend.load(modelPath, tuned)
+                            if (!ok) {
+                                // 原生层的真实失败原因（Vulkan 设备初始化异常等）在这里带出来，
+                                // 否则用户只看到「闪退」而没有任何线索
+                                val nativeErr = runCatching { nativeBridge.nativeLastError() }.getOrDefault("")
+                                error("load() returned false" + if (nativeErr.isNotBlank()) ": $nativeErr" else "")
+                            }
+                            loadedBackend = backend
+                            loadedType = type
+                            loadedOk = true
+                            LogSystem.info("aibox.inference.engine", "InferenceEngine: $type load OK")
+                        }.onFailure {
+                            lastError = "$type: ${it.message}"
+                            LogSystem.error("aibox.inference.engine", "InferenceEngine: $type failed: ${it.message}", it)
                         }
-                        val ok = backend.load(modelPath, tuned)
-                        if (!ok) {
-                            // 原生层的真实失败原因（Vulkan 设备初始化异常等）在这里带出来，
-                            // 否则用户只看到「闪退」而没有任何线索
-                            val nativeErr = runCatching { nativeBridge.nativeLastError() }.getOrDefault("")
-                            error("load() returned false" + if (nativeErr.isNotBlank()) ": $nativeErr" else "")
-                        }
-                        loadedBackend = backend
-                        loadedType = type
-                        LogSystem.info("aibox.inference.engine", "InferenceEngine: $type load OK")
-                    }.onFailure {
-                        lastError = "$type: ${it.message}"
-                        LogSystem.error("aibox.inference.engine", "InferenceEngine: $type failed: ${it.message}", it)
+                    } finally {
+                        // 进程没崩（正常返回，哪怕 load 失败）就清标记；
+                        // 若在此处之前 SIGSEGV，标记残留，由下次启动的 GpuGuard 处理。
+                        if (guardedByGpu) gpuGuard.onInferenceEnd(type, clearedSuccessfully = loadedOk)
                     }
                     if (loadedBackend != null) break
                 }

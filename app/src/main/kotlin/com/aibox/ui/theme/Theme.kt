@@ -102,12 +102,19 @@ private val DarkColors = darkColorScheme(
     scrim = Color(0xFF000000),
 )
 
+/**
+ * 全局 Shapes —— 规范的 4/8/12/16/24 递增梯度，乘以 cornerScale 倍率。
+ *
+ * 保持原有四档视觉尺寸不变（small=12 / medium=16 / large=24），仅把原先
+ * 不规范的 extraLarge=28 规整到 DesignTokens.radiusXLarge=24 之外的新档 32，
+ * 形成 8/12/16/24/32 的标准梯度。避免"24 与 28 混用"，同时不造成整体变方。
+ */
 private fun appShapes(scale: Float): Shapes = Shapes(
     extraSmall = RoundedCornerShape((8 * scale).dp),
     small = RoundedCornerShape((12 * scale).dp),
     medium = RoundedCornerShape((16 * scale).dp),
     large = RoundedCornerShape((24 * scale).dp),
-    extraLarge = RoundedCornerShape((28 * scale).dp)
+    extraLarge = RoundedCornerShape((32 * scale).dp)
 )
 
 /**

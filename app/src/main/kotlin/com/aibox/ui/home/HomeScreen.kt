@@ -17,9 +17,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -195,15 +203,15 @@ fun HomeScreen(
             }
             // 功能区两列网格；用 item 块 + 手动两两分组（避免在 LazyColumn 内嵌 LazyVerticalGrid）
             val functionTiles = buildList {
-                add(FunctionTileData("聊天", "💬", "${stats.chatModelCount} 个模型") { onOpenChat(null) })
-                add(FunctionTileData("角色扮演", "🎭", "挑一个角色开聊", onOpenRoleplay))
-                add(FunctionTileData("图像生成", "🎨", "${stats.imageModelCount} 个模型") { onOpenImageGen(null) })
-                add(FunctionTileData("语音识别", "🗣️", "系统默认", onOpenASR))
-                add(FunctionTileData("语音合成", "📢", "系统默认", onOpenTTS))
-                add(FunctionTileData("翻译", "🌐", "${stats.translateCount} 个快捷方式", onOpenTranslate))
-                add(FunctionTileData("基准测试", "📊", "${stats.benchmarkCount} 个测试", onOpenBenchmark))
-                add(FunctionTileData("模块管理", "🧩", "${stats.moduleCount} 个已安装", onOpenModuleManager))
-                add(FunctionTileData("设置", "⚙️", "AIBox 配置", onOpenSettings))
+                add(FunctionTileData("聊天", Icons.Outlined.Chat, "${stats.chatModelCount} 个模型") { onOpenChat(null) })
+                add(FunctionTileData("角色扮演", Icons.Outlined.SmartToy, "挑一个角色开聊", onOpenRoleplay))
+                add(FunctionTileData("图像生成", Icons.Outlined.Image, "${stats.imageModelCount} 个模型") { onOpenImageGen(null) })
+                add(FunctionTileData("语音识别", Icons.Outlined.Mic, "系统默认", onOpenASR))
+                add(FunctionTileData("语音合成", Icons.Outlined.VolumeUp, "系统默认", onOpenTTS))
+                add(FunctionTileData("翻译", Icons.Outlined.Language, "${stats.translateCount} 个快捷方式", onOpenTranslate))
+                add(FunctionTileData("基准测试", Icons.Outlined.Speed, "${stats.benchmarkCount} 个测试", onOpenBenchmark))
+                add(FunctionTileData("模块管理", Icons.Outlined.Extension, "${stats.moduleCount} 个已安装", onOpenModuleManager))
+                add(FunctionTileData("设置", Icons.Outlined.Settings, "AIBox 配置", onOpenSettings))
             }
             // 每 2 个一组渲染为 Row
             functionTiles.chunked(2).forEachIndexed { idx, pair ->
@@ -392,7 +400,7 @@ private fun dispatchShortcutClick(
  */
 private data class FunctionTileData(
     val title: String,
-    val icon: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
     val subtitle: String,
     val onClick: () -> Unit
 )

@@ -464,10 +464,15 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     }
     // 1-bit / ternary 量化（Q1_0 等）在 Vulkan 上缺少完整的内核覆盖，
     // 设备驱动会在 prompt eval 阶段直接 SIGSEGV（日志里连异常都没有）。
-    // 这类模型强制走 CPU，稳定优先。
-    if (is_1bit && n_gpu_layers > 0) {
-        LOGI("llamaLoad: 1-bit/ternary 模型在 GPU 上易触发驱动崩溃，n_gpu_layers 置 0（走 CPU）");
+    // 这类模型强制走 CPU，稳定优先。同时把 g_backend_str 改成 cpu，让下面的设备钉选
+    // 走"仅 CPU + no_host"路径，避免零 offload 时权重仍被放进 Vulkan_Host buffer
+    // （这正是 565-573 行注释描述、会导致 prompt eval 闪退的场景）。
+    bool is_1bit_gpu = is_1bit &&
+        (std::string(backend) == "vulkan" || std::string(backend) == "opencl");
+    if (is_1bit_gpu) {
+        LOGI("llamaLoad: 1-bit/ternary 模型在 GPU 上易触发驱动崩溃，强制走 CPU (ngl=0, device=CPU, no_host)");
         n_gpu_layers = 0;
+        g_backend_str = "cpu";
     }
 
     // ---- 加载前的保守架构判断（只能看文件名）----
@@ -676,9 +681,10 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     }
     bool effectiveFa = is_non_transformer ? false : forceFa;
 
-    // 若架构是 Mamba/RWKV/SSM/hybrid 且 backend 是 vulkan/opencl,强制改为 cpu
+    // 若架构是 Mamba/RWKV/SSM/hybrid、或 1-bit 量化，且 backend 是 vulkan/opencl，
+    // 强制保持 cpu（is_1bit_gpu 已在前面把 g_backend_str 置 cpu，这里避免被 else 分支覆盖回去）。
     // (在 native 层修改 g_backend_str + 后续逻辑用 cpu 路径)
-    bool need_fallback_to_cpu = (is_non_transformer || is_hybrid_arch) &&
+    bool need_fallback_to_cpu = (is_1bit_gpu || is_non_transformer || is_hybrid_arch) &&
                                  (std::string(backend) == "vulkan" ||
                                   std::string(backend) == "opencl");
     if (need_fallback_to_cpu) {

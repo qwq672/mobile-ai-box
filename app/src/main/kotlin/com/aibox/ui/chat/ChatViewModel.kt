@@ -489,6 +489,11 @@ class ChatViewModel : ViewModel() {
         try {
             while (rounds <= MAX_TOOL_ROUNDS) {
                 val turn = StringBuilder()
+                // 刷新空闲计时：省电档靠 idleUnloadTimeout 在"真的没人用"时卸载模型省电。
+                // 若推理路径不刷新 lastActivityAt，用户即使正在聊天，也会被误判为空闲，
+                // 模型被卸载后下次发消息又要重新 mmap/预热 —— 既变慢又更耗电，与省电目标相反。
+                // 每轮（含工具调用的多轮）都刷新一次。
+                runCatching { container.optimizationManager.recordActivity() }
                 engine.completionChat(
                     messages = buildChatMessages(conv, toolPrompt),
                     thinkingMode = thinkingEnabled,

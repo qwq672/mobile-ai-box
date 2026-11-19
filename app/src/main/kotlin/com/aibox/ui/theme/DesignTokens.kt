@@ -161,6 +161,22 @@ object Colors {
         @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.outline
     val outlineVariant: Color
         @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.outlineVariant
+
+    // ---------- 语义状态色 ----------
+    // 供状态徽章/标签使用：思考、工具、成功、警告。
+    // 统一桥接到现有色role，深浅主题自动适配，避免各页面硬编码状态色。
+    /** 思考/推理态：tertiary 系。 */
+    val stateThinking: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.tertiary
+    /** 工具调用态：secondary 系。 */
+    val stateTool: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.secondary
+    /** 成功/就绪态：primary 系。 */
+    val stateSuccess: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.primary
+    /** 警告/注意态：error 系。 */
+    val stateWarning: Color
+        @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.error
 }
 
 /**
