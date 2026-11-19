@@ -416,12 +416,13 @@ class ChatViewModel : ViewModel() {
         toolInvocationViewModel.clearHistory()
 
         viewModelScope.launch {
+            // 用户消息先落库并等待完成，再做推理。旧实现用独立 launch fire-and-forget，
+            // 进程在 launch 执行前被回收时这条消息就永久丢失（"对话随时间消失"的主因之一）。
+            // 现在与推理在同一协程顺序执行：写入完成后才 generate，保证用户消息必已持久化。
             runCatching { chatRepo.addMessage(sid, msg) }
-                .onSuccess { newId -> setPersistedId(msg.ts, msg.role, newId) }
+                .onSuccess { newId -> setPersistedId(msg.ts, msg.role, msg.content, newId) }
                 .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist user msg failed", it) }
-        }
 
-        viewModelScope.launch {
             val gen = generate(sid, visibleMessages())
             // 空回复不落库、不渲染：之前会生成一条 content="" 的助手消息，
             // 在气泡模式下表现为“空气泡”，用户只能继续发「？」追问。
@@ -453,11 +454,11 @@ class ChatViewModel : ViewModel() {
                 errorMessage = gen.error
             )
             LogSystem.info("aibox.ui.chat", "ChatViewModel: turn done parts=${gen.parts.size} tps=${gen.tps}")
-            viewModelScope.launch {
-                runCatching { chatRepo.addMessage(sid, assistant) }
-                    .onSuccess { newId -> setPersistedId(assistant.ts, assistant.role, newId) }
-                    .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist assistant msg failed", it) }
-            }
+            // 助手消息直接 await 落库（去掉嵌套 launch）：进程在推理结束后被回收时，
+            // 这条回复也已写入 DB。失败只记日志、不回滚 UI，避免影响已展示的内容。
+            runCatching { chatRepo.addMessage(sid, assistant) }
+                .onSuccess { newId -> setPersistedId(assistant.ts, assistant.role, assistant.content, newId) }
+                .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist assistant msg failed", it) }
         }
     }
 
@@ -686,8 +687,11 @@ class ChatViewModel : ViewModel() {
         val updated = message.copy(
             content = message.versions[index],
             versionIndex = index,
-            // 版本切换后时间线需要按新正文重新解析
-            parts = emptyList()
+            // 不要清空 parts：这些时间线段（思考 / 工具调用结果）是用户历史的一部分。
+            // 旧实现置空 parts 再 persistUpdate 写回 DB，会把该消息的工具调用卡片永久抹掉，
+            // 表现为"工具调用历史随时间消失"。保留原 parts，即使与切换后的正文略有出入，
+            // 也远好于不可逆的数据丢失。
+            parts = message.parts
         )
         replaceMessage(message, updated)
         persistUpdate(updated)
@@ -805,7 +809,7 @@ class ChatViewModel : ViewModel() {
                 errorMessage = gen.error
             )
             runCatching { chatRepo.addMessage(sid, assistant) }
-                .onSuccess { newId -> setPersistedId(assistant.ts, assistant.role, newId) }
+                .onSuccess { newId -> setPersistedId(assistant.ts, assistant.role, assistant.content, newId) }
                 .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist edited assistant failed", it) }
         }
     }
@@ -825,18 +829,26 @@ class ChatViewModel : ViewModel() {
             } else if (message.sessionId != 0L) {
                 // 新会话里还没落库的消息（id=0）：补插入，保证版本历史能持久化
                 runCatching { chatRepo.addMessage(message.sessionId, message) }
-                    .onSuccess { newId -> setPersistedId(message.ts, message.role, newId) }
+                    .onSuccess { newId -> setPersistedId(message.ts, message.role, message.content, newId) }
                     .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: insert msg failed", it) }
             }
         }
     }
 
-    /** 消息落库后回填 id，后续编辑 / 切换版本才能 update 到同一行。 */
-    private fun setPersistedId(ts: Long, role: String, id: Long) {
+    /**
+     * 消息落库后回填 id，后续编辑 / 切换版本才能 update 到同一行。
+     * 同时匹配 content，降低「同一毫秒、同一角色连发两条」时回填错行的概率。
+     * 只回填第一条匹配的 id=0 消息，避免两条消息被赋成同一个数据库 id。
+     */
+    private fun setPersistedId(ts: Long, role: String, content: String, id: Long) {
         if (id <= 0) return
+        var filled = false
         _ui.value = _ui.value.copy(
-            messages = _ui.value.messages.map {
-                if (it.ts == ts && it.role == role && it.id == 0L) it.copy(id = id) else it
+            messages = _ui.value.messages.map { m ->
+                if (!filled && m.id == 0L && m.ts == ts && m.role == role && m.content == content) {
+                    filled = true
+                    m.copy(id = id)
+                } else m
             }
         )
     }

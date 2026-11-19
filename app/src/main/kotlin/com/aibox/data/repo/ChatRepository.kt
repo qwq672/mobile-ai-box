@@ -5,6 +5,7 @@ import com.aibox.data.db.AppDatabase
 import com.aibox.data.db.MessageEntity
 import com.aibox.data.db.SessionEntity
 import com.aibox.data.model.ChatMessage
+import com.aibox.util.log.LogSystem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
@@ -135,24 +136,62 @@ private val attachmentJson = kotlinx.serialization.json.Json {
     encodeDefaults = true
 }
 
-private fun MessageEntity.toChatMessage() = ChatMessage(
-    id = id, sessionId = sessionId, role = role, content = content,
-    ts = ts, tokensPerSecond = tokensPerSecond,
-    attachments = if (attachmentsJson.isBlank()) emptyList()
-    else runCatching {
-        attachmentJson.decodeFromString<List<com.aibox.data.model.ChatAttachment>>(attachmentsJson)
-    }.getOrDefault(emptyList()),
-    parts = if (partsJson.isBlank()) emptyList()
-    else runCatching {
-        attachmentJson.decodeFromString<List<com.aibox.data.model.MsgPart>>(partsJson)
-    }.getOrDefault(emptyList()),
-    versions = if (versionsJson.isBlank()) emptyList()
-    else runCatching {
-        attachmentJson.decodeFromString<List<String>>(versionsJson)
-    }.getOrDefault(emptyList()),
-    versionIndex = versionIndex,
-    parentUserVersion = parentUserVersion
-)
+/**
+ * 健壮解码 JSON 字段：解析失败不再静默降级为空，而是记录 error 日志并返回 null，
+ * 交给调用方保底处理。避免工具调用历史 / 版本历史因脏数据「无声消失」而无法排查。
+ * 原始数据始终留在 DB 里（此处只读、不回写），因此失败是可诊断、可恢复的。
+ *
+ * 这里为三个字段各写一个具名函数，而不是用 inline reified 泛型——后者在 lambda 中内联
+ * reified 类型对编译环境更敏感，本仓库只能靠 CI 编译，故选择最保守的确定写法。
+ */
+private fun logDecodeFailure(raw: String, field: String, msgId: Long, t: Throwable) {
+    LogSystem.error(
+        "aibox.data.repo",
+        "msg#$msgId 的 $field 解析失败(长度=${raw.length})，原始数据仍在 DB，未静默丢弃: ${t.message}",
+        t
+    )
+}
+
+private fun decodeAttachments(raw: String, msgId: Long): List<com.aibox.data.model.ChatAttachment> {
+    if (raw.isBlank()) return emptyList()
+    return runCatching { attachmentJson.decodeFromString<List<com.aibox.data.model.ChatAttachment>>(raw) }
+        .getOrElse { t -> logDecodeFailure(raw, "attachments", msgId, t); emptyList() }
+}
+
+private fun decodeParts(raw: String, msgId: Long): List<com.aibox.data.model.MsgPart>? {
+    if (raw.isBlank()) return emptyList()
+    return runCatching { attachmentJson.decodeFromString<List<com.aibox.data.model.MsgPart>>(raw) }
+        .getOrElse { t -> logDecodeFailure(raw, "parts", msgId, t); null }
+}
+
+private fun decodeVersions(raw: String, msgId: Long): List<String>? {
+    if (raw.isBlank()) return emptyList()
+    return runCatching { attachmentJson.decodeFromString<List<String>>(raw) }
+        .getOrElse { t -> logDecodeFailure(raw, "versions", msgId, t); null }
+}
+
+private fun MessageEntity.toChatMessage(): ChatMessage {
+    val parts = decodeParts(partsJson, id) ?: parseFallbackParts(content)
+    val versions = decodeVersions(versionsJson, id) ?: listOf(content)
+    // 版本历史可能因脏数据从多版降级为单版，收敛下标避免 UI 访问 versions[index] 越界崩溃。
+    val safeVersionIndex = versionIndex.coerceIn(0, (versions.size - 1).coerceAtLeast(0))
+    return ChatMessage(
+        id = id, sessionId = sessionId, role = role, content = content,
+        ts = ts, tokensPerSecond = tokensPerSecond,
+        attachments = decodeAttachments(attachmentsJson, id),
+        parts = parts,
+        versions = versions,
+        versionIndex = safeVersionIndex,
+        parentUserVersion = parentUserVersion
+    )
+}
+
+/**
+ * parts 解析失败时的保底：至少把正文还原成一条 text part，保证用户看得到内容，
+ * 不会因时间线 JSON 损坏而显示成空白气泡。工具卡片的原始数据仍留在 DB 的 partsJson 里。
+ */
+private fun parseFallbackParts(content: String): List<com.aibox.data.model.MsgPart> =
+    if (content.isBlank()) emptyList() else listOf(com.aibox.data.model.MsgPart.text(content))
 private fun ChatMessage.toEntity(sid: Long) = MessageEntity(
     id = id, sessionId = sid, role = role, content = content,
     ts = ts, tokensPerSecond = tokensPerSecond,

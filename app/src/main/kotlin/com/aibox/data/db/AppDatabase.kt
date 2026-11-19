@@ -146,7 +146,12 @@ abstract class AppDatabase : RoomDatabase() {
                 "aibox.db"
             )
             .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
-            .fallbackToDestructiveMigration()
+            // 绝不销毁数据：移除 fallbackToDestructiveMigration()。
+            // - 升级：显式迁移链 1→7 完整，正常升级全部走迁移，保留全部对话与工具历史。
+            // - 若将来升到 v8 漏写迁移：Room 抛 IllegalStateException（可被日志发现、补迁移修复），
+            //   而不是静默清空整库。数据完好优先于「带错 schema 强行启动」。
+            // - 降级：同样不设 OnDowngrade 销毁兜底——宁可抛错让数据留在磁盘上可被 Recovery 取回，
+            //   也不静默清空。这是「任何情况下都不因版本变化丢数据」的硬约束。
             .build().also { INSTANCE = it }
         }
     }
