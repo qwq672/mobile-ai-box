@@ -70,7 +70,6 @@ fun SwitchRow(
 ) {
     ListItem(
         modifier = if (enabled) Modifier else Modifier.alpha(0.45f),
-        enabled = enabled,
         headlineContent = {
             Text(title, style = MaterialTheme.typography.bodyLarge)
         },
