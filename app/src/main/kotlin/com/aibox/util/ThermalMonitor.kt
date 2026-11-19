@@ -43,6 +43,16 @@ class ThermalMonitor {
     private val _celsius = MutableStateFlow(-1.0)
     val celsius: StateFlow<Double> = _celsius.asStateFlow()
 
+    /**
+     * 体感温度（机身表面/skin 热区）摄氏度；-1.0 表示未读到。
+     *
+     * 与 [celsius] 分开：celsius 取“最热传感器”（多为芯片结温，驱动降频与热档位，不能改），
+     * skinCelsius 只取 skin/case/back 这类贴近外壳的热区，供 UI 展示“摸起来多烫”。
+     * 读不到 skin 时保持 -1，由 UI 回退到 [celsius]，绝不拿结温冒充体感。
+     */
+    private val _skinCelsius = MutableStateFlow(-1.0)
+    val skinCelsius: StateFlow<Double> = _skinCelsius.asStateFlow()
+
     /** CPU 当前主频(kHz);0 表示读不到。取 cpu0~cpuN 中第一个能读到的。 */
     private val _cpuFreqKhz = MutableStateFlow(0L)
     val cpuFreqKhz: StateFlow<Long> = _cpuFreqKhz.asStateFlow()
@@ -165,6 +175,7 @@ class ThermalMonitor {
     fun snapshot(): ThermalSnapshot = ThermalSnapshot(
         percent = _thermalPercent.value,
         celsius = _celsius.value,
+        skinCelsius = _skinCelsius.value,
         cpuFreqKhz = _cpuFreqKhz.value,
         cpuUsage = _cpuUsage.value,
         gpuFreqKhz = _gpuFreqKhz.value,
@@ -189,6 +200,8 @@ class ThermalMonitor {
         val (pct, c) = readPercentWithCelsius()
         _thermalPercent.value = pct
         _celsius.value = c
+        // 1b. 体感温度（机身表面 skin 热区），与结温分开采集
+        _skinCelsius.value = readSkinCelsius()
 
         // 2. 读 CPU 主频
         _cpuFreqKhz.value = readCpuFreq()
@@ -288,6 +301,32 @@ class ThermalMonitor {
         for (path in hwmonPaths) {
             val c = readTempFile(path) ?: continue
             if (c in -20.0..120.0) return c
+        }
+        return -1.0
+    }
+
+    /**
+     * 读取机身表面（体感）温度：只认 skin/case/back/idle/cover 这类贴近外壳的热区，
+     * 读不到返回 -1.0 让 UI 回退到 [readRealCelsius]，绝不拿芯片结温冒充体感。
+     *
+     * sysfsPaths 已按温度从高到低排序，命中类型里取第一个即可。
+     */
+    private fun readSkinCelsius(): Double {
+        val skinKeys = listOf("skin", "case", "back", "cover", "idle", "board", "surface")
+        for (path in sysfsPaths) {
+            val type = sysfsTypes[path].orEmpty()
+            if (skinKeys.any { type.contains(it) }) {
+                val c = readTempFile(path) ?: continue
+                if (c in -20.0..120.0) return c
+            }
+        }
+        // hwmon 里部分机型给的是壳体传感器（名字带 skin/case）
+        for (path in hwmonPaths) {
+            val name = File(path).parentFile?.name.orEmpty() + File(path).name
+            if (skinKeys.any { name.lowercase().contains(it) }) {
+                val c = readTempFile(path) ?: continue
+                if (c in -20.0..120.0) return c
+            }
         }
         return -1.0
     }
@@ -615,6 +654,8 @@ enum class ThermalLevel {
 data class ThermalSnapshot(
     val percent: Int,
     val celsius: Double,
+    /** 机身表面（体感）温度；-1.0 = 未读到，UI 应回退到 [celsius]。 */
+    val skinCelsius: Double = -1.0,
     val cpuFreqKhz: Long,
     val cpuUsage: Int = -1,
     val gpuFreqKhz: Long = 0L,
@@ -629,3 +670,30 @@ data class ThermalSnapshot(
     val history: List<ThermalSample>,
     val timestamp: Long
 )
+
+/**
+ * 机身表面（体感）温度的档位文案 + 严重度。
+ *
+ * [severity] 0..6，供 UI 选语义色（0~2 中性、3 黄、4~5 橙红、6 红）。
+ * 文案档位（摄氏度，按 skin 表面温度）：
+ * - “感觉凉快”  < 30
+ * - “感觉稍温”  30~35
+ * - “感觉温热”  35~40
+ * - “感觉稍烫”  40~45
+ * - “感觉挺烫”  45~50
+ * - “感觉很烫”  50~60
+ * - “可以煎蛋”  ≥ 60（蛋白约 60℃ 起凝固，蛋黄约 65~70℃）
+ */
+data class SkinFeel(val label: String, val severity: Int)
+
+/** 体感温度 → 七档文案。celsius ≤ 0（未读到）返回“—”。 */
+fun skinFeel(celsius: Double): SkinFeel = when {
+    celsius <= 0.0 -> SkinFeel("—", -1)
+    celsius < 30.0 -> SkinFeel("感觉凉快", 0)
+    celsius < 35.0 -> SkinFeel("感觉稍温", 1)
+    celsius < 40.0 -> SkinFeel("感觉温热", 2)
+    celsius < 45.0 -> SkinFeel("感觉稍烫", 3)
+    celsius < 50.0 -> SkinFeel("感觉挺烫", 4)
+    celsius < 60.0 -> SkinFeel("感觉很烫", 5)
+    else -> SkinFeel("可以煎蛋", 6)
+}

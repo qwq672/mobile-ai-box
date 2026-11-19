@@ -68,10 +68,12 @@ class OpenAiCompatibleClient {
                 put("model", config.model)
                 put("stream", true)
                 put("temperature", config.temperature.toDouble())
-                // 推理模型：思考链本身消耗大量输出 token，若沿用默认 2048 常在“只思考、还没回答”
-                // 阶段就撞上 max_tokens（finish_reason=length），正文根本没机会产出。
-                // 这类模型抬高上限，让思考 + 正文都有空间；非推理模型沿用用户配置。
-                val effectiveMaxTokens = if (isReasoningModel(config.model)) {
+                // 推理模型 / 开启思考的模型：思考链本身消耗大量输出 token，若沿用默认 2048
+                // 常在“只思考、还没回答”阶段就撞上 max_tokens（finish_reason=length），正文没机会产出。
+                // 判定条件不能再只看模型名——deepseek-chat 等模型开启 thinking 后同样会先长思考，
+                // 因此“思考开着”本身就要求抬高上限。非思考场景沿用用户配置。
+                val thinkingOn = reasoningEffort?.let { it.lowercase() != "off" } == true
+                val effectiveMaxTokens = if (isReasoningModel(config.model) || thinkingOn) {
                     maxOf(config.maxTokens, REASONING_MAX_TOKENS)
                 } else config.maxTokens
                 if (effectiveMaxTokens > 0) put("max_tokens", effectiveMaxTokens)

@@ -135,6 +135,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -147,6 +148,7 @@ import com.aibox.data.model.MsgPart
 import com.aibox.ui.shortcut.ShortcutEditorLauncher
 import com.aibox.ui.theme.LocalCornerScale
 import com.aibox.ui.tool.ToolConfirmDialog
+import com.aibox.util.skinFeel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -536,6 +538,7 @@ fun ChatScreen(
                     contextMax = ui.contextMax,
                     backendName = ui.backendName,
                     thermalCelsius = ui.thermalCelsius,
+                    skinCelsius = ui.skinCelsius,
                     thermalPercent = ui.thermalPercent
                 )
             }
@@ -1066,6 +1069,7 @@ private fun StatusPill(
     contextMax: Int,
     backendName: String,
     thermalCelsius: Double = -1.0,
+    skinCelsius: Double = -1.0,
     thermalPercent: Int = -1
 ) {
     Row(
@@ -1105,12 +1109,17 @@ private fun StatusPill(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (thermalCelsius > 0) {
+                // 体感优先：有 skin 热区读数时显示七档文案，读不到回退结温数值，再回退热档位。
+                val feelTemp = if (skinCelsius > 0) skinCelsius else thermalCelsius
+                if (feelTemp > 0) {
+                    val feel = skinFeel(feelTemp)
                     Dot()
                     Text(
-                        "%.1f°C".format(thermalCelsius),
+                        // 有体感读数时“文案 + 数值”，只有结温时仅数值（避免把结温说成体感）
+                        if (skinCelsius > 0) "${feel.label} · %.1f°C".format(feelTemp)
+                        else "%.1f°C".format(feelTemp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (thermalCelsius >= 50.0) MaterialTheme.colorScheme.error
+                        color = if (feel.severity >= 5) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else if (thermalPercent >= 0) {
@@ -1577,7 +1586,8 @@ private fun AssistantParts(
                         text = part.text,
                         color = MaterialTheme.colorScheme.onSurface,
                         onChoice = onChoice,
-                        choicesEnabled = choicesEnabled
+                        choicesEnabled = choicesEnabled,
+                        streaming = streaming
                     )
                 }
             }
@@ -1690,7 +1700,14 @@ private fun Composer(
         color = if (enabled) MaterialTheme.colorScheme.onSurface
         else MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 17.sp,
-        lineHeight = 26.sp
+        lineHeight = 26.sp,
+        // 固定行高下 Compose 默认按行框顶部排字，单行胶囊里字母/数字会显得偏上；
+        // CJK fallback 又改变 ascent，导致输入汉字后 baseline 跳动。改为在行框内垂直居中，
+        // 并 trim 首尾，保证 ASCII/CJK 混排时基线稳定、不上下跳。
+        lineHeightStyle = LineHeightStyle(
+            alignment = LineHeightStyle.Alignment.Center,
+            trim = LineHeightStyle.Trim.Both
+        )
     )
     val placeholder = if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型"
     val measurer = rememberTextMeasurer()

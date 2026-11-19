@@ -111,7 +111,7 @@ class CloudChatService(
                 // 常见表现是“只看到思考、正文没写完/没出来”。明确告知用户，
                 // 而不是伪装成正常 eos——否则用户以为模型自己停了。
                 if (turn.finishReason.equals("length", ignoreCase = true)) {
-                    onToken("\n\n> ⚠️ 输出达到上限被截断（可能在思考阶段耗尽）。可调低思考档位或联系管理员提高 max_tokens。")
+                    onToken("\n\n> ⚠️ 输出达到上限被截断（思考或正文过长）。可在设置中调高 max_tokens 或调低思考档位后重试。")
                     onStop("length_truncated")
                 } else {
                     onStop("eos")

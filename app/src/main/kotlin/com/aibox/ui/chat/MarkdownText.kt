@@ -97,9 +97,11 @@ fun MarkdownText(
      * 只有最新一条助手消息需要可点：旧选项继续做成按钮会让整屏都是菜单，
      * 也容易误点到很早以前的选项。
      */
-    choicesEnabled: Boolean = true
+    choicesEnabled: Boolean = true,
+    /** 是否仍在流式输出。流式中的未闭合 mermaid 围栏先按代码块显示，结束后再兜底渲染成图。 */
+    streaming: Boolean = false
 ) {
-    val blocks = remember(text, choicesEnabled) { parseBlocks(text, choicesEnabled) }
+    val blocks = remember(text, choicesEnabled, streaming) { parseBlocks(text, choicesEnabled, streaming) }
     val primary = MaterialTheme.colorScheme.primary
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val clipboard = LocalClipboardManager.current
@@ -345,7 +347,7 @@ private val olRegex = Regex("^(\\d+)[.)]\\s+(.*)$")
 private val hrRegex = Regex("^\\s*([-*_])\\1{2,}\\s*$")
 private val imageRegex = Regex("^!\\[([^]]*)]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)$")
 
-private fun parseBlocks(src: String, choicesEnabled: Boolean = true): List<MdBlock> {
+private fun parseBlocks(src: String, choicesEnabled: Boolean = true, streaming: Boolean = false): List<MdBlock> {
     if (src.isBlank()) return emptyList()
     val lines = src.replace("\r\n", "\n").split('\n')
     val blocks = mutableListOf<MdBlock>()
@@ -428,9 +430,10 @@ private fun parseBlocks(src: String, choicesEnabled: Boolean = true): List<MdBlo
                     .take(4) // 选项过多会把整屏占满，也会诱导模型每轮都出菜单
                     .toList()
                 if (options.isNotEmpty()) blocks.add(MdBlock.Choices(options))
-            } else if (lang.equals("mermaid", ignoreCase = true) && closed) {
+            } else if (lang.equals("mermaid", ignoreCase = true) && (closed || !streaming)) {
                 // Mermaid 图：内置渲染，不依赖 choicesEnabled 扩展开关。
-                // 仅在围栏闭合后才渲染——流式未写完时按代码块显示，避免 WebView 抖动。
+                // 流式未写完时按代码块显示，避免 WebView 抖动；流式结束后即便围栏因截断未闭合
+                // 也兜底渲染成图，否则被截断的图会永远显示成源码。
                 blocks.add(MdBlock.Mermaid(code.toString().trimEnd()))
             } else {
                 blocks.add(MdBlock.Code(lang, code.toString().trimEnd()))

@@ -127,6 +127,8 @@ class ChatViewModel : ViewModel() {
         val thermalPercent: Int = 0,
         /** 真实摄氏度；-1 = 读不到（不要用百分比冒充） */
         val thermalCelsius: Double = -1.0,
+        /** 机身表面体感温度；-1 = 读不到，UI 回退到 thermalCelsius */
+        val skinCelsius: Double = -1.0,
         val errorMessage: String? = null,
         val hasModel: Boolean = false,
         val modelName: String = "",
@@ -198,6 +200,11 @@ class ChatViewModel : ViewModel() {
         viewModelScope.launch {
             container.thermalMonitor.celsius.collectLatest { c ->
                 _ui.value = _ui.value.copy(thermalCelsius = c)
+            }
+        }
+        viewModelScope.launch {
+            container.thermalMonitor.skinCelsius.collectLatest { c ->
+                _ui.value = _ui.value.copy(skinCelsius = c)
             }
         }
         viewModelScope.launch {
