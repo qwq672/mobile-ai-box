@@ -34,7 +34,10 @@ class OpenAiCompatibleClient {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        // 深度思考模型（R1/o 系列）在吐正文前可能长时间只出 reasoning_content，
+        // 甚至中间有较长静默。180s 读到超时会把“正在思考”误判为网络中断，
+        // 表现为“思考到一半、正文还没出就被截止”。提高到 300s 覆盖绝大多数长思考。
+        .readTimeout(300, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
@@ -65,7 +68,13 @@ class OpenAiCompatibleClient {
                 put("model", config.model)
                 put("stream", true)
                 put("temperature", config.temperature.toDouble())
-                if (config.maxTokens > 0) put("max_tokens", config.maxTokens)
+                // 推理模型：思考链本身消耗大量输出 token，若沿用默认 2048 常在“只思考、还没回答”
+                // 阶段就撞上 max_tokens（finish_reason=length），正文根本没机会产出。
+                // 这类模型抬高上限，让思考 + 正文都有空间；非推理模型沿用用户配置。
+                val effectiveMaxTokens = if (isReasoningModel(config.model)) {
+                    maxOf(config.maxTokens, REASONING_MAX_TOKENS)
+                } else config.maxTokens
+                if (effectiveMaxTokens > 0) put("max_tokens", effectiveMaxTokens)
                 reasoningEffort?.lowercase()?.let { applyThinkingParams(config.model, it) }
                 putJsonArray("messages") {
                     messages.forEach { m -> add(msgToJson(m)) }
@@ -255,6 +264,15 @@ class OpenAiCompatibleClient {
             }
             m.contains("qwen") || m.contains("qvq") || m.contains("qwq") -> {
                 put("enable_thinking", on)
+                // Qwen3 系列支持 thinking_budget 控制思考深度；低/中/高映射到递增预算。
+                // 仅对含 qwen3 的模型下发，避免老模型因未知字段报 400。
+                if (on && (m.contains("qwen3") || m.contains("qwq"))) {
+                    put("thinking_budget", when (level) {
+                        "low" -> 1024
+                        "high" -> 8192
+                        else -> 4096 // medium
+                    })
+                }
                 LogSystem.info(TAG, "thinking(qwen): level=$level enabled=$on")
             }
             m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") ||
@@ -266,6 +284,19 @@ class OpenAiCompatibleClient {
         }
     }
 
+    /**
+     * 是否为“会先输出长思考链再回答”的推理模型。
+     * 这类模型必须放宽 max_tokens，否则思考阶段就把额度用尽，正文出不来。
+     */
+    private fun isReasoningModel(model: String): Boolean {
+        val m = model.lowercase()
+        return m.contains("reasoner") || m.contains("r1") ||
+            m.contains("qwq") || m.contains("qvq") ||
+            m.contains("thinking") || m.contains("-think") ||
+            m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") ||
+            m.contains("gpt-5")
+    }
+
     private class ToolCallAccumulator {
         var id: String = ""
         var name: String = ""
@@ -274,6 +305,8 @@ class OpenAiCompatibleClient {
 
     private companion object {
         const val TAG = "aibox.cloud"
+        /** 推理模型思考 + 正文的最低输出额度。 */
+        const val REASONING_MAX_TOKENS = 8192
         val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }

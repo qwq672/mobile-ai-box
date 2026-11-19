@@ -1023,6 +1023,9 @@ class ChatViewModel : ViewModel() {
         val levelHint = when (_ui.value.thinkingLevel) {
             "off" -> "请直接给出答案，不要输出思考过程。"
             "low" -> "请先做简短思考（1~3 句）再给出结论，保持简洁。"
+            // 本地模型没有 native 级档位（只有思考开/关），medium/high 全靠提示词区分，
+            // 因此默认 medium 必须有引导，否则“档位”在本地形同虚设。
+            "medium" -> "请先进行适度的分步思考，再给出清晰结论，兼顾充分与简洁。"
             "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
             else -> ""
         }

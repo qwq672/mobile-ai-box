@@ -178,6 +178,24 @@ fun MarkdownText(
                     )
                 }
 
+                is MdBlock.Mermaid -> {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = codeBg,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(Modifier.padding(8.dp)) {
+                            Text(
+                                "mermaid",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+                            )
+                            MermaidBlock(block.code)
+                        }
+                    }
+                }
+
                 is MdBlock.Code -> {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
@@ -309,6 +327,8 @@ private sealed interface MdBlock {
     data class Quote(val text: String) : MdBlock
     data class ListItem(val marker: String, val ordered: Boolean, val text: String) : MdBlock
     data class Code(val lang: String, val code: String) : MdBlock
+    /** Mermaid 图（```mermaid），内置渲染，非 aibox 扩展组件。 */
+    data class Mermaid(val code: String) : MdBlock
     data class Table(val header: List<String>, val rows: List<List<String>>) : MdBlock
     data class Math(val tex: String, val display: Boolean) : MdBlock
     data class Image(val alt: String, val url: String) : MdBlock
@@ -391,7 +411,8 @@ private fun parseBlocks(src: String, choicesEnabled: Boolean = true): List<MdBlo
                 code.append(lines[i]).append('\n')
                 i++
             }
-            if (i < lines.size) i++ // 跳过结束围栏
+            val closed = i < lines.size // 是否已遇到结束围栏
+            if (closed) i++ // 跳过结束围栏
             // 组件扩展：```aibox:choices
             if (choicesEnabled && (lang == "choices" || lang == "aibox:choices")) {
                 val options = code.toString().lineSequence()
@@ -407,6 +428,10 @@ private fun parseBlocks(src: String, choicesEnabled: Boolean = true): List<MdBlo
                     .take(4) // 选项过多会把整屏占满，也会诱导模型每轮都出菜单
                     .toList()
                 if (options.isNotEmpty()) blocks.add(MdBlock.Choices(options))
+            } else if (lang.equals("mermaid", ignoreCase = true) && closed) {
+                // Mermaid 图：内置渲染，不依赖 choicesEnabled 扩展开关。
+                // 仅在围栏闭合后才渲染——流式未写完时按代码块显示，避免 WebView 抖动。
+                blocks.add(MdBlock.Mermaid(code.toString().trimEnd()))
             } else {
                 blocks.add(MdBlock.Code(lang, code.toString().trimEnd()))
             }

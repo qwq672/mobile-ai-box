@@ -107,7 +107,15 @@ class CloudChatService(
                 }
 
             if (turn.toolCalls.isEmpty()) {
-                onStop("eos")
+                // finish_reason=length 表示输出（思考+正文）撞上上限被强制截断，
+                // 常见表现是“只看到思考、正文没写完/没出来”。明确告知用户，
+                // 而不是伪装成正常 eos——否则用户以为模型自己停了。
+                if (turn.finishReason.equals("length", ignoreCase = true)) {
+                    onToken("\n\n> ⚠️ 输出达到上限被截断（可能在思考阶段耗尽）。可调低思考档位或联系管理员提高 max_tokens。")
+                    onStop("length_truncated")
+                } else {
+                    onStop("eos")
+                }
                 return
             }
 
@@ -171,6 +179,9 @@ class CloudChatService(
         val hint = when (level) {
             "off" -> "请直接给出答案，不要展示推理过程。"
             "low" -> "请先做简短思考（1~3 句）再给出结论，保持简洁。"
+            // medium 是默认档，绝不能留空——此前为空导致默认档既无参数（多数模型）
+            // 也无提示词，用户感知就是“思考档位没作用”。
+            "medium" -> "请先进行适度的分步思考，再给出清晰结论，兼顾充分与简洁。"
             "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
             else -> null
         }
