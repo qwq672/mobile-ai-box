@@ -105,8 +105,68 @@
           "min_version": {
             "type": "string",
             "description": "最低可接受版本,如 '0.1.0'。"
+          },
+          "max_version": {
+            "type": "string",
+            "description": "最高可接受版本（含），null/省略表示不限制。"
+          },
+          "version_range": {
+            "type": "string",
+            "description": "版本范围表达式，优先级高于 min/max，如 '^1.2.0'、'>=1.0.0 <2.0.0'。"
+          },
+          "required": {
+            "type": "boolean",
+            "default": true,
+            "description": "true=必选前置，缺失则模块不能启用；false=可选前置，缺失时降级并只在需要时提示。"
+          },
+          "prompt_at": {
+            "type": "string",
+            "enum": ["install", "firstUse", "startup", "never"],
+            "default": "install",
+            "description": "可选依赖的提示时机；必选依赖固定按 install 处理。"
+          },
+          "trigger_capabilities": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "firstUse 时触发提示的能力 id，如 'npu.prefill'。"
+          },
+          "fallback": {
+            "type": "string",
+            "enum": ["cpu", "disable_feature"],
+            "description": "可选依赖缺失时的降级方式；可选依赖必须提供。"
+          },
+          "prompt_text": {
+            "type": "string",
+            "description": "用户可读的提示文案。"
+          },
+          "remember_dismiss": {
+            "type": "boolean",
+            "default": true,
+            "description": "用户选择“不再提醒”后是否持久化。"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "required": { "const": false } },
+              "required": ["required"]
+            },
+            "then": {
+              "required": ["fallback"]
+            }
+          },
+          {
+            "if": {
+              "properties": { "required": { "const": true } },
+              "required": ["required"]
+            },
+            "then": {
+              "not": {
+                "required": ["fallback"]
+              }
+            }
+          }
+        ]
       }
     },
     "exports": {

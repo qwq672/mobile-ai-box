@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.RemoteException
 import com.aibox.domain.inference.BackendManagerV2
+import com.aibox.domain.module.ModuleDiscoveryService
+import com.aibox.infra.module.loader.ModuleGraphService
 import com.aibox.util.log.LogSystem
 import com.aibox.util.outcome.Outcome
 import java.util.concurrent.CountDownLatch
@@ -235,6 +237,12 @@ class PluginManager(
         val compat = compatibilityChecker.check(packageName)
         if (!compat.success) {
             val reason = "Incompatible plugin: ${compat.reason}"
+            LogSystem.warn(logTag, reason)
+            return Outcome.Failure(reason)
+        }
+
+        // 2.5 必选前置校验：有 module_manifest 的模块按依赖图判断，缺必选前置则不 bind。
+        checkRequiredDependencies(packageName)?.let { reason ->
             LogSystem.warn(logTag, reason)
             return Outcome.Failure(reason)
         }
@@ -740,6 +748,31 @@ class PluginManager(
         } catch (e: Throwable) {
             LogSystem.warn(logTag, "verifySignature failed for $packageName: ${e.message}", e)
             false
+        }
+    }
+
+    /**
+     * 必选前置校验。
+     *
+     * 只对提供 `assets/module_manifest/manifest.json` 的模块生效；
+     * 旧插件没有 manifest 时保持原有行为，避免破坏兼容性。
+     *
+     * @return null 表示可以继续 bind；非空为不可启用原因。
+     */
+    private fun checkRequiredDependencies(packageName: String): String? {
+        return runCatching {
+            val discovered = ModuleDiscoveryService(context).discoverAll()
+            val packages = discovered.map { it.packageName }
+            val report = ModuleGraphService(context).scan(packages)
+            val entry = report.entries.firstOrNull { it.packageName == packageName }
+            val moduleId = entry?.moduleId ?: return null
+            val excluded = report.plan.excluded.firstOrNull { it.moduleId == moduleId }
+                ?: return null
+            "依赖不满足，无法启用 $moduleId：${excluded.reason}"
+        }.getOrElse { e ->
+            // 依赖解析失败不应阻断旧插件；只记录日志，按无依赖处理。
+            LogSystem.warn(logTag, "checkRequiredDependencies($packageName) failed: ${e.message}", e)
+            null
         }
     }
 

@@ -227,6 +227,87 @@ class ModuleManifestParserTest {
     }
 
     @Test
+    fun `optional dependency defaults to required`() {
+        val text = """
+        {
+          "schema_version": "1.0.0",
+          "module_id": "test.opt",
+          "version": "0.1.0",
+          "module_type": "image_gen",
+          "min_host_api": 1,
+          "abi_filters": ["arm64-v8a"],
+          "depends_on_modules": [
+            {"module_id": "test.backend", "min_version": "1.0.0"}
+          ],
+          "exports": ["aibox_test_v1"]
+        }
+        """.trimIndent()
+        val r = parser.parse(text)
+        assertTrue(r is ParseResult.Ok)
+        val dep = (r as ParseResult.Ok).manifest.dependsOnModules.single()
+        assertTrue(dep.required)
+    }
+
+    @Test
+    fun `optional dependency without fallback rejected`() {
+        val text = """
+        {
+          "schema_version": "1.0.0",
+          "module_id": "test.opt",
+          "version": "0.1.0",
+          "module_type": "image_gen",
+          "min_host_api": 1,
+          "abi_filters": ["arm64-v8a"],
+          "depends_on_modules": [
+            {
+              "module_id": "test.npu",
+              "min_version": "1.0.0",
+              "required": false,
+              "prompt_at": "firstUse"
+            }
+          ],
+          "exports": ["aibox_test_v1"]
+        }
+        """.trimIndent()
+        val r = parser.parse(text)
+        assertTrue(r is ParseResult.Err)
+        assertTrue((r as ParseResult.Err).reason.contains("fallback"))
+    }
+
+    @Test
+    fun `optional dependency with fallback parses OK`() {
+        val text = """
+        {
+          "schema_version": "1.0.0",
+          "module_id": "test.opt",
+          "version": "0.1.0",
+          "module_type": "image_gen",
+          "min_host_api": 1,
+          "abi_filters": ["arm64-v8a"],
+          "depends_on_modules": [
+            {
+              "module_id": "test.npu",
+              "min_version": "1.0.0",
+              "required": false,
+              "prompt_at": "firstUse",
+              "trigger_capabilities": ["npu.prefill"],
+              "fallback": "cpu",
+              "prompt_text": "安装 NPU 后端可加速"
+            }
+          ],
+          "exports": ["aibox_test_v1"]
+        }
+        """.trimIndent()
+        val r = parser.parse(text)
+        assertTrue(r is ParseResult.Ok)
+        val dep = (r as ParseResult.Ok).manifest.dependsOnModules.single()
+        assertEquals(false, dep.required)
+        assertEquals("firstUse", dep.promptAt)
+        assertEquals("cpu", dep.fallback)
+        assertEquals(listOf("npu.prefill"), dep.triggerCapabilities)
+    }
+
+    @Test
     fun `malformed JSON rejected`() {
         val r = parser.parse("{not valid json")
         assertTrue(r is ParseResult.Err)

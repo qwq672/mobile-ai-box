@@ -243,6 +243,14 @@ private fun DependencyPlanCard(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+                plan.optionalMissing.forEach { o ->
+                    Text(
+                        "可选前置 ${o.moduleId} → ${o.dependencyId}：${o.reason}" +
+                            "（${o.promptAt}，降级 ${o.fallback}）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
                 plan.warnings.take(4).forEach { w ->
                     Text(
                         "提示：$w",

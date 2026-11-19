@@ -90,7 +90,30 @@ data class ModuleDependencyDto(
      * 版本范围表达式，优先级高于 min/max：
      * `^1.2.3` / `~1.2.3` / `>=1.2.3` / `>=1.0.0 <2.0.0` / `1.2.*` / `=1.2.3`
      */
-    @SerialName("version_range") val versionRange: String? = null
+    @SerialName("version_range") val versionRange: String? = null,
+    /**
+     * true=必选前置：缺失时模块不能启用/加载。
+     * false=可选前置：缺失时模块照常启动，只在用到相关能力时提示。
+     * 默认 true，保持旧 manifest 行为不变。
+     */
+    @SerialName("required") val required: Boolean = true,
+    /**
+     * 可选依赖的提示时机：
+     * `install` / `firstUse` / `startup` / `never`。
+     * 必选依赖固定按 install 处理。
+     */
+    @SerialName("prompt_at") val promptAt: String = "install",
+    /** firstUse 触发提示的能力 id，如 `npu.prefill`。 */
+    @SerialName("trigger_capabilities") val triggerCapabilities: List<String> = emptyList(),
+    /**
+     * 可选依赖缺失时的降级方式：`cpu` / `disable_feature`。
+     * 可选依赖必须提供 fallback，否则视为 manifest 非法。
+     */
+    @SerialName("fallback") val fallback: String? = null,
+    /** 用户可读的提示文案。 */
+    @SerialName("prompt_text") val promptText: String? = null,
+    /** 用户选择“不再提醒”后是否持久化。 */
+    @SerialName("remember_dismiss") val rememberDismiss: Boolean = true
 )
 
 /** 与其他模块的冲突声明。 */
@@ -285,6 +308,39 @@ class ModuleManifestParser(
         for (dep in m.dependsOnModules) {
             if (dep.moduleId == m.moduleId) {
                 return ParseResult.Err("depends_on_modules 不能自引用", "module_id='${m.moduleId}'")
+            }
+        }
+
+        // 3.7.1 必选/可选前置的字段约束
+        val promptAtAllowed = setOf("install", "firstUse", "startup", "never")
+        val fallbackAllowed = setOf("cpu", "disable_feature")
+        for (dep in m.dependsOnModules) {
+            if (dep.promptAt !in promptAtAllowed) {
+                return ParseResult.Err(
+                    "depends_on_modules.prompt_at 不合法",
+                    "依赖 '${dep.moduleId}' 的 prompt_at='${dep.promptAt}'，允许 $promptAtAllowed"
+                )
+            }
+            if (dep.required) {
+                if (dep.fallback != null) {
+                    return ParseResult.Err(
+                        "必选依赖不能声明 fallback",
+                        "依赖 '${dep.moduleId}' 缺失时必须阻断，不能降级"
+                    )
+                }
+            } else {
+                if (dep.fallback !in fallbackAllowed) {
+                    return ParseResult.Err(
+                        "可选依赖必须声明 fallback",
+                        "依赖 '${dep.moduleId}' 的 fallback='${dep.fallback}'，允许 $fallbackAllowed"
+                    )
+                }
+                if (dep.promptAt == "never" && dep.triggerCapabilities.isNotEmpty()) {
+                    return ParseResult.Err(
+                        "可选依赖 prompt_at=never 时不应声明 trigger_capabilities",
+                        "依赖 '${dep.moduleId}'"
+                    )
+                }
             }
         }
 

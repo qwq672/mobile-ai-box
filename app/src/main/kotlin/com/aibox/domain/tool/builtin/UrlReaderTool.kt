@@ -50,7 +50,7 @@ import org.jsoup.nodes.Document
  * - 链接文本可能为空（如 `<a href="..."><img></a>`），保留但不输出空 text
  */
 class UrlReaderTool(
-    private val toolSettingsRepository: ToolSettingsRepository
+    private val toolSettingsRepository: ToolSettingsRepository? = null
 ) : Tool {
     override val id: String = "url_reader"
     override val displayName: String = "URL 阅读器"
@@ -110,7 +110,7 @@ class UrlReaderTool(
             ?: return Outcome.Failure("Missing url")
 
         // 用户选项：模型未显式指定时作为默认值
-        val opts = runCatching { toolSettingsRepository.getOptions(id) }.getOrDefault(emptyMap())
+        val opts = runCatching { toolSettingsRepository?.getOptions(id) }.getOrNull().orEmpty()
         val optionMax = opts["max_length"]?.toIntOrNull()?.coerceIn(1000, 10000) ?: 5000
         val optionLinks = opts["include_links"]?.toBooleanStrictOrNull() ?: true
 

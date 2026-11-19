@@ -152,7 +152,7 @@ class DependencyResolverTest {
     }
 
     @Test
-    fun `gemma4 scenario: chat basic + agent + roleplay with both depending on chat`() {
+    fun `gemma4 scenario - chat basic + agent + roleplay with both depending on chat`() {
         // 真实场景:chat.basic + agent.react(依赖 chat) + chat.roleplay(依赖 chat)
         val chat = manifest("chat.basic", version = "0.1.0")
         val agent = ModuleManifestDto(

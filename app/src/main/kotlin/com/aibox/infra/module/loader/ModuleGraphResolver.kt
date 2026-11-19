@@ -16,7 +16,23 @@ import com.aibox.infra.module.manifest.VersionRanges
 data class ModuleResolutionPlan(
     val groups: List<ModuleLoadGroup> = emptyList(),
     val excluded: List<ExcludedModule> = emptyList(),
-    val warnings: List<String> = emptyList()
+    val warnings: List<String> = emptyList(),
+    /**
+     * 可选前置缺失：不阻断模块加载，只在用到相关能力时提示。
+     * 由宿主 UI 决定何时展示、是否记住“不再提醒”。
+     */
+    val optionalMissing: List<OptionalDependencyMissing> = emptyList()
+)
+
+data class OptionalDependencyMissing(
+    val moduleId: String,
+    val dependencyId: String,
+    val reason: String,
+    val promptAt: String,
+    val triggerCapabilities: List<String>,
+    val fallback: String,
+    val promptText: String?,
+    val rememberDismiss: Boolean
 )
 
 data class ModuleLoadGroup(
@@ -97,6 +113,8 @@ object ModuleGraphResolver {
         }
 
         // ---- 3. 依赖校验（迭代到稳定，处理传递排除） ----
+        // 必选前置缺失 → 排除模块；可选前置缺失 → 只记录，不阻断。
+        val optionalMissing = linkedMapOf<String, OptionalDependencyMissing>()
         var changed = true
         while (changed) {
             changed = false
@@ -105,14 +123,31 @@ object ModuleGraphResolver {
                 var bad: String? = null
                 for (dep in m.dependsOnModules) {
                     val depManifest = byId[dep.moduleId]
-                    bad = when {
+                    val problem = when {
                         depManifest == null -> "缺少依赖模块 ${dep.moduleId}"
                         dep.moduleId !in alive -> "依赖 ${dep.moduleId} 已被排除"
                         !dependencyVersionOk(depManifest, dep) ->
                             "依赖 ${dep.moduleId}=${depManifest.version} 不满足 ${describeRange(dep)}"
                         else -> null
                     }
-                    if (bad != null) break
+                    if (problem == null) continue
+
+                    if (dep.required) {
+                        bad = problem
+                        break
+                    }
+                    // 可选前置：仅记录。fallback 在 manifest 校验阶段已保证存在。
+                    val key = "${m.moduleId}->${dep.moduleId}"
+                    optionalMissing[key] = OptionalDependencyMissing(
+                        moduleId = m.moduleId,
+                        dependencyId = dep.moduleId,
+                        reason = problem,
+                        promptAt = dep.promptAt,
+                        triggerCapabilities = dep.triggerCapabilities,
+                        fallback = dep.fallback ?: "disable_feature",
+                        promptText = dep.promptText,
+                        rememberDismiss = dep.rememberDismiss
+                    )
                 }
                 if (bad != null) {
                     exclude(m.moduleId, bad)
@@ -162,7 +197,11 @@ object ModuleGraphResolver {
         return ModuleResolutionPlan(
             groups = groups,
             excluded = excluded.map { (id, reason) -> ExcludedModule(id, reason) },
-            warnings = warnings.distinct()
+            warnings = warnings.distinct(),
+            // 只保留最终仍可加载的模块；被必选依赖排除的模块不再提示可选依赖。
+            optionalMissing = optionalMissing.values
+                .filter { it.moduleId in alive }
+                .distinctBy { "${it.moduleId}->${it.dependencyId}" }
         )
     }
 
@@ -206,7 +245,7 @@ object ModuleGraphResolver {
     private fun hasSelfDependency(id: String?, byId: Map<String, ModuleManifestDto>): Boolean {
         if (id == null) return false
         val m = byId[id] ?: return false
-        return m.dependsOnModules.any { it.moduleId == id }
+        return m.dependsOnModules.any { it.required && it.moduleId == id }
     }
 
     /** Tarjan 强连通分量；只在 alive 集合内连边。 */
@@ -229,7 +268,8 @@ object ModuleGraphResolver {
             onStack.add(v)
 
             val manifest = modules.firstOrNull { it.moduleId == v }
-            for (dep in manifest?.dependsOnModules.orEmpty()) {
+            // 只有必选前置参与拓扑排序；可选前置不强制加载，也不构成循环。
+            for (dep in manifest?.dependsOnModules.orEmpty().filter { it.required }) {
                 val w = dep.moduleId
                 if (w !in alive) continue
                 if (w !in index) {
