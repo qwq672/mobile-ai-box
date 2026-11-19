@@ -55,6 +55,11 @@ class BenchmarkSystem(
         advancedBenchmark = advancedBenchmark
     )
 
+    /** 高级基准：真采样源 + 流式执行器（6 曲线 + 汇总报告）。复用 app context，无额外依赖。 */
+    val sampleSources: AndroidSampleSources = AndroidSampleSources(context.applicationContext)
+
+    val streamingBenchmark: StreamingBenchmark = StreamingBenchmark(sampleSources)
+
     val storage: BenchmarkStorage = BenchmarkStorage(context.applicationContext)
 
     /** 当前运行的状态（idle / running matrix / running comparison）；UI 用于显示 spinner 与禁用按钮。 */

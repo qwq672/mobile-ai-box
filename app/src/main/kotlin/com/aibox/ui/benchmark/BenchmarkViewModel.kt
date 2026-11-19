@@ -10,7 +10,10 @@ import com.aibox.domain.inference.InferenceConfig
 import com.aibox.domain.inference.InferenceConfigV2
 import com.aibox.domain.inference.LoadedModel
 import com.aibox.domain.inference.QuantType
+import com.aibox.infra.benchmark.BenchmarkMode
+import com.aibox.infra.benchmark.BenchmarkReport
 import com.aibox.infra.benchmark.BenchmarkResult
+import com.aibox.infra.benchmark.BenchmarkSample
 import com.aibox.infra.benchmark.BenchmarkSpec
 import com.aibox.infra.benchmark.ComparisonProgress
 import com.aibox.util.log.LogSystem
@@ -55,7 +58,13 @@ class BenchmarkViewModel : ViewModel() {
         val latestResults: List<BenchmarkResult> = emptyList(),
         val history: List<BenchmarkResultEntity> = emptyList(),
         val errorMessage: String? = null,
-        val infoMessage: String? = null
+        val infoMessage: String? = null,
+        /** 高级模式：基础 / 高级。高级模式产出 6 曲线 + 报告。 */
+        val mode: BenchmarkMode = BenchmarkMode.BASIC,
+        /** 高级模式实时采样点（UI 据此绘制曲线）。 */
+        val samples: List<BenchmarkSample> = emptyList(),
+        /** 高级模式汇总报告。 */
+        val report: BenchmarkReport? = null,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -127,6 +136,11 @@ class BenchmarkViewModel : ViewModel() {
         _ui.value = _ui.value.copy(errorMessage = null)
     }
 
+    fun setMode(mode: BenchmarkMode) {
+        if (_ui.value.running) return
+        _ui.value = _ui.value.copy(mode = mode, report = null, samples = emptyList())
+    }
+
     // ============== 运行 ==============
 
     /**
@@ -135,6 +149,10 @@ class BenchmarkViewModel : ViewModel() {
      */
     fun run() {
         if (_ui.value.running) return
+        if (_ui.value.mode == BenchmarkMode.ADVANCED) {
+            runAdvanced()
+            return
+        }
         val modelPath = _ui.value.selectedModelPath ?: run {
             _ui.value = _ui.value.copy(errorMessage = "请先选择一个模型")
             return
@@ -243,6 +261,96 @@ class BenchmarkViewModel : ViewModel() {
                 LogSystem.error(TAG, "run() threw: ${t.message}", t)
                 _ui.value = _ui.value.copy(errorMessage = "运行失败: ${t.message}")
             } finally {
+                system.setRunning(false)
+                _ui.value = _ui.value.copy(running = false, progress = null)
+            }
+        }
+    }
+
+    /**
+     * 高级模式：只跑第一个选中的后端，推理过程中按间隔采样，产出 6 曲线 + 汇总报告。
+     * 基础档仍走 [run]，结果落历史；高级档结果不落历史（曲线不入库），只展示在页面上。
+     */
+    private fun runAdvanced() {
+        val modelPath = _ui.value.selectedModelPath ?: run {
+            _ui.value = _ui.value.copy(errorMessage = "请先选择一个模型")
+            return
+        }
+        val backendName = _ui.value.selectedBackendNames.firstOrNull() ?: run {
+            _ui.value = _ui.value.copy(errorMessage = "请至少选择一个后端")
+            return
+        }
+        val pp = _ui.value.ppSize
+        val tg = _ui.value.tgSize
+        val warmup = _ui.value.warmup
+
+        _ui.value = _ui.value.copy(
+            running = true,
+            samples = emptyList(),
+            report = null,
+            errorMessage = null,
+            infoMessage = null,
+            progress = ComparisonProgress(1, 0, "$backendName · 加载模型…"),
+        )
+        system.setRunning(true)
+
+        viewModelScope.launch {
+            var loaded: LoadedModel? = null
+            try {
+                val backend = container.backendManager.getBackend(backendName)
+                if (backend == null) {
+                    _ui.value = _ui.value.copy(
+                        errorMessage = "$backendName 未注册，无法运行高级测试",
+                        running = false, progress = null,
+                    )
+                    system.setRunning(false)
+                    return@launch
+                }
+                val baseConfig = buildConfig()
+                val loadOutcome = withContext(Dispatchers.IO) { backend.loadModel(modelPath, baseConfig) }
+                loaded = loadOutcome.getOrNull()
+                if (loaded == null) {
+                    val reason = loadOutcome.reasonOrNull() ?: "unknown"
+                    _ui.value = _ui.value.copy(
+                        errorMessage = "$backendName 加载模型失败: $reason",
+                        running = false, progress = null,
+                    )
+                    system.setRunning(false)
+                    return@launch
+                }
+
+                // 预热（不计入采样）
+                if (warmup > 0) {
+                    _ui.value = _ui.value.copy(
+                        progress = ComparisonProgress(1, 0, "$backendName · 预热 $warmup 次…")
+                    )
+                    val warmSpec = BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = tg), pp, tg, 1, 0)
+                    withContext(Dispatchers.IO) {
+                        repeat(warmup) { system.basicBenchmark.run(backend, loaded!!, warmSpec) }
+                    }
+                }
+
+                _ui.value = _ui.value.copy(
+                    progress = ComparisonProgress(1, 0, "$backendName · 采样中（PP=$pp TG=$tg）…")
+                )
+                val spec = BenchmarkSpec(modelPath, baseConfig.copy(maxTokens = tg), pp, tg, 1, 0)
+                val report = withContext(Dispatchers.IO) {
+                    system.streamingBenchmark.run(backend, loaded!!, spec, BenchmarkMode.ADVANCED) { sample ->
+                        // 采样回调在 IO 线程触发；UI 用 copy + 新列表，collectAsStateWithLifecycle 会重组
+                        _ui.value = _ui.value.copy(samples = _ui.value.samples + sample)
+                    }
+                }
+                _ui.value = _ui.value.copy(
+                    report = report,
+                    infoMessage = "高级测试完成：${report.totalSamples} 个采样点",
+                )
+            } catch (t: Throwable) {
+                LogSystem.error(TAG, "runAdvanced() threw: ${t.message}", t)
+                _ui.value = _ui.value.copy(errorMessage = "高级测试失败: ${t.message}")
+            } finally {
+                loaded?.let { handle ->
+                    withContext(Dispatchers.IO) { runCatching { container.backendManager.getBackend(backendName)?.unload(handle) } }
+                }
                 system.setRunning(false)
                 _ui.value = _ui.value.copy(running = false, progress = null)
             }

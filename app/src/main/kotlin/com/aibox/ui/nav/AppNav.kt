@@ -859,8 +859,8 @@ private fun dispatchSearchClick(entity: SearchableEntity, nav: androidx.navigati
             }
         }
         SearchDomain.BENCHMARK -> {
-            // 暂无 Benchmark 独立路由；跳 Settings（用户可手动进 Benchmark 页）
-            nav.navigate(Dest.Settings.route) {
+            // Benchmark 独立路由已接入：直接跳基准测试页
+            nav.navigate(Dest.Benchmark.route) {
                 popUpTo(Dest.Home.route) { saveState = true }
                 launchSingleTop = true
                 restoreState = true

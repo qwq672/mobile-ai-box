@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,12 +36,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.infra.plugin.FieldType
 import com.aibox.infra.plugin.SettingField
 import com.aibox.infra.plugin.SettingOption
+import com.aibox.infra.benchmark.BenchmarkMode
+import com.aibox.infra.benchmark.BenchmarkReport
 import com.aibox.infra.benchmark.BenchmarkResult
+import com.aibox.infra.benchmark.BenchmarkSample
+import com.aibox.infra.benchmark.Stats
 import com.aibox.data.db.BenchmarkResultEntity
 import com.aibox.ui.components.unified.SettingsListRenderer
 import com.aibox.ui.components.unified.UnifiedCard
@@ -167,6 +173,37 @@ fun BenchmarkScreen(
                 }
             }
 
+            // ===== Section 2.5: 模式切换（基础 / 高级） =====
+            item {
+                UnifiedSection(title = "测试模式") {
+                    Text(
+                        text = "基础：跑一次看汇总数字，结果存入历史。高级：边推理边采样，绘制 6 条性能曲线并给出波动统计（耗时更长）。",
+                        style = Type.bodySmall,
+                        color = Colors.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing4)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.spacing16),
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
+                    ) {
+                        FilterChip(
+                            selected = ui.mode == BenchmarkMode.BASIC,
+                            onClick = { vm.setMode(BenchmarkMode.BASIC) },
+                            enabled = !ui.running,
+                            label = { Text("基础") },
+                        )
+                        FilterChip(
+                            selected = ui.mode == BenchmarkMode.ADVANCED,
+                            onClick = { vm.setMode(BenchmarkMode.ADVANCED) },
+                            enabled = !ui.running,
+                            label = { Text("高级 · 6 曲线") },
+                        )
+                    }
+                }
+            }
+
             // ===== Section 3: 测试参数（自定义 PP / TG） =====
             item {
                 UnifiedSection(title = "测试参数") {
@@ -240,6 +277,13 @@ fun BenchmarkScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // ===== Section 4.5: 高级模式曲线 + 汇总报告 =====
+            if (ui.mode == BenchmarkMode.ADVANCED && (ui.samples.isNotEmpty() || ui.report != null)) {
+                item {
+                    AdvancedResultSection(samples = ui.samples, report = ui.report)
                 }
             }
 
@@ -493,4 +537,156 @@ private fun handleSettingChange(key: String, value: Any, vm: BenchmarkViewModel)
         "benchmark.repCount" -> vm.setRepCount((value as? Number)?.toInt() ?: 1)
         "benchmark.warmup" -> vm.setWarmup((value as? Number)?.toInt() ?: 1)
     }
+}
+
+// ============== 高级模式：6 曲线 + 汇总报告 ==============
+
+/**
+ * 高级结果区块：依次绘制 6 条曲线（读不到硬件的曲线显示"不支持"占位），下方给出汇总报告。
+ * 所有颜色 / 字体走 [Colors] / [Type] / [DesignTokens]。
+ */
+@Composable
+private fun AdvancedResultSection(
+    samples: List<BenchmarkSample>,
+    report: BenchmarkReport?,
+) {
+    UnifiedSection(title = "高级结果（${samples.size} 采样点）") {
+        Column(
+            modifier = Modifier.padding(horizontal = DesignTokens.spacing16),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing12),
+        ) {
+            val advanced = samples.mapNotNull { it.advanced }
+
+            // 6 条曲线：零点过滤（预填充是单点，0 表示无值）
+            LineChartCard(
+                title = "输出速度 (tok/s)",
+                points = advanced.map { it.outputSpeedCurve.timestampMs to it.outputSpeedCurve.value },
+                color = Colors.primary,
+            )
+            val prefillPoints = advanced.map { it.prefillSpeedCurve }.filter { it.value > 0 }
+            LineChartCard(
+                title = "预填充速度 (tok/s，估算单点)",
+                points = prefillPoints.map { it.timestampMs to it.value },
+                color = Colors.secondary,
+                emptyText = "首 token 后生成，暂无预填充采样点",
+            )
+            LineChartCard(
+                title = "内存占用率 (%)",
+                points = advanced.map { it.memoryUsageRatioCurve.timestampMs to (it.memoryUsageRatioCurve.value * 100) },
+                color = Colors.tertiary,
+            )
+            val cpuPoints = advanced.map { it.cpuUtilizationCurve }
+            LineChartCard(
+                title = "CPU 占用 (本进程 %)",
+                points = cpuPoints.map { it.timestampMs to (it.appCpuUsage * 100).toDouble() },
+                color = Colors.primary,
+            )
+            val tempPoints = advanced.mapNotNull { it.temperatureCurve }
+            LineChartCard(
+                title = "CPU 温度 (℃)",
+                points = tempPoints.map { it.timestampMs to it.cpuTempCelsius.toDouble() },
+                color = Colors.error,
+                emptyText = "设备未提供 CPU 温度接口",
+            )
+            val npuPoints = advanced.mapNotNull { it.npuUtilizationCurve }
+            LineChartCard(
+                title = "NPU 占用 (%)",
+                points = npuPoints.map { it.timestampMs to (it.utilization * 100).toDouble() },
+                color = Colors.secondary,
+                emptyText = "设备未提供 NPU 占用接口（多数机型不支持）",
+            )
+
+            // 汇总报告
+            report?.let { ReportCard(report = it) }
+        }
+    }
+}
+
+/**
+ * 轻量折线图：用 Canvas 直接绘制，不引入第三方图表库。
+ * 自动按点数归一化 X（时间）与 Y（数值）到画布，最小值/最大值标注在右上角。
+ */
+@Composable
+private fun LineChartCard(
+    title: String,
+    points: List<Pair<Long, Double>>,
+    color: androidx.compose.ui.graphics.Color,
+    emptyText: String = "无数据",
+) {
+    UnifiedCard(tone = UnifiedCardTone.SURFACE, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(DesignTokens.spacing12)) {
+            Text(text = title, style = Type.titleSmall, color = Colors.onSurface)
+            Spacer(Modifier.size(DesignTokens.spacing4))
+            if (points.size < 2) {
+                Text(text = emptyText, style = Type.bodySmall, color = Colors.onSurfaceVariant)
+            } else {
+                val minV = points.minOf { it.second }
+                val maxV = points.maxOf { it.second }
+                androidx.compose.foundation.Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(96.dp),
+                ) {
+                    val w = size.width
+                    val h = size.height
+                    val spanY = (maxV - minV).coerceAtLeast(1e-6)
+                    val xMin = points.first().first
+                    val xMax = points.last().first
+                    val spanX = (xMax - xMin).coerceAtLeast(1L).toDouble()
+                    val path = androidx.compose.ui.graphics.Path().apply {
+                        points.forEachIndexed { idx, (x, y) ->
+                            val px = ((x - xMin) / spanX).toFloat() * w
+                            val py = h - ((y - minV) / spanY).toFloat() * h * 0.9f - h * 0.05f
+                            if (idx == 0) moveTo(px, py) else lineTo(px, py)
+                        }
+                    }
+                    drawPath(
+                        path = path,
+                        color = color,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f),
+                    )
+                }
+                Text(
+                    text = "min ${"%.2f".format(minV)} · max ${"%.2f".format(maxV)}",
+                    style = Type.labelSmall,
+                    color = Colors.onSurfaceVariant,
+                    modifier = Modifier.padding(top = DesignTokens.spacing4),
+                )
+            }
+        }
+    }
+}
+
+/** 汇总报告卡：展示均值与 p50/p95/p99 波动统计。 */
+@Composable
+private fun ReportCard(report: BenchmarkReport) {
+    UnifiedCard(tone = UnifiedCardTone.PRIMARY_CONTAINER, modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(DesignTokens.spacing12),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing4),
+        ) {
+            Text(
+                text = "汇总 · ${report.backendName} / ${report.modelName}",
+                style = Type.titleSmall,
+                color = Colors.onPrimaryContainer,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "平均输出 ${"%.2f".format(report.averages.outputTokensPerSecond)} tok/s · " +
+                    "预填充 ${"%.2f".format(report.averages.prefillTokensPerSecond)} tok/s · " +
+                    "采样 ${report.totalSamples}",
+                style = Type.bodyMedium,
+                color = Colors.onPrimaryContainer,
+            )
+            Text(text = statsLine("输出速度", report.outputSpeedStats), style = Type.labelSmall, color = Colors.onPrimaryContainer)
+            Text(text = statsLine("CPU 占用", report.cpuStats), style = Type.labelSmall, color = Colors.onPrimaryContainer)
+            Text(text = statsLine("内存占用", report.memoryStats), style = Type.labelSmall, color = Colors.onPrimaryContainer)
+        }
+    }
+}
+
+private fun statsLine(label: String, stats: Stats?): String {
+    if (stats == null) return "$label：无数据"
+    return "$label：p50 ${"%.2f".format(stats.p50)} · p95 ${"%.2f".format(stats.p95)} · " +
+        "p99 ${"%.2f".format(stats.p99)} · σ ${"%.2f".format(stats.stdDev)}"
 }
