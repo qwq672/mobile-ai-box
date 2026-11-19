@@ -270,6 +270,195 @@ CONFLICT      与其他模块冲突
 
 ---
 
+
+### 4.6 必选前置与可选前置的交互
+
+#### 4.6.1 定义
+
+```
+必选前置（required）
+  缺失 → 模块不能启用 / 不能启动 / 不能执行任务
+
+可选前置（optional）
+  缺失 → 模块照常启动；只有用到相关能力时才提示
+```
+
+两者都必须显式声明，不能靠运行时猜。
+
+#### 4.6.2 manifest 表达
+
+```json
+{
+  "dependencies": {
+    "modules": [
+      {
+        "id": "com.aibox.backend.mnn",
+        "version": ">=1.2.0 <2.0.0",
+        "required": true,
+        "promptAt": "install",
+        "reason": "SD 模块依赖 MNN 执行推理"
+      },
+      {
+        "id": "com.aibox.backend.npu",
+        "version": ">=0.9.0",
+        "required": false,
+        "promptAt": "firstUse",
+        "triggerCapabilities": ["npu.prefill"],
+        "fallback": "cpu",
+        "promptText": "安装 NPU 后端可显著加快预填充",
+        "rememberDismiss": true
+      },
+      {
+        "id": "com.aibox.module.lora.manager",
+        "version": "^1.0.0",
+        "required": false,
+        "promptAt": "startup",
+        "fallback": "disable_feature",
+        "rememberDismiss": true
+      }
+    ]
+  }
+}
+```
+
+字段：
+
+| 字段 | 说明 |
+|---|---|
+| `required` | true=必选，false=可选 |
+| `promptAt` | `install` / `firstUse` / `startup` / `never` |
+| `triggerCapabilities` | 可选依赖在哪些能力被调用时提示 |
+| `fallback` | `cpu` / `disable_feature` / `none` |
+| `promptText` | 用户可读的提示文案 |
+| `rememberDismiss` | 用户选择“不再提醒”后是否记住 |
+
+#### 4.6.3 必选前置
+
+规则：
+
+1. **安装/启用前检查**：缺失则进入 `BLOCKED_MISSING_REQUIRED`
+2. **强制安装 = 阻止继续，不是静默安装**
+   - 宿主展示依赖列表、大小、权限、来源
+   - 用户确认后逐个安装，或一键安装全部
+   - 用户取消 → 整个安装/启用取消
+3. **不允许跳过**
+4. **每次启动/每次任务前复查**，防止运行中被卸载
+5. **运行中被卸载 → 立即 suspend**
+   - 取消进行中的任务
+   - 保存状态
+   - 通知用户
+   - 重新安装后恢复
+6. **同 APK 内置的前置**（例如自带 .so）视为 bundled，不提示安装，但版本锁定
+7. **外部 APK 前置必须用户确认**，不能后台静默装
+8. 必选前置不能声明 `fallback`，缺失就是不可用
+
+状态：
+
+```
+BLOCKED_MISSING_REQUIRED
+BLOCKED_VERSION_MISMATCH
+BLOCKED_USER_DECLINED
+READY
+```
+
+#### 4.6.4 可选前置
+
+规则：
+
+1. **不阻塞安装、启用、启动**
+2. **懒提示**：模块调用相关能力时，宿主 API 返回 `OPTIONAL_DEPENDENCY_MISSING`
+   - 宿主弹窗：安装 / 启用 / 暂不
+   - 弹窗说明：用途、大小、权限、替代方案
+   - 模块不得崩溃，必须走 fallback
+3. **启动提醒**：模块可在 init 或功能页调用 `host.dependencies.suggest(id)`
+   - 由宿主统一渲染，不让模块自己弹窗
+   - 频率限制：每个版本/会话最多一次
+   - 用户可“不再提醒”
+4. **用户控制**：每个可选依赖可设置
+   - 使用时提醒
+   - 启动时提醒
+   - 不再提醒
+5. **必须有 fallback**
+   - `cpu`：降级到 CPU
+   - `disable_feature`：相关入口置灰并说明
+   - `none`：不允许，可选依赖必须能降级
+6. **状态变化通知**：安装/卸载/启用/禁用后调用 `onDependencyChanged`
+7. **不反复打扰**：用户拒绝后进入冷却期，不能每次点击都弹
+8. **可选依赖不能影响基础功能**，否则应改为必选
+
+状态：
+
+```
+AVAILABLE
+MISSING
+DISABLED
+INCOMPATIBLE
+DISMISSED
+```
+
+#### 4.6.5 宿主 API
+
+```
+dependencies.check(id): DependencyState
+dependencies.require(id): Result        // 必选，缺失返回错误
+dependencies.requestOptional(id): Result // 可选，缺失时触发宿主 UI
+dependencies.suggest(id)                // 启动提醒，宿主决定是否展示
+dependencies.observe(): Flow<DependencyEvent>
+```
+
+模块不得自己弹系统安装器或跳转应用商店，统一由宿主处理。
+
+#### 4.6.6 错误码
+
+```
+DEPENDENCY_REQUIRED_MISSING
+DEPENDENCY_REQUIRED_VERSION_MISMATCH
+DEPENDENCY_OPTIONAL_MISSING
+DEPENDENCY_USER_DECLINED
+DEPENDENCY_INSTALL_FAILED
+DEPENDENCY_UNINSTALLED_RUNTIME
+DEPENDENCY_CONFLICT
+```
+
+#### 4.6.7 SD 模块示例
+
+必选：
+
+- MNN 后端（或内置 SD runtime）
+- diffusion 模型
+- VAE
+- text encoder
+
+可选：
+
+- NPU 后端
+- LoRA 管理器
+- ControlNet
+- 放大模型
+
+行为：
+
+- 没装 MNN → SD 模块不能启用
+- 没装 NPU → 正常 CPU 生图；点“NPU 加速”时才提示
+- 没装 LoRA 管理器 → LoRA 入口置灰；用户点 LoRA 时提示安装
+- 运行中卸载 MNN → 当前 job 取消，模块 suspend
+
+#### 4.6.8 测试矩阵
+
+- 必选缺失：安装被阻止，错误可操作
+- 必选版本不匹配：阻止并提示升级
+- 必选运行中卸载：任务取消 + suspend
+- 可选懒提示：首次调用弹一次
+- 可选启动提醒：每版本最多一次
+- 用户拒绝：冷却期内不再弹
+- 用户“不再提醒”：持久化
+- 可选依赖安装后：功能恢复，无需重启
+- 可选依赖卸载后：功能降级，不崩溃
+- 冲突模块：不能同时启用
+
+
+---
+
 ## 5. 生命周期契约
 
 ```
