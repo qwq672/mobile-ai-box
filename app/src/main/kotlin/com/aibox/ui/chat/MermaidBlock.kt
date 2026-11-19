@@ -1,6 +1,7 @@
 package com.aibox.ui.chat
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Color
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
@@ -19,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.json.JSONObject
@@ -81,7 +83,7 @@ fun MermaidBlock(code: String, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(heightPx.dp),
-        factory = { ctx ->
+        factory = { ctx: Context ->
             WebView(ctx).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -102,7 +104,7 @@ fun MermaidBlock(code: String, modifier: Modifier = Modifier) {
                         request: WebResourceRequest?
                     ): Boolean = true // 拦截一切外链跳转
                     override fun onPageFinished(view: WebView?, url: String?) {
-                        renderMermaid(view, code, themeJson)
+                        if (view != null) renderMermaid(view, code, themeJson)
                     }
                 }
                 addJavascriptInterface(object {
@@ -115,7 +117,7 @@ fun MermaidBlock(code: String, modifier: Modifier = Modifier) {
                 loadDataWithBaseURL(null, pageHtml, "text/html", "utf-8", null)
             }
         },
-        update = { view -> renderMermaid(view, code, themeJson) }
+        update = { view: WebView -> renderMermaid(view, code, themeJson) }
     )
 }
 
