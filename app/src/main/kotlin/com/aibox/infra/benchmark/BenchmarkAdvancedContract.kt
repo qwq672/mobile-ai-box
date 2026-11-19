@@ -158,7 +158,7 @@ interface SampleSources {
  * Android 默认采样源：通过 sysfs / proc / Android API 读取硬件指标。
  *
  * 所有读取都 try-catch 兜底：读不到返回 null / 0f，绝不阻塞基准测试。
- * - CPU 温度：/sys/class/thermal/thermal_zone*/temp（找 cpu/soc/max 类型）
+ * - CPU 温度：/sys/class/thermal/thermal_zoneN/temp（找 cpu/soc/max 类型）
  * - 进程 CPU：/proc/self/stat 的 utime+stime 差分（两次调用之间）
  * - 内存占用率：ActivityManager.getMemoryInfo(). availMem / totalMem
  * - GPU / NPU 温度与占用：无稳定公开 API，返回 null

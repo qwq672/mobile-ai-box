@@ -95,6 +95,7 @@ import com.aibox.ui.thermal.ThermalMonitorScreen
 import com.aibox.ui.tool.ToolSettingsScreen
 import com.aibox.ui.modules.ModulesScreen
 import com.aibox.ui.benchmark.BenchmarkScreen
+import com.aibox.ui.imagegen.ImageGenScreen
 
 sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     // E 主页 Hybrid：Home 作为新启动路由；Chat 保留为子页面（从 Home 进入）
@@ -543,8 +544,8 @@ private fun MainNav() {
                     TranslatePlaceholderScreen(onBack = { nav.popBackStack() })
                 }
                 composable(Dest.ImageGen.route) {
-                    // 图像生成页占位:目前显示"需要安装图像生成模块"提示
-                    ImageGenPlaceholderScreen(onBack = { nav.popBackStack() })
+                    // 图像生成页框架（参数表单 / 模块发现 / 队列占位；推理后端待接入）
+                    ImageGenScreen(onBack = { nav.popBackStack() })
                 }
                 composable(Dest.Roleplay.route) {
                     RoleplayScreen(
