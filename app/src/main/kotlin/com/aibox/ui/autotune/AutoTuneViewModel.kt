@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.aibox.AIBoxApp
 import com.aibox.data.model.ModelInfo
 import com.aibox.domain.inference.BackendDescriptor
+import com.aibox.domain.inference.BackendType
 import com.aibox.domain.inference.InferenceConfig
 import com.aibox.domain.inference.InferenceConfigV2
 import com.aibox.domain.inference.QuantType
@@ -41,9 +42,14 @@ class AutoTuneViewModel : ViewModel() {
     private val system get() = container.benchmarkSystem
 
     enum class Level(val label: String, val desc: String) {
-        INSTANT("即时", "线程两档，轻负载单次；几十秒内给出结果"),
-        LOW("低", "线程两档 + 当前 KV，轻负载，重复 2 次"),
-        MEDIUM("中", "线程三档 × KV 两档，中等负载"),
+        /**
+         * 即时档：不逐项实测。按设备画像（SoC/大核/后端类型）静态算出一组推荐配置，
+         * 秒出结果，避免冷启动 TTFT 与 ppSize=64 造成的 PP 严重失真。
+         * 需要可信数字请用 Low 及以上档（会真正加载并实测）。
+         */
+        INSTANT("即时", "静态估算：按设备画像与后端类型直接给出推荐配置，秒出、不逐项实测；想要实测数字请用「低」及以上"),
+        LOW("低", "线程 + 当前 KV，轻负载，重复 2 次实测"),
+        MEDIUM("中", "线程三档 × KV 两档，中等负载实测"),
         HIGH("高", "线程四档 × KV 两档 × batch 两档；耗时较长"),
         EXTREME("极致", "线程四档 × KV 三档 × batch 两档；最全面也最慢")
     }
@@ -144,9 +150,10 @@ class AutoTuneViewModel : ViewModel() {
         _ui.value = _ui.value.copy(infoMessage = null)
     }
 
-    /** 计划步数预览（UI 在开始前显示，让用户知道会跑多少项）。 */
+    /** 计划步数预览（UI 在开始前显示，让用户知道会跑多少项）。即时档为静态计算，恒为 1 步。 */
     fun plannedSteps(): Int {
-        val cfg = buildCandidates(_ui.value.level, previewBaseConfig()).size
+        if (_ui.value.level == Level.INSTANT) return 1
+        val cfg = buildCandidates(_ui.value.level, previewBaseConfig(), BackendType.CPU).size
         val backends = _ui.value.selectedBackendNames.size.coerceAtLeast(1)
         val heat = if (_ui.value.hotTest && _ui.value.level.ordinal >= Level.HIGH.ordinal) 1 else 0
         return cfg * backends + heat
@@ -165,6 +172,12 @@ class AutoTuneViewModel : ViewModel() {
         }
 
         val level = _ui.value.level
+
+        // 即时档：走静态计算，不逐项 load/unload 实测（避免冷启动 TTFT 污染 PP）
+        if (level == Level.INSTANT) {
+            runInstant(backendNames)
+            return
+        }
 
         _ui.value = _ui.value.copy(
             running = true,
@@ -197,8 +210,10 @@ class AutoTuneViewModel : ViewModel() {
             try {
                 // 真实基线：线程/KV/上下文/批处理取「设置 → 推理」当前值
                 val base = currentConfig()
-                // 候选必须在读到真实基线后再展开，否则 KV 扫描档位会和界面显示不一致
-                val candidates = buildCandidates(level, base)
+                // 候选必须在读到真实基线后再展开，否则 KV 扫描档位会和界面显示不一致。
+                // threads 候选按「第一个选中后端」的类型裁剪（后面循环内再按各自后端微调）。
+                val firstType = backendTypeOf(backendNames.first())
+                val candidates = buildCandidates(level, base, firstType)
                 val heatSteps = if (_ui.value.hotTest && level.ordinal >= Level.HIGH.ordinal) 1 else 0
                 val totalSteps = candidates.size * backendNames.size + heatSteps
                 _ui.value = _ui.value.copy(
@@ -369,6 +384,117 @@ class AutoTuneViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 即时档：基于设备画像（大核数 / SoC）+ 后端类型的静态推荐，秒出、不实测。
+     *
+     * 设计依据（来自实测评估）：
+     * - 逐候选 load/unload 的冷启动 TTFT 会把 PP 严重低估，即时档不该拿这种数字当结果；
+     * - 线程并非越多越好：Hexagon(NPU) 主要靠 HTP，CPU 侧 1 线程即可；
+     *   GPU(Vulkan/OpenCL) 2 线程喂数据足够；CPU 后端用大核数、封顶 4。
+     * - KV 默认 q8_0（质量/速度平衡），context 保持当前值。
+     */
+    private fun runInstant(backendNames: List<String>) {
+        _ui.value = _ui.value.copy(
+            running = true, progress = 0f, stepIndex = 0, stepTotal = 1,
+            elapsedMs = 0L, progressText = "按设备画像计算推荐配置…",
+            results = emptyList(), best = null, summary = null,
+            errorMessage = null, infoMessage = null
+        )
+        system.setRunning(true)
+        viewModelScope.launch {
+            val startedAt = System.currentTimeMillis()
+            try {
+                val base = currentConfig()
+                val big = CpuInfo.bigCores.coerceIn(1, 16)
+                val rows = mutableListOf<CandidateResult>()
+
+                for (name in backendNames) {
+                    val type = backendTypeOf(name)
+                    val threads = recommendedThreads(type, big)
+                    val kv = QuantType.Q8_0 // 质量/速度平衡；q4_0 省内存但掉质量，静态档不默认选
+                    val note = buildString {
+                        append("静态推荐（未实测）：")
+                        append(when (type) {
+                            BackendType.NPU -> "Hexagon 主要跑 HTP，CPU 侧 1 线程喂数据即可"
+                            BackendType.VULKAN, BackendType.OPENCL -> "GPU 后端 2 线程喂数据足够，更多线程反而抢资源"
+                            BackendType.CPU -> "CPU 后端用大核数（$big），封顶 4 避免小核拖慢+发烫"
+                        })
+                    }
+                    rows += CandidateResult(
+                        backend = name,
+                        threads = threads,
+                        kv = kv,
+                        batch = base.batchSize.coerceIn(1, 1024),
+                        context = base.contextLength,
+                        ppTps = 0.0, // 静态档不产出实测速度，避免用冷启动数字误导
+                        tgTps = 0.0,
+                        ttftMs = 0L,
+                        thermal = "UNKNOWN",
+                        batteryDelta = 0,
+                        memPercent = -1,
+                        cpuPercent = -1,
+                        energyMj = null,
+                        score = 0.0,
+                        failed = false,
+                        note = note
+                    )
+                }
+
+                // 即时档按「设备适配度」打分（线程是否匹配后端类型 + KV 质量），而非实测速度
+                val scored = rows.map { it.copy(score = if (it.kv == QuantType.Q8_0) 1.0 else 0.9) }
+                val best = scored.firstOrNull()
+                val applied = best?.let { applyBest(it) }
+                val summaryText = buildString {
+                    append("即时推荐（基于设备画像，未实测；可信速度请用「低」及以上档）：\n")
+                    if (best == null) {
+                        append("未选择后端")
+                    } else {
+                        append("${best.backend} · 线程 ${best.threads ?: "自动"} · KV ${best.kv} · batch ${best.batch} · 上下文 ${best.context}\n")
+                        val type = backendTypeOf(best.backend)
+                        append(when (type) {
+                            BackendType.NPU -> "NPU/Hexagon：CPU 线程越少越好，主要负载在 HTP。"
+                            BackendType.VULKAN, BackendType.OPENCL -> "GPU：2 线程喂数据，避免抢占渲染/系统资源。"
+                            BackendType.CPU -> "CPU：用大核（$big 核）并封顶 4，避免小核拖慢与发烫。"
+                        })
+                        if (applied != null) append("\n$applied")
+                    }
+                }
+                _ui.value = _ui.value.copy(
+                    results = scored,
+                    best = best,
+                    summary = summaryText,
+                    progress = 1f,
+                    stepIndex = 1,
+                    progressText = "完成 · 用时 ${(System.currentTimeMillis() - startedAt) / 1000}s",
+                    infoMessage = if (best == null) null else "已应用推荐配置"
+                )
+            } catch (t: Throwable) {
+                LogSystem.error(TAG, "runInstant failed: ${t.message}", t)
+                _ui.value = _ui.value.copy(errorMessage = "即时调优失败：${t.message}")
+            } finally {
+                system.setRunning(false)
+                _ui.value = _ui.value.copy(running = false)
+            }
+        }
+    }
+
+    /** 从后端名推断类型（V1 适配器名即 BackendType.id）。 */
+    private fun backendTypeOf(name: String): BackendType = runCatching {
+        BackendType.fromId(name)
+    }.getOrDefault(BackendType.CPU)
+
+    /**
+     * 按后端类型推荐 CPU 线程数：
+     * - NPU(Hexagon)：1（负载在 HTP，CPU 只做喂数据/后处理）
+     * - GPU(Vulkan/OpenCL)：2（数据传输 + 调度，再多无收益）
+     * - CPU：大核数，封顶 4（超过大核数会用到小核，拖慢且更烫）
+     */
+    private fun recommendedThreads(type: BackendType, bigCores: Int): Int = when (type) {
+        BackendType.NPU -> 1
+        BackendType.VULKAN, BackendType.OPENCL -> 2
+        BackendType.CPU -> bigCores.coerceIn(2, 4)
+    }
+
     // ============== internals ==============
 
     private data class Candidate(
@@ -408,13 +534,24 @@ class AutoTuneViewModel : ViewModel() {
         )
     }
 
-    private fun buildCandidates(level: Level, base: InferenceConfigV2): List<Candidate> {
+    /**
+     * 展开候选配置。线程候选按后端类型裁剪——
+     * NPU/GPU 后端 cpuThreads 主要影响喂数据，线程越多不一定越快甚至更烫，
+     * 所以用「推荐值 + 自动(null) + 相邻一档」而不是一律 0/大核/4/6 全扫。
+     */
+    private fun buildCandidates(
+        level: Level,
+        base: InferenceConfigV2,
+        backendType: BackendType
+    ): List<Candidate> {
         val big = CpuInfo.bigCores.coerceIn(1, 16)
+        val recommended = recommendedThreads(backendType, big)
         val threads = when (level) {
-            Level.INSTANT, Level.LOW -> listOf(null, big)
-            Level.MEDIUM -> listOf(null, big, 4)
-            Level.HIGH, Level.EXTREME -> listOf(null, big, 4, 6)
-        }.distinct()
+            Level.INSTANT -> listOf(recommended) // 静态档不走这里，仅兜底
+            Level.LOW -> listOf(recommended, null).distinct()
+            Level.MEDIUM -> listOf(recommended, null, (recommended + 2).coerceAtMost(big)).distinct()
+            Level.HIGH, Level.EXTREME -> listOf(1, recommended, big, (recommended + 2).coerceAtMost(big)).distinct()
+        }
         val kv = when (level) {
             Level.INSTANT, Level.LOW -> listOf(base.kvQuant)
             Level.MEDIUM -> listOf(base.kvQuant, QuantType.Q8_0)

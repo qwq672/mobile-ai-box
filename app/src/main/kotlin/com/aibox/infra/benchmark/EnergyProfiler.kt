@@ -60,11 +60,14 @@ class EnergyProfiler(private val context: Context) {
     /**
      * 计算两次采样之间的能耗（毫焦耳）。
      *
-     * 算法（精确档）：用平均电流 × 平均电压 × 时长秒数。
+     * 算法（精确档）：用平均电流幅值 × 平均电压 × 时长秒数。
      *   - 时长 = after.ts - before.ts（秒）
-     *   - 平均电流 = (before.current + after.current) / 2 (μA)
+     *   - 平均电流 = (|before.current| + |after.current|) / 2 (μA)
+     *     —— 注意 BATTERY_PROPERTY_CURRENT_NOW 放电通常为**负值**，必须取幅值，
+     *        否则短时测试的电流全被过滤，只能退化到电量百分比粗估（几乎测不到）。
      *   - 平均电压 = (before.voltage + after.voltage) / 2 (mV)
-     *   - 能量(mJ) = current(μA) * voltage(mV) * duration(s) / 1000
+     *   - 功率(mW) = μA × mV / 1_000_000
+     *   - 能量(mJ) = 功率(mW) × 时长(s)
      *
      * 算法（粗估档）：如果电流读不到，用电池电量百分比 × 总能量（典型手机电池 4000mAh × 3.85V ≈ 55.4kJ，
      *   折合 1% ≈ 554J ≈ 554000mJ）反推。
@@ -75,14 +78,18 @@ class EnergyProfiler(private val context: Context) {
         val durationSec = (after.timestampMs - before.timestampMs).coerceAtLeast(0L) / 1000.0
         if (durationSec <= 0) return null
 
-        // 精确档：电流 × 电压 × 时长
-        val cur = listOf(before.currentMicroAmps, after.currentMicroAmps).filter { it > 0 }
-        val vol = listOf(before.voltageMilliV, after.voltageMilliV).filter { it > 0 }
+        // 精确档：电流幅值 × 电压 × 时长
+        // 放电时 CURRENT_NOW 为负，取绝对值；过滤掉 0 与明显异常值（>30A 视为读数噪声）
+        val cur = listOf(before.currentMicroAmps, after.currentMicroAmps)
+            .map { kotlin.math.abs(it) }
+            .filter { it > 0 && it < 30_000_000L } // 30A 上限，单位 μA
+        val vol = listOf(before.voltageMilliV, after.voltageMilliV)
+            .filter { it > 0 && it < 30_000L } // 30V 上限，单位 mV
         if (cur.isNotEmpty() && vol.isNotEmpty()) {
             val avgCur = cur.average()
             val avgVol = vol.average()
-            // mJ = μA × mV × s / 1000
-            val mj = (avgCur * avgVol * durationSec / 1000.0).toLong()
+            // 功率(mW) = 电流(μA) × 电压(mV) / 1e6；能量(mJ) = 功率(mW) × 时长(s)
+            val mj = (avgCur * avgVol * durationSec / 1_000_000.0).toLong()
             if (mj > 0) return mj
         }
 

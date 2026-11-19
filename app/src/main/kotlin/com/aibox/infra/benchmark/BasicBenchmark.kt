@@ -81,7 +81,6 @@ class BasicBenchmark(
         val envBefore = environmentMonitor.snapshot()
         LogSystem.info(tag, "EnvBefore: ${envBefore.deviceSoC} thermal=${envBefore.thermalState} bgCpu=${envBefore.backgroundCpuUsage}% battery=${envBefore.batteryLevel}%", sessionId = sessionId)
 
-        val energyBefore = energyProfiler.before()
         val promptText = generatePrompt(spec.ppSize)
 
         // 推理配置:覆盖 maxTokens = tgSize,启用 streaming
@@ -92,6 +91,9 @@ class BasicBenchmark(
             LogSystem.debug(tag, "warmup #${idx + 1}/${spec.warmup}", sessionId = sessionId)
             runOnce(backend, loadedModel, spec, promptText, runConfig, sessionId, isWarmup = true)
         }
+
+        // 能耗快照只覆盖「正式测试窗口」（不含 warmup），与累计 token 数严格对应
+        val energyBefore = energyProfiler.before()
 
         // ---- 正式重复 ----
         val reps = mutableListOf<RepResult>()
@@ -146,7 +148,10 @@ class BasicBenchmark(
         val peakNative = appNativeSamples.filter { it > 0 }.maxOrNull() ?: -1L
 
         // ---- 能耗比 ----
-        val energyEff = BenchmarkResult.computeEnergyEfficiency(medianTgTps, energyMj, medianTotal)
+        // 用测试窗口内真实累计的 token 数 / 同一窗口能耗，避免"单次时长 × 速率"反推带来的量级错配
+        val totalGeneratedTokens = validReps.sumOf { it.tokens }.toLong()
+        val energyEff = BenchmarkResult.energyEfficiencyFromTokens(totalGeneratedTokens, energyMj)
+            ?: BenchmarkResult.computeEnergyEfficiency(medianTgTps, energyMj, medianTotal)
 
         // 后置环境用 "before"(保持与 spec 一致;详细变化已写在日志)
         val envSnapshot = envBefore
@@ -283,7 +288,7 @@ class BasicBenchmark(
         } catch (t: Throwable) {
             // 任意一次推理异常都视为本 rep 失败，记 0
             LogSystem.error(tag, "runOnce ${if (isWarmup) "warmup" else "rep"} threw: ${t.message}", t, sessionId = sessionId)
-            return RepResult(0.0, 0.0, 0L, 0L, readPeakMemory())
+            return RepResult(0.0, 0.0, 0L, 0L, readPeakMemory(), 0)
         }
 
         val end = System.currentTimeMillis()
@@ -293,7 +298,7 @@ class BasicBenchmark(
         // 保护: 生成 0 token (EOG at i=0) 时本次 rep 无效, 直接返回 0 避免指标爆表
         if (generatedTokens <= 0) {
             LogSystem.warn(tag, "runOnce generated 0 tokens (model EOG immediately), rep invalid", sessionId = sessionId)
-            return RepResult(0.0, 0.0, 0L, totalMs, readPeakMemory())
+            return RepResult(0.0, 0.0, 0L, totalMs, readPeakMemory(), 0)
         }
 
         // PP t/s = ppSize / TTFT 秒（近似）
@@ -307,7 +312,8 @@ class BasicBenchmark(
             tgTps = tgTps,
             ttftMs = ttft,
             totalTimeMs = totalMs,
-            peakMem = readPeakMemory()
+            peakMem = readPeakMemory(),
+            tokens = generatedTokens
         )
     }
 
@@ -364,6 +370,7 @@ class BasicBenchmark(
         val tgTps: Double,
         val ttftMs: Long,
         val totalTimeMs: Long,
-        val peakMem: Long
+        val peakMem: Long,
+        val tokens: Int = 0
     )
 }

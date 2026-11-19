@@ -98,6 +98,24 @@ data class BenchmarkResult(
             if (totalJoules <= 0) return null
             return totalTokens / totalJoules
         }
+
+        /**
+         * 精确能耗比(tokens per joule)：直接用「实际生成的总 token 数 / 总能量」。
+         *
+         * 与 [computeEnergyEfficiency] 的区别：后者用 `tgTps × 单次时长` 反推 token，
+         * 当能耗快照覆盖了「warmup + 多次 rep」而时长只取单次中位数时，分子会被严重低估。
+         * 本方法接收测试窗口内真实累计的生成 token 数，分子分母严格对应同一个测试窗口，
+         * 因此在有 warmup / 多 rep 时仍然准确。
+         *
+         * @param totalTokens 测试窗口内生成的 token 总数（不含 warmup）
+         * @param energyMj 同一测试窗口的总能耗(毫焦耳)
+         */
+        fun energyEfficiencyFromTokens(totalTokens: Long, energyMj: Long?): Double? {
+            if (totalTokens <= 0 || energyMj == null || energyMj <= 0) return null
+            val totalJoules = energyMj.toDouble() / 1000.0
+            if (totalJoules <= 0) return null
+            return totalTokens / totalJoules
+        }
     }
 }
 

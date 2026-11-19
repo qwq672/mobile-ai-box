@@ -53,7 +53,8 @@ data class SampleBasicMetrics(
  * - [outputSpeedCurve]：decode 阶段瞬时 token/s，按采样窗口统计，真实测量。
  * - [prefillSpeedCurve]：首 token 前按 ppSize/TTFT 估算的单点值，非逐 token 实测。
  * - [cpuUtilizationCurve]：本进程 CPU 占用（/proc/self/stat 差分），真实测量。
- * - [temperatureCurve]：CPU 温度（sysfs thermal_zone）；GPU/NPU 多数机型无公开接口，为 null。
+ * - [temperatureCurve]：设备温度（优先体感 skin，回退 soc/cpu/tsens，sysfs thermal_zone）；
+ *   GPU/NPU 多数机型无公开接口，为 null。
  * - [npuUtilizationCurve]：NPU 占用率；除个别厂商外无公开 API，通常为 null（UI 隐藏）。
  */
 data class SampleAdvancedMetrics(
@@ -146,7 +147,13 @@ data class Stats(
  * 接口零依赖，便于单元测试 mock。不支持的能力返回 null，UI 自动隐藏对应曲线。
  */
 interface SampleSources {
+    /**
+     * 设备温度（℃）：优先体感温度 skin，回退 soc/cpu/tsens。
+     * 体感温度最贴近「整机摸起来烫不烫」，比单独 CPU die 温度更适合判断降频/握持体验。
+     */
     suspend fun cpuTemperature(): Float?
+    /** 体感温度（℃）：只读 skin / case / back 类传感器；无则返回 null。 */
+    suspend fun skinTemperature(): Float?
     suspend fun gpuTemperature(): Float?
     suspend fun npuTemperature(): Float?
     suspend fun npuUtilization(idleBaseline: Float?): Float?
@@ -171,7 +178,11 @@ class AndroidSampleSources(private val context: Context) : SampleSources {
     @Volatile
     private var lastCpuTimeMs: Long = 0L
 
-    override suspend fun cpuTemperature(): Float? = readCpuTemperature()
+    override suspend fun cpuTemperature(): Float? = skinTemperature() ?: readThermalByType(
+        preferSkin = false
+    )
+
+    override suspend fun skinTemperature(): Float? = readThermalByType(preferSkin = true)
 
     override suspend fun gpuTemperature(): Float? = null // 无稳定公开接口
 
@@ -232,20 +243,46 @@ class AndroidSampleSources(private val context: Context) : SampleSources {
         }
     }
 
-    private fun readCpuTemperature(): Float? {
+    /**
+     * 从 sysfs thermal_zone 读取温度。
+     *
+     * @param preferSkin true 时只认体感类传感器（skin/case/back）；false 时按
+     *   soc > cpu > tsens 回退读 die 温度。读到的毫摄氏度自动换算为 ℃。
+     *
+     * 体感温度（skin）最贴近整机握持/外壳温度，适合判断"烫不烫"与热降频；
+     * 单独 CPU die 温度偏高且波动大，仅在没有 skin 传感器时作为回退。
+     */
+    private fun readThermalByType(preferSkin: Boolean): Float? {
         return try {
             val base = File("/sys/class/thermal")
             val zones = base.listFiles()?.filter { it.name.startsWith("thermal_zone") } ?: return null
             val ordered = zones.sortedBy { it.name.removePrefix("thermal_zone").toIntOrNull() ?: Int.MAX_VALUE }
-            for (zone in ordered) {
-                val type = runCatching { File(zone, "type").readText().trim().lowercase() }.getOrNull() ?: continue
-                if (type.contains("cpu") || type.contains("soc") || type.contains("max") || type.contains("tsens")) {
-                    val raw = runCatching { File(zone, "temp").readText().trim().toFloat() }.getOrNull() ?: continue
+
+            fun readZone(typeKeywords: (String) -> Boolean): Float? {
+                for (zone in ordered) {
+                    val type = runCatching { File(zone, "type").readText().trim().lowercase() }.getOrNull()
+                        ?: continue
+                    if (!typeKeywords(type)) continue
+                    val raw = runCatching { File(zone, "temp").readText().trim().toFloat() }.getOrNull()
+                        ?: continue
                     // sysfs 多数以毫摄氏度上报（如 42000 = 42℃）
                     return if (raw > 1000f) raw / 1000f else raw
                 }
+                return null
             }
-            null
+
+            if (preferSkin) {
+                // 体感：机身外壳/背面/皮肤温度，命中任一即返回
+                readZone { t ->
+                    t.contains("skin") || t.contains("case") || t.contains("back") ||
+                        t.contains("chassis") || t.contains("board")
+                }
+            } else {
+                // 回退顺序：soc > cpu > tsens（避开 battery / 低价值传感器）
+                readZone { it.contains("soc") }
+                    ?: readZone { it.contains("cpu") }
+                    ?: readZone { it.contains("tsens") || it.contains("max") }
+            }
         } catch (_: Throwable) {
             null
         }

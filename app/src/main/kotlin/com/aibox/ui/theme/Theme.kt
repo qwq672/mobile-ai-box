@@ -195,48 +195,37 @@ private fun schemeFromSeed(seed: Color, dark: Boolean): ColorScheme {
 /**
  * 中性 / 黑白主题配色 —— 面向"看不惯 MD3 tonal 配色"的用户。
  *
- * 三层角色严格分离：
- * 1. 中性层：background / surface / surfaceContainer* / onSurface / outline 全部走纯灰阶
- *    （R=G=B，见 Color.kt 的 neutral_* 常量），彻底去掉色相倾向；
- * 2. 点缀层：primary / secondary / tertiary 从强调色 [seed] 派生，但只用于按钮、选中态、
- *    图标、小徽章等小面积；primaryContainer/secondaryContainer/tertiaryContainer 刻意
- *    回落为中性灰底，只有 on*Container 文字保留彩色 —— 与 MD3 的大面积 tonal 容器形成明显差异；
- * 3. 语义层：error / onError / errorContainer 等由 base scheme 原样保留（停止/删除仍是红色），
- *    不被中性化。
+ * 全部角色严格走灰阶三层（R=G=B，无任何色相）：
+ * 1. 中性层：background / surface / surfaceContainer* / onSurface / outline 纯灰阶
+ *    （见 Color.kt 的 neutral_* 常量）；
+ * 2. 强调层：primary / secondary / tertiary 全部改为灰阶（暗色近白 / 亮色近黑），
+ *    **不再使用 SeedBlue 派生任何蓝色**——用户明确要求「黑白主题不使用强调色」。
+ *    三级灰按对比度递减排列，容器底色沿用中性 surfaceContainer，on*Container 走灰阶文字；
+ * 3. 语义层：error 由 base scheme 原样保留（红色，停止/删除按钮仍是红的），
+ *    成功绿 / 警告黄 由 [LocalNeutralAccents] 单独提供，不被灰化。
  *
  * surfaceTint 归零为 transparent，避免滚动 TopAppBar / NavigationBar 叠加 tint 后又泛出主色。
  *
- * 点缀色固定取 [SeedBlue] 的色相——中性主题是「固定黑白主题」，用户不可选配色，
- * 因此这里刻意不接收外部 seed；红色仍保留给 error / 停止按钮语义，绝不被中性化。
+ * 中性主题是「固定黑白主题」，用户不可选配色，因此这里刻意不接收外部 seed；
+ * 彩色只允许出现在语义点缀（停止红 / 警告黄 / 成功绿），绝不被中性化。
  */
 private fun neutralColorScheme(dark: Boolean): ColorScheme {
-    val hsl = FloatArray(3)
-    androidx.core.graphics.ColorUtils.colorToHSL(SeedBlue.toArgb(), hsl)
-    val h = hsl[0]
-    val s = hsl[1].coerceIn(0.35f, 0.85f) // 点缀色保底饱和度，避免灰扑扑
-
-    fun tone(hue: Float, sat: Float, light: Float): Color = Color(
-        androidx.core.graphics.ColorUtils.HSLToColor(
-            floatArrayOf(((hue % 360f) + 360f) % 360f, sat.coerceIn(0f, 1f), light.coerceIn(0f, 1f))
-        )
-    )
-
     val base = if (dark) DarkColors else LightColors
     return if (dark) base.copy(
-        // ---- 点缀层：仅强调色本身彩色，面积受调用方约束（按钮/图标/选中态）----
-        primary = tone(h, s, 0.80f),
-        onPrimary = Color(0xFF101010),
-        primaryContainer = neutral_dark_surfaceContainer,       // 中性灰底
-        onPrimaryContainer = tone(h, s, 0.84f),                 // 彩色文字
-        secondary = tone(h, s * 0.5f, 0.78f),
-        onSecondary = Color(0xFF101010),
-        secondaryContainer = neutral_dark_surfaceContainerHigh, // 中性灰底
-        onSecondaryContainer = tone(h, s * 0.5f, 0.84f),
-        tertiary = tone(h + 40f, s * 0.85f, 0.80f),
-        onTertiary = Color(0xFF101010),
+        // ---- 强调层：全部灰阶，三级对比度递减（无任何色相）----
+        primary = neutral_dark_primary,
+        onPrimary = neutral_dark_onPrimary,
+        primaryContainer = neutral_dark_surfaceContainer,
+        onPrimaryContainer = neutral_dark_primary,
+        secondary = neutral_dark_secondary,
+        onSecondary = neutral_dark_onSecondary,
+        secondaryContainer = neutral_dark_surfaceContainerHigh,
+        onSecondaryContainer = neutral_dark_secondary,
+        tertiary = neutral_dark_tertiary,
+        onTertiary = neutral_dark_onTertiary,
         tertiaryContainer = neutral_dark_surfaceContainerHighest,
-        onTertiaryContainer = tone(h + 40f, s * 0.7f, 0.86f),
-        inversePrimary = tone(h, s, 0.42f),
+        onTertiaryContainer = neutral_dark_tertiary,
+        inversePrimary = neutral_dark_inversePrimary,
         // ---- 中性层：纯灰阶 ----
         background = neutral_dark_background,
         onBackground = neutral_dark_onSurface,
@@ -256,19 +245,19 @@ private fun neutralColorScheme(dark: Boolean): ColorScheme {
         scrim = Color.Black
         // error / onError / errorContainer / onErrorContainer 继承 base（红色语义，不动）
     ) else base.copy(
-        primary = tone(h, s, 0.42f),
-        onPrimary = Color.White,
-        primaryContainer = neutral_light_surfaceContainer,      // 中性灰底
-        onPrimaryContainer = tone(h, s, 0.34f),                 // 彩色文字
-        secondary = tone(h, s * 0.5f, 0.40f),
-        onSecondary = Color.White,
+        primary = neutral_light_primary,
+        onPrimary = neutral_light_onPrimary,
+        primaryContainer = neutral_light_surfaceContainer,
+        onPrimaryContainer = neutral_light_primary,
+        secondary = neutral_light_secondary,
+        onSecondary = neutral_light_onSecondary,
         secondaryContainer = neutral_light_surfaceContainerHigh,
-        onSecondaryContainer = tone(h, s * 0.5f, 0.34f),
-        tertiary = tone(h + 40f, s * 0.85f, 0.42f),
-        onTertiary = Color.White,
+        onSecondaryContainer = neutral_light_secondary,
+        tertiary = neutral_light_tertiary,
+        onTertiary = neutral_light_onTertiary,
         tertiaryContainer = neutral_light_surfaceContainerHighest,
-        onTertiaryContainer = tone(h + 40f, s * 0.7f, 0.34f),
-        inversePrimary = tone(h, s, 0.78f),
+        onTertiaryContainer = neutral_light_tertiary,
+        inversePrimary = neutral_light_inversePrimary,
         background = neutral_light_background,
         onBackground = neutral_light_onSurface,
         surface = neutral_light_surface,
@@ -288,6 +277,19 @@ private fun neutralColorScheme(dark: Boolean): ColorScheme {
     )
 }
 
+/**
+ * 语义点缀色的 CompositionLocal。
+ *
+ * - 值为 null（默认）：非中性主题，DesignTokens 的状态色走原 MaterialRole 桥接；
+ * - 非 null：中性黑白主题下专用的少量彩色点缀（成功绿 / 警告黄 / 危险红）。
+ *
+ * 这样中性主题把 primary 变灰后，「完成/成功」「警告」等状态仍能显示彩色点缀，
+ * 而普通 MD3 主题行为不变。
+ */
+data class NeutralAccents(val success: Color, val warning: Color, val danger: Color)
+
+val LocalNeutralAccents = staticCompositionLocalOf<NeutralAccents?> { null }
+
 private fun parseSeedColor(spec: String): Color? {
     if (spec.isBlank() || spec.equals("dynamic", ignoreCase = true)) return null
     return runCatching { Color(android.graphics.Color.parseColor(spec)) }.getOrNull()
@@ -306,7 +308,7 @@ fun AIBoxTheme(
     val seed = parseSeedColor(accentColor)
     val colorScheme = when {
         // 中性/黑白主题最高优先级：强制忽略动态取色与用户主色调，彻底脱离 MD3 tonal 配色。
-        // 点缀色固定为 SeedBlue（配色不可选），保证中性主题观感恒定。
+        // 强调色全灰阶，仅保留语义点缀色（停止红/警告黄/成功绿），配色不可选。
         neutralTheme -> neutralColorScheme(darkTheme)
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -333,7 +335,20 @@ fun AIBoxTheme(
         }
     }
 
-    CompositionLocalProvider(LocalCornerScale provides cornerScale) {
+    // 中性主题下把语义点缀色（成功绿/警告黄/危险红）注入，供 DesignTokens 状态色使用；
+    // 非中性主题传 null，DesignTokens 走原 MaterialRole 桥接，行为完全不变。
+    val neutralAccents = if (neutralTheme) {
+        if (darkTheme) {
+            NeutralAccents(neutral_dark_success, neutral_dark_warning, neutral_dark_danger)
+        } else {
+            NeutralAccents(neutral_light_success, neutral_light_warning, neutral_light_danger)
+        }
+    } else null
+
+    CompositionLocalProvider(
+        LocalCornerScale provides cornerScale,
+        LocalNeutralAccents provides neutralAccents,
+    ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = PocketTypography,
