@@ -29,6 +29,8 @@ class SettingsViewModel : ViewModel() {
         val bigCores: Int = 0,
         val dynamicColor: Boolean = true,
         val darkTheme: String = "system",
+        /** 中性/黑白主题：纯灰阶底色 + 彩色点缀，强制忽略动态取色。 */
+        val neutralTheme: Boolean = false,
         val loggingEnabled: Boolean = true,
         val logFilePath: String? = null,
         val thinkingMode: Boolean = true,
@@ -99,6 +101,11 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.darkTheme.collectLatest {
                 _ui.value = _ui.value.copy(darkTheme = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.neutralTheme.collectLatest {
+                _ui.value = _ui.value.copy(neutralTheme = it)
             }
         }
         viewModelScope.launch {
@@ -260,6 +267,20 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch { container.settingsRepository.setDynamicColor(on) }
     }
 
+    /**
+     * 中性/黑白主题开关。
+     *
+     * 联动：开启时一并关闭 Material You 动态取色——中性配色强制忽略动态取色，
+     * 提前把它关掉可避免设置页显示"动态取色已开启"的自相矛盾提示。
+     * 关闭中性主题时不自动恢复动态取色，尊重用户此前的选择。
+     */
+    fun onNeutralThemeChange(on: Boolean) {
+        viewModelScope.launch {
+            container.settingsRepository.setNeutralTheme(on)
+            if (on) container.settingsRepository.setDynamicColor(false)
+        }
+    }
+
     // ---------- 云端模型 ----------
 
     private fun editCloud(transform: (com.aibox.domain.cloud.CloudConfig) -> com.aibox.domain.cloud.CloudConfig) {
@@ -300,14 +321,17 @@ class SettingsViewModel : ViewModel() {
 
     fun onAccentColorChange(spec: String) {
         viewModelScope.launch {
-            if (spec.equals("dynamic", ignoreCase = true)) {
-                container.settingsRepository.setDynamicColor(true)
-                container.settingsRepository.setAccentColor("dynamic")
-            } else {
-                // 选具体颜色时自动关闭 Material You，否则壁纸配色会覆盖用户选择
-                container.settingsRepository.setDynamicColor(false)
-                container.settingsRepository.setAccentColor(spec)
+            // 中性主题下动态取色本就无效，不动它，避免开关显示与"已置灰"自相矛盾；
+            // 此时选 "dynamic" 仅作为"默认点缀色"（Theme 会回退到 SeedBlue）。
+            if (!_ui.value.neutralTheme) {
+                if (spec.equals("dynamic", ignoreCase = true)) {
+                    container.settingsRepository.setDynamicColor(true)
+                } else {
+                    // 选具体颜色时自动关闭 Material You，否则壁纸配色会覆盖用户选择
+                    container.settingsRepository.setDynamicColor(false)
+                }
             }
+            container.settingsRepository.setAccentColor(spec)
         }
     }
 

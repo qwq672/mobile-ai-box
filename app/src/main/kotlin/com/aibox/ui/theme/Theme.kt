@@ -192,6 +192,100 @@ private fun schemeFromSeed(seed: Color, dark: Boolean): ColorScheme {
     )
 }
 
+/**
+ * 中性 / 黑白主题配色 —— 面向"看不惯 MD3 tonal 配色"的用户。
+ *
+ * 三层角色严格分离：
+ * 1. 中性层：background / surface / surfaceContainer* / onSurface / outline 全部走纯灰阶
+ *    （R=G=B，见 Color.kt 的 neutral_* 常量），彻底去掉色相倾向；
+ * 2. 点缀层：primary / secondary / tertiary 从强调色 [seed] 派生，但只用于按钮、选中态、
+ *    图标、小徽章等小面积；primaryContainer/secondaryContainer/tertiaryContainer 刻意
+ *    回落为中性灰底，只有 on*Container 文字保留彩色 —— 与 MD3 的大面积 tonal 容器形成明显差异；
+ * 3. 语义层：error / onError / errorContainer 等由 base scheme 原样保留（停止/删除仍是红色），
+ *    不被中性化。
+ *
+ * surfaceTint 归零为 transparent，避免滚动 TopAppBar / NavigationBar 叠加 tint 后又泛出主色。
+ * [seed] 由调用方保证非 null（中性主题下若 accentColor=dynamic，回退到默认蓝）。
+ */
+private fun neutralColorScheme(seed: Color, dark: Boolean): ColorScheme {
+    val hsl = FloatArray(3)
+    androidx.core.graphics.ColorUtils.colorToHSL(seed.toArgb(), hsl)
+    val h = hsl[0]
+    val s = hsl[1].coerceIn(0.35f, 0.85f) // 点缀色保底饱和度，避免灰扑扑
+
+    fun tone(hue: Float, sat: Float, light: Float): Color = Color(
+        androidx.core.graphics.ColorUtils.HSLToColor(
+            floatArrayOf(((hue % 360f) + 360f) % 360f, sat.coerceIn(0f, 1f), light.coerceIn(0f, 1f))
+        )
+    )
+
+    val base = if (dark) DarkColors else LightColors
+    return if (dark) base.copy(
+        // ---- 点缀层：仅强调色本身彩色，面积受调用方约束（按钮/图标/选中态）----
+        primary = tone(h, s, 0.80f),
+        onPrimary = Color(0xFF101010),
+        primaryContainer = neutral_dark_surfaceContainer,       // 中性灰底
+        onPrimaryContainer = tone(h, s, 0.84f),                 // 彩色文字
+        secondary = tone(h, s * 0.5f, 0.78f),
+        onSecondary = Color(0xFF101010),
+        secondaryContainer = neutral_dark_surfaceContainerHigh, // 中性灰底
+        onSecondaryContainer = tone(h, s * 0.5f, 0.84f),
+        tertiary = tone(h + 40f, s * 0.85f, 0.80f),
+        onTertiary = Color(0xFF101010),
+        tertiaryContainer = neutral_dark_surfaceContainerHighest,
+        onTertiaryContainer = tone(h + 40f, s * 0.7f, 0.86f),
+        inversePrimary = tone(h, s, 0.42f),
+        // ---- 中性层：纯灰阶 ----
+        background = neutral_dark_background,
+        onBackground = neutral_dark_onSurface,
+        surface = neutral_dark_surface,
+        onSurface = neutral_dark_onSurface,
+        onSurfaceVariant = neutral_dark_onSurfaceVariant,
+        surfaceVariant = neutral_dark_surfaceVariant,
+        surfaceContainerLow = neutral_dark_surfaceContainerLow,
+        surfaceContainer = neutral_dark_surfaceContainer,
+        surfaceContainerHigh = neutral_dark_surfaceContainerHigh,
+        surfaceContainerHighest = neutral_dark_surfaceContainerHighest,
+        outline = neutral_dark_outline,
+        outlineVariant = neutral_dark_outlineVariant,
+        inverseSurface = neutral_dark_inverseSurface,
+        inverseOnSurface = neutral_dark_inverseOnSurface,
+        surfaceTint = Color.Transparent,                        // 杜绝 tint 泛色
+        scrim = Color.Black
+        // error / onError / errorContainer / onErrorContainer 继承 base（红色语义，不动）
+    ) else base.copy(
+        primary = tone(h, s, 0.42f),
+        onPrimary = Color.White,
+        primaryContainer = neutral_light_surfaceContainer,      // 中性灰底
+        onPrimaryContainer = tone(h, s, 0.34f),                 // 彩色文字
+        secondary = tone(h, s * 0.5f, 0.40f),
+        onSecondary = Color.White,
+        secondaryContainer = neutral_light_surfaceContainerHigh,
+        onSecondaryContainer = tone(h, s * 0.5f, 0.34f),
+        tertiary = tone(h + 40f, s * 0.85f, 0.42f),
+        onTertiary = Color.White,
+        tertiaryContainer = neutral_light_surfaceContainerHighest,
+        onTertiaryContainer = tone(h + 40f, s * 0.7f, 0.34f),
+        inversePrimary = tone(h, s, 0.78f),
+        background = neutral_light_background,
+        onBackground = neutral_light_onSurface,
+        surface = neutral_light_surface,
+        onSurface = neutral_light_onSurface,
+        onSurfaceVariant = neutral_light_onSurfaceVariant,
+        surfaceVariant = neutral_light_surfaceVariant,
+        surfaceContainerLow = neutral_light_surfaceContainerLow,
+        surfaceContainer = neutral_light_surfaceContainer,
+        surfaceContainerHigh = neutral_light_surfaceContainerHigh,
+        surfaceContainerHighest = neutral_light_surfaceContainerHighest,
+        outline = neutral_light_outline,
+        outlineVariant = neutral_light_outlineVariant,
+        inverseSurface = neutral_light_inverseSurface,
+        inverseOnSurface = neutral_light_inverseOnSurface,
+        surfaceTint = Color.Transparent,
+        scrim = Color.Black
+    )
+}
+
 private fun parseSeedColor(spec: String): Color? {
     if (spec.isBlank() || spec.equals("dynamic", ignoreCase = true)) return null
     return runCatching { Color(android.graphics.Color.parseColor(spec)) }.getOrNull()
@@ -203,11 +297,15 @@ fun AIBoxTheme(
     dynamicColor: Boolean = true,
     accentColor: String = "dynamic",
     cornerScale: Float = 1f,
+    neutralTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
     val seed = parseSeedColor(accentColor)
     val colorScheme = when {
+        // 中性/黑白主题最高优先级：强制忽略动态取色，彻底脱离 MD3 tonal 配色。
+        // 强调色若仍是 "dynamic"（无 seed），回退到默认蓝作为点缀色来源。
+        neutralTheme -> neutralColorScheme(seed ?: SeedBlue, darkTheme)
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
@@ -244,7 +342,7 @@ fun AIBoxTheme(
 }
 
 /**
- * 从全局 SettingsRepository 读 darkTheme / dynamicColor / accentColor / cornerScale 自动配置。
+ * 从全局 SettingsRepository 读 darkTheme / dynamicColor / accentColor / cornerScale / neutralTheme 自动配置。
  * 用在 MainActivity 的根 composable。
  */
 @Composable
@@ -255,6 +353,7 @@ fun AIBoxThemeFromSettings(content: @Composable () -> Unit) {
     val dynamicColor by settings.dynamicColor.collectAsState(initial = true)
     val accentColor by settings.accentColor.collectAsState(initial = "dynamic")
     val cornerScale by settings.cornerScale.collectAsState(initial = 1f)
+    val neutralTheme by settings.neutralTheme.collectAsState(initial = false)
 
     val isDark = when (darkThemeMode) {
         "light" -> false
@@ -266,6 +365,7 @@ fun AIBoxThemeFromSettings(content: @Composable () -> Unit) {
         dynamicColor = dynamicColor,
         accentColor = accentColor,
         cornerScale = cornerScale,
+        neutralTheme = neutralTheme,
         content = content
     )
 }

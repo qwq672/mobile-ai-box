@@ -11,6 +11,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -63,9 +64,13 @@ fun SwitchRow(
     title: String,
     subtitle: String? = null,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    /** false 时整行置灰、不可点击（用于表达"被其它开关接管"的联动状态）。 */
+    enabled: Boolean = true
 ) {
     ListItem(
+        modifier = if (enabled) Modifier else Modifier.alpha(0.45f),
+        enabled = enabled,
         headlineContent = {
             Text(title, style = MaterialTheme.typography.bodyLarge)
         },
@@ -79,7 +84,7 @@ fun SwitchRow(
             }
         },
         trailingContent = {
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
+            Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
         }
     )
 }

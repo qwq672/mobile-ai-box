@@ -196,8 +196,11 @@ fun SettingsScreen(
                     Column(Modifier.padding(vertical = 8.dp)) {
                         SwitchRow(
                             title = "Material You 动态取色",
-                            subtitle = "跟随系统壁纸自动配色（仅 Android 12+）",
+                            subtitle = if (ui.neutralTheme)
+                                "中性配色已开启，动态取色不可用"
+                            else "跟随系统壁纸自动配色（仅 Android 12+）",
                             checked = ui.dynamicColor,
+                            enabled = !ui.neutralTheme,
                             onCheckedChange = vm::onDynamicColorChange
                         )
                         HorizontalDivider()
@@ -220,6 +223,13 @@ fun SettingsScreen(
                             }
                         }
                         HorizontalDivider()
+                        SwitchRow(
+                            title = "中性配色（黑白主题）",
+                            subtitle = "中性灰底 + 彩色点缀，脱离 MD3 配色；主题模式与主色调仍可自选",
+                            checked = ui.neutralTheme,
+                            onCheckedChange = vm::onNeutralThemeChange
+                        )
+                        HorizontalDivider()
                         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                             Text(
                                 "主色调",
@@ -227,8 +237,11 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                if (ui.dynamicColor) "动态取色已开启，主色调将在关闭动态取色后生效"
-                                else "选一个喜欢的强调色，界面会按它推导整套配色",
+                                when {
+                                    ui.neutralTheme -> "中性配色下强调色仅用于按钮 / 图标 / 选中态等点缀，界面底色保持中性"
+                                    ui.dynamicColor -> "动态取色已开启，主色调将在关闭动态取色后生效"
+                                    else -> "选一个喜欢的强调色，界面会按它推导整套配色"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

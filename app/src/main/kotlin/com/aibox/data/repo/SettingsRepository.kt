@@ -52,6 +52,8 @@ class SettingsRepository(private val context: Context) {
         // 外观 & 日志
         val DYNAMIC_COLOR   = booleanPreferencesKey("dynamic_color")
         val DARK_THEME      = stringPreferencesKey("dark_theme") // "system" / "light" / "dark"
+        // 中性/黑白主题：纯灰阶底色 + 彩色点缀，强制忽略动态取色
+        val NEUTRAL_THEME   = booleanPreferencesKey("neutral_theme")
         val LOGGING_ENABLED = booleanPreferencesKey("logging_enabled")
         // 自定义主色（"dynamic" = 跟随系统壁纸；其余为 #RRGGBB）
         val ACCENT_COLOR    = stringPreferencesKey("accent_color")
@@ -141,6 +143,8 @@ class SettingsRepository(private val context: Context) {
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.DYNAMIC_COLOR] ?: true }
     /** "system" / "light" / "dark" */
     val darkTheme: Flow<String> = context.dataStore.data.map { it[Keys.DARK_THEME] ?: "system" }
+    /** 中性/黑白主题：纯灰阶底色 + 彩色点缀（默认关闭）。 */
+    val neutralTheme: Flow<Boolean> = context.dataStore.data.map { it[Keys.NEUTRAL_THEME] ?: false }
     /** 日志开关 */
     val loggingEnabled: Flow<Boolean> = context.dataStore.data.map { it[Keys.LOGGING_ENABLED] ?: true }
 
@@ -245,6 +249,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setDarkTheme(mode: String) =
         context.dataStore.edit { it[Keys.DARK_THEME] = mode }
+
+    suspend fun setNeutralTheme(on: Boolean) =
+        context.dataStore.edit { it[Keys.NEUTRAL_THEME] = on }
 
     suspend fun setLoggingEnabled(on: Boolean) =
         context.dataStore.edit { it[Keys.LOGGING_ENABLED] = on }
@@ -353,10 +360,10 @@ class SettingsRepository(private val context: Context) {
         LogSystem.info("aibox.settings", "resetInference done")
     }
 
-    /** 只重置外观：取色 / 主题 / 主色 / 圆角 / 消息呈现。 */
+    /** 只重置外观：取色 / 主题 / 主色 / 中性主题 / 圆角 / 消息呈现。 */
     suspend fun resetAppearance() = context.dataStore.edit { p ->
         listOf(
-            Keys.DYNAMIC_COLOR, Keys.DARK_THEME, Keys.ACCENT_COLOR,
+            Keys.DYNAMIC_COLOR, Keys.DARK_THEME, Keys.NEUTRAL_THEME, Keys.ACCENT_COLOR,
             Keys.CORNER_SCALE, Keys.CHAT_DOC_STYLE
         ).forEach { p.remove(it) }
         LogSystem.info("aibox.settings", "resetAppearance done")
