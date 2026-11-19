@@ -200,7 +200,7 @@ class AndroidSampleSources(private val context: Context) : SampleSources {
             val cpuCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
             // jiffies 通常 100Hz：jiffies/100 = CPU 秒；除以墙钟秒与核数 => 0..1
             val ratio = (deltaJ / 100.0) / (deltaMs / 1000.0) / cpuCount
-            ratio.coerceIn(0f, 1f).toFloat()
+            ratio.coerceIn(0.0, 1.0).toFloat()
         } catch (_: Throwable) {
             0f
         }

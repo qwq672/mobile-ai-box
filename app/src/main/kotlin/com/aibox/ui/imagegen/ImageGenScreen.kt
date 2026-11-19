@@ -325,4 +325,4 @@ private fun buildParameterFields(mode: ImageGenMode): List<SettingField> = build
     )
 }
 
-private fun buildCurrentValues(ui: ImageGenUiState): Map<String, Any> = ui.params
+private fun buildCurrentValues(ui: ImageGenViewModel.UiState): Map<String, Any> = ui.params
