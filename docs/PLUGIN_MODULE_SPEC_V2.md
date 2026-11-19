@@ -152,6 +152,124 @@ com.aibox.action.IMPORTER_PLUGIN
 
 ---
 
+
+### 4.5 依赖声明与解析
+
+> 现状：`PluginManager` / `PluginCompatibilityChecker` 目前只校验 `minAiboxVersion`、`targetSdk`、ABI、签名。
+> 还没有模块之间的依赖图，也没有“后端缺失时功能模块自动禁用”的机制。v2 必须补上。
+
+#### 4.5.1 依赖类型
+
+| 类型 | 示例 | 缺失时 |
+|---|---|---|
+| 宿主版本 | `host.minVersion` / `hostApiLevel` | 禁用模块 |
+| 模块依赖 | SD 模块依赖 MNN 后端模块 | 禁用，提示安装 |
+| 能力依赖 | `image.generate`、`backend.mnn` | 找提供者，找不到禁用 |
+| 模型依赖 | diffusion / VAE / text encoder | 提示导入，不自动下载 |
+| 工具依赖 | `image.generate` 工具版本 | 禁用相关工具 |
+| 设备依赖 | RAM、ABI、Android 版本、GPU/NPU | 降级或禁用 |
+| 资源依赖 | LoRA、ControlNet、tokenizer | 可选则降级，必需则禁用 |
+| 冲突声明 | 两个模块提供同一 backend id | 拒绝同时启用 |
+
+#### 4.5.2 manifest 示例
+
+```json
+{
+  "dependencies": {
+    "host": {
+      "apiLevel": 2,
+      "minVersion": "261118-4",
+      "maxVersion": ""
+    },
+    "modules": [
+      {
+        "id": "com.aibox.backend.mnn",
+        "type": "inference-backend",
+        "version": ">=1.2.0 <2.0.0",
+        "required": true,
+        "reason": "SD 模块通过 MNN 执行推理"
+      },
+      {
+        "id": "com.aibox.backend.npu",
+        "type": "inference-backend",
+        "version": ">=0.9.0",
+        "required": false,
+        "reason": "可选 NPU 加速"
+      }
+    ],
+    "capabilities": [
+      {"id": "image.generate", "required": true},
+      {"id": "npu.prefill", "required": false}
+    ],
+    "models": [
+      {"role": "diffusion", "format": "safetensors", "required": true},
+      {"role": "vae", "format": "safetensors", "required": true},
+      {"role": "lora", "format": "safetensors", "required": false}
+    ],
+    "tools": [
+      {"id": "image.generate", "version": ">=1.0.0", "required": true}
+    ],
+    "device": {
+      "abis": ["arm64-v8a"],
+      "minRamMb": 6144,
+      "minAndroidSdk": 26,
+      "gpu": "vulkan1.1",
+      "npu": "optional"
+    },
+    "conflicts": [
+      {"id": "com.example.sd.legacy", "reason": "同一 backend id"}
+    ]
+  }
+}
+```
+
+#### 4.5.3 解析规则
+
+1. **先解析，再 bind**：依赖不满足时不要启动 Service
+2. **拓扑排序**：被依赖模块先 enable，宿主先 ready
+3. **循环依赖直接拒绝**，并给出链路
+4. **同一 moduleId 只允许一个激活版本**
+5. **required 缺失 → 模块禁用**，错误里带可操作建议
+6. **optional 缺失 → 降级**，功能开关置灰并说明原因
+7. **不自动下载/安装依赖**，必须用户确认
+8. **卸载依赖 → 依赖方 suspend**，重新安装后可恢复
+9. **能力可被宿主内置实现满足**，优先宿主，其次模块
+10. **冲突模块不能同时启用**，UI 明确提示
+
+#### 4.5.4 版本约束
+
+- 使用 semver 范围：`>=1.2.0 <2.0.0`、`^1.2.0`、`~1.2.0`、精确版本
+- 兼容现有 `v261018-1` 形式：解析为 `261018-1` 再比较
+- 宿主版本与模块版本分开比较
+- 版本解析失败视为不兼容，并记录原始字符串
+- 现有 `aibox.minVersion` meta-data 保留为“快速过滤”，module.json 为权威；两者冲突取更严格
+
+#### 4.5.5 依赖状态与 UI
+
+```
+MISSING       未安装
+INCOMPATIBLE  版本不满足
+DISABLED      用户未启用
+READY         可用
+DEGRADED      可选依赖缺失
+CONFLICT      与其他模块冲突
+```
+
+- 模块详情页展示依赖树
+- 缺失项提供“去安装/去导入/去启用”
+- 不把技术错误直接丢给用户，给可操作文案
+- 日志记录解析结果、缺失链路、最终启用顺序
+
+#### 4.5.6 安全
+
+- 依赖的 moduleId 必须与包名/签名绑定，不能只信 manifest 字符串
+- 第三方模块作为依赖时，首次启用需用户确认
+- 防止“依赖劫持”：同名 moduleId 但不同签名 → 拒绝
+- 依赖解析结果缓存，但安装/卸载/升级后必须失效
+
+
+---
+
 ## 5. 生命周期契约
 
 ```
