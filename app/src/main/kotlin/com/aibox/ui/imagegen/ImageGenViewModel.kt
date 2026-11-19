@@ -29,6 +29,14 @@ class ImageGenViewModel : ViewModel() {
         val module: DiscoveredModule? = null,
         val scanning: Boolean = false,
         val mode: ImageGenMode = ImageGenMode.TXT2IMG,
+        /**
+         * 推理后端（A 宿主 / B 生图模块 / C 依赖框架 三层关系）：
+         * - [ImageBackend.NPU_QNN]：B1，QNN 2.28 so 内置于生图模块，支持 SD1.5 + SDXL，无需外部依赖；
+         * - [ImageBackend.CPU_GPU_MNN]：B2，依赖 C=MNN 推理框架模块，仅支持 SD1.5。
+         */
+        val backend: ImageBackend = ImageBackend.NPU_QNN,
+        /** C：MNN 推理框架模块是否就绪（B2 的必选前置依赖）。 */
+        val mnnModule: DiscoveredModule? = null,
         val params: Map<String, Any> = defaultParams(),
         val jobs: List<String> = emptyList(),
     ) {
@@ -41,6 +49,7 @@ class ImageGenViewModel : ViewModel() {
                 "ig.sampler" to "euler_a",
                 "ig.denoise" to 0.6f,
                 "ig.nsfw" to true,
+                "ig.style" to "anime", // 生图受众以二次元为主，默认二次元风格预设
             )
         }
     }
@@ -62,7 +71,9 @@ class ImageGenViewModel : ViewModel() {
                     ModuleDiscoveryService(context).discoverAll()
                 }
                 val imageModule = modules.firstOrNull { it.type == ModuleType.IMAGE_GEN_MODULE }
-                _ui.value = _ui.value.copy(module = imageModule, scanning = false)
+                // C 层：MNN 推理框架模块（B2 CPU/GPU 生图的必选前置依赖）
+                val mnnModule = modules.firstOrNull { isMnnFramework(it) }
+                _ui.value = _ui.value.copy(module = imageModule, mnnModule = mnnModule, scanning = false)
             } catch (t: Throwable) {
                 LogSystem.warn(TAG, "rescan failed: ${t.message}", t)
                 _ui.value = _ui.value.copy(scanning = false)
@@ -74,6 +85,10 @@ class ImageGenViewModel : ViewModel() {
         _ui.value = _ui.value.copy(mode = mode)
     }
 
+    fun setBackend(backend: ImageBackend) {
+        _ui.value = _ui.value.copy(backend = backend)
+    }
+
     /** 参数变更：只更新对应 key，保留其余（含模式专属参数）。 */
     fun onParamChange(key: String, value: Any) {
         val next = _ui.value.params.toMutableMap()
@@ -83,5 +98,37 @@ class ImageGenViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "aibox.ui.imagegen"
+
+        /** 识别 C=MNN 推理框架模块：type 为推理框架，且包名/名称含 mnn。 */
+        internal fun isMnnFramework(m: DiscoveredModule): Boolean {
+            val text = "${m.packageName} ${m.name} ${m.displayName}".lowercase()
+            return (m.type == ModuleType.BACKEND_PLUGIN || text.contains("backend")) && text.contains("mnn")
+        }
     }
+}
+
+/**
+ * 生图推理后端（对齐 A 宿主 / B 生图功能 / C MNN 框架 三层关系）：
+ * - [NPU_QNN]（B1）：QNN 2.28 so 内置于生图模块自身，支持 SD1.5 与 SDXL；无外部前置依赖。
+ * - [CPU_GPU_MNN]（B2）：依赖 C=MNN 推理框架模块；仅支持 SD1.5；C 为必选前置，缺失时入口置灰。
+ */
+enum class ImageBackend(
+    val label: String,
+    val shortDesc: String,
+    val supportedSd: String,
+    val dependencyLabel: String,
+) {
+    NPU_QNN(
+        "NPU · Hexagon",
+        "B1：QNN 2.28 运行时（so 内置于生图模块），走骁龙 NPU，速度最快",
+        "SD 1.5 / SDXL",
+        "自带 QNN，无外部依赖",
+    ),
+    CPU_GPU_MNN(
+        "CPU / GPU · MNN",
+        "B2：依赖 C=MNN 推理框架模块，兼容普通设备，仅支持 SD 1.5",
+        "仅 SD 1.5",
+        "需先安装 MNN 推理框架模块（必选）",
+    ),
+}
 }

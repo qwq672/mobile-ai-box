@@ -27,8 +27,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -145,18 +147,34 @@ fun ImageGenScreen(
                 }
             }
 
-            // ===== 后端能力（占位说明） =====
+            // ===== 推理后端（A 宿主 / B 生图 / C 依赖框架 三层关系） =====
             item {
-                UnifiedSection(title = "推理后端") {
+                UnifiedSection(title = "推理后端与依赖") {
                     Column(modifier = Modifier.padding(horizontal = DesignTokens.spacing16)) {
                         Text(
-                            text = "NPU（骁龙 Hexagon）/ CPU（MNN）/ GPU 由生图模块自行选择；宿主不绑定具体推理引擎。",
+                            text = "生图由「B 生图模块」执行，宿主 A 只提供入口与参数；不同后端的前置依赖不同。",
                             style = Type.bodySmall,
                             color = Colors.onSurfaceVariant,
                         )
                         Spacer(Modifier.size(DesignTokens.spacing8))
+                        ImageBackend.entries.forEach { backend ->
+                            val selected = ui.backend == backend
+                            val depMissing = backend == ImageBackend.CPU_GPU_MNN && ui.mnnModule == null
+                            BackendChoiceCard(
+                                label = backend.label,
+                                shortDesc = backend.shortDesc,
+                                supportedSd = backend.supportedSd,
+                                dependencyLabel = backend.dependencyLabel,
+                                depMissing = depMissing,
+                                selected = selected,
+                                onClick = { vm.setBackend(backend) },
+                            )
+                            Spacer(Modifier.size(DesignTokens.spacing8))
+                        }
                         Text(
-                            text = "本轮为框架：检测到模块后可保存参数，真实出图需安装并接入生图模块。",
+                            text = "B1（NPU）自带 QNN 2.28 运行时（so 内置于生图模块），支持 SD1.5 与 SDXL；" +
+                                "B2（CPU/GPU）依赖 C=MNN 推理框架模块，仅 SD1.5，缺 C 时该后端不可用。" +
+                                "依赖为必选，未装不会自动下载，需你确认后安装。",
                             style = Type.labelSmall,
                             color = Colors.onSurfaceVariant,
                         )
@@ -316,6 +334,22 @@ private fun buildParameterFields(mode: ImageGenMode): List<SettingField> = build
     }
     add(
         SettingField(
+            key = "ig.style",
+            type = FieldType.DROPDOWN,
+            title = "模型风格预设",
+            description = "生图受众以二次元为主，预设默认二次元；具体模型由生图模块提供",
+            defaultValue = "anime",
+            options = listOf(
+                SettingOption("anime", "二次元 / 动漫（推荐）"),
+                SettingOption("illustration", "插画 / 厚涂"),
+                SettingOption("realistic", "写实 / 真人"),
+                SettingOption("pixel", "像素风"),
+                SettingOption("3d", "3D / 卡通渲染"),
+            ),
+        )
+    )
+    add(
+        SettingField(
             key = "ig.nsfw",
             type = FieldType.SWITCH,
             title = "NSFW 内容过滤",
@@ -323,6 +357,41 @@ private fun buildParameterFields(mode: ImageGenMode): List<SettingField> = build
             defaultValue = true,
         )
     )
+}
+
+/** 后端选择卡：选中态用 PRIMARY_CONTAINER，B2 缺依赖时整体置灰但仍可点选查看说明。 */
+@Composable
+private fun BackendChoiceCard(
+    label: String,
+    shortDesc: String,
+    supportedSd: String,
+    dependencyLabel: String,
+    depMissing: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val tone = if (selected) UnifiedCardTone.PRIMARY_CONTAINER else UnifiedCardTone.SURFACE
+    val contentColor = if (selected) Colors.onPrimaryContainer else Colors.onSurface
+    val secondaryColor = if (selected) Colors.onPrimaryContainer else Colors.onSurfaceVariant
+    UnifiedCard(
+        tone = tone,
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (depMissing && !selected) 0.55f else 1f)
+            .clickable(onClick = onClick),
+    ) {
+        Column(Modifier.padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing12)) {
+            Text(text = label, style = Type.titleMedium, color = contentColor, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.size(DesignTokens.spacing4))
+            Text(text = shortDesc, style = Type.bodySmall, color = secondaryColor)
+            Spacer(Modifier.size(DesignTokens.spacing4))
+            Text(text = "模型：$supportedSd　·　依赖：$dependencyLabel", style = Type.labelSmall, color = secondaryColor)
+            if (depMissing) {
+                Spacer(Modifier.size(DesignTokens.spacing4))
+                Text(text = "⚠ 缺少 C=MNN 框架模块，选此后端前需先安装（必选依赖）", style = Type.labelSmall, color = Colors.error)
+            }
+        }
+    }
 }
 
 private fun buildCurrentValues(ui: ImageGenViewModel.UiState): Map<String, Any> = ui.params

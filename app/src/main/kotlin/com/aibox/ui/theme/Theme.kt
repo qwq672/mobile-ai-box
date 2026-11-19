@@ -205,11 +205,13 @@ private fun schemeFromSeed(seed: Color, dark: Boolean): ColorScheme {
  *    不被中性化。
  *
  * surfaceTint 归零为 transparent，避免滚动 TopAppBar / NavigationBar 叠加 tint 后又泛出主色。
- * [seed] 由调用方保证非 null（中性主题下若 accentColor=dynamic，回退到默认蓝）。
+ *
+ * 点缀色固定取 [SeedBlue] 的色相——中性主题是「固定黑白主题」，用户不可选配色，
+ * 因此这里刻意不接收外部 seed；红色仍保留给 error / 停止按钮语义，绝不被中性化。
  */
-private fun neutralColorScheme(seed: Color, dark: Boolean): ColorScheme {
+private fun neutralColorScheme(dark: Boolean): ColorScheme {
     val hsl = FloatArray(3)
-    androidx.core.graphics.ColorUtils.colorToHSL(seed.toArgb(), hsl)
+    androidx.core.graphics.ColorUtils.colorToHSL(SeedBlue.toArgb(), hsl)
     val h = hsl[0]
     val s = hsl[1].coerceIn(0.35f, 0.85f) // 点缀色保底饱和度，避免灰扑扑
 
@@ -303,9 +305,9 @@ fun AIBoxTheme(
     val context = LocalContext.current
     val seed = parseSeedColor(accentColor)
     val colorScheme = when {
-        // 中性/黑白主题最高优先级：强制忽略动态取色，彻底脱离 MD3 tonal 配色。
-        // 强调色若仍是 "dynamic"（无 seed），回退到默认蓝作为点缀色来源。
-        neutralTheme -> neutralColorScheme(seed ?: SeedBlue, darkTheme)
+        // 中性/黑白主题最高优先级：强制忽略动态取色与用户主色调，彻底脱离 MD3 tonal 配色。
+        // 点缀色固定为 SeedBlue（配色不可选），保证中性主题观感恒定。
+        neutralTheme -> neutralColorScheme(darkTheme)
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }

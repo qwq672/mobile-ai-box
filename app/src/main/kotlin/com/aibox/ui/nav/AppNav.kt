@@ -96,6 +96,7 @@ import com.aibox.ui.tool.ToolSettingsScreen
 import com.aibox.ui.modules.ModulesScreen
 import com.aibox.ui.benchmark.BenchmarkScreen
 import com.aibox.ui.imagegen.ImageGenScreen
+import com.aibox.ui.backup.DataManagementScreen
 
 sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     // E 主页 Hybrid：Home 作为新启动路由；Chat 保留为子页面（从 Home 进入）
@@ -141,6 +142,8 @@ sealed class Dest(val route: String, val label: Int, val icon: ImageVector) {
     data object ResetSettings : Dest("reset_settings", R.string.nav_settings, Icons.Outlined.RestartAlt)
     // 网络下载模型（搜索 / 选量化 / 下载）
     data object NetworkDownload : Dest("network_download", R.string.nav_models, Icons.Outlined.CloudDownload)
+    // 数据导入与导出（备份对话/云端模型/设置/图片；导入 DeepSeek / ChatGPT / 本软件备份）
+    data object DataManagement : Dest("data_management", R.string.nav_settings, Icons.Outlined.Settings)
 }
 
 /** 抽屉菜单项（不含 History，History 是独立入口） */
@@ -487,8 +490,12 @@ private fun MainNav() {
                             }
                         },
                         onOpenInferenceParams = { nav.navigate(Dest.InferenceParams.route) },
-                        onOpenReset = { nav.navigate(Dest.ResetSettings.route) }
+                        onOpenReset = { nav.navigate(Dest.ResetSettings.route) },
+                        onOpenDataManagement = { nav.navigate(Dest.DataManagement.route) }
                     )
+                }
+                composable(Dest.DataManagement.route) {
+                    DataManagementScreen(onBack = { nav.popBackStack() })
                 }
                 composable(Dest.Search.route) {
                     SearchScreen(

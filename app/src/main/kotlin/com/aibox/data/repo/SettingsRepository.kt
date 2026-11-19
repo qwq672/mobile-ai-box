@@ -4,8 +4,11 @@ import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aibox.domain.cloud.CloudConfig
 import com.aibox.domain.inference.BackendType
@@ -14,6 +17,7 @@ import com.aibox.util.log.LogSystem
 import com.aibox.util.security.CloudKeyCipher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
@@ -345,6 +349,56 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.CHOICES_BETA] = on }
 
     // ===================================================
+    // 数据导出 / 导入（通用按值类型编解码，自动覆盖新增 key）
+    // ===================================================
+
+    /**
+     * 导出本 DataStore 全部设置为可序列化的字符串映射。
+     * 按 Preferences 值的实际类型加标记（b/i/l/f/s/ss），导入时据此还原，
+     * 这样以后新增 key 无需改这里。敏感项（各类 API Key）一律不导出。
+     */
+    suspend fun exportAll(): Map<String, com.aibox.data.backup.SettingValue> =
+        context.dataStore.data.map { prefs ->
+            prefs.asMap().mapNotNull { (key, value) ->
+                if (key.name in SENSITIVE_KEY_NAMES) return@mapNotNull null
+                val encoded = when (value) {
+                    is Boolean -> "b" to value.toString()
+                    is Int -> "i" to value.toString()
+                    is Long -> "l" to value.toString()
+                    is Float -> "f" to value.toString()
+                    is String -> "s" to value
+                    is Set<*> -> "ss" to value.joinToString("\u0001")
+                    else -> return@mapNotNull null
+                }
+                key.name to com.aibox.data.backup.SettingValue(encoded.first, encoded.second)
+            }.toMap()
+        }.first()
+
+    /**
+     * 导入设置：逐项按类型写回，只覆盖备份中出现的 key，不影响其余设置（追加式，不 clear）。
+     */
+    suspend fun importFrom(values: Map<String, com.aibox.data.backup.SettingValue>) {
+        context.dataStore.edit { p ->
+            values.forEach { (name, sv) ->
+                if (name in SENSITIVE_KEY_NAMES) return@forEach
+                runCatching {
+                    when (sv.type) {
+                        "b" -> p[booleanPreferencesKey(name)] = sv.value.toBoolean()
+                        "i" -> p[intPreferencesKey(name)] = sv.value.toInt()
+                        "l" -> p[longPreferencesKey(name)] = sv.value.toLong()
+                        "f" -> p[floatPreferencesKey(name)] = sv.value.toFloat()
+                        "s" -> p[stringPreferencesKey(name)] = sv.value
+                        "ss" -> p[stringSetPreferencesKey(name)] =
+                            if (sv.value.isEmpty()) emptySet()
+                            else sv.value.split("\u0001").toSet()
+                    }
+                }
+            }
+        }
+        LogSystem.info(TAG, "importFrom done: ${values.size} keys")
+    }
+
+    // ===================================================
     // 重置（按分类 / 全部）
     // ===================================================
 
@@ -402,5 +456,10 @@ class SettingsRepository(private val context: Context) {
 
     private companion object {
         const val TAG = "aibox.settings"
+
+        /** 导出时排除的敏感 key（API Key 明文/密文一律不进备份文件）。 */
+        val SENSITIVE_KEY_NAMES = setOf(
+            "cloud_api_key", "cloud_api_key_enc", "tavily_api_key", "exa_api_key"
+        )
     }
 }

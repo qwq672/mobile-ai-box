@@ -107,7 +107,9 @@ fun SettingsScreen(
     // 推理参数与采样（独立子页）
     onOpenInferenceParams: () -> Unit = {},
     // 重置设置（独立子页）
-    onOpenReset: () -> Unit = {}
+    onOpenReset: () -> Unit = {},
+    // 数据导入与导出（独立子页）
+    onOpenDataManagement: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val cfg = ui.config
@@ -173,6 +175,13 @@ fun SettingsScreen(
                             onClick = onOpenModels
                         )
                         HorizontalDivider()
+                        HorizontalDivider()
+                        QuickEntryRow(
+                            title = "数据导入与导出",
+                            subtitle = "备份对话 / 云端模型 / 设置 / 图片；导入 DeepSeek / ChatGPT / AIBox 备份",
+                            onClick = onOpenDataManagement
+                        )
+                        HorizontalDivider()
                         QuickEntryRow(
                             title = "重置设置",
                             subtitle = "按分类重置 / 重置所有设置（带确认）",
@@ -225,12 +234,27 @@ fun SettingsScreen(
                         HorizontalDivider()
                         SwitchRow(
                             title = "中性配色（黑白主题）",
-                            subtitle = "中性灰底 + 彩色点缀，脱离 MD3 配色；主题模式与主色调仍可自选",
+                            subtitle = "固定黑白灰主题 + 少量彩色点缀，配色不可选；主题模式（明/暗）仍可自选",
                             checked = ui.neutralTheme,
                             onCheckedChange = vm::onNeutralThemeChange
                         )
                         HorizontalDivider()
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        // 中性主题下配色固定，隐藏主色调/自定义色相选择，用户不可改
+                        if (ui.neutralTheme) {
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                Text(
+                                    "主色调（固定）",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    "中性主题使用固定的黑白灰底色与少量彩色点缀（停止/删除仍为红色），配色不可更改。" +
+                                        "如需自选主色调，请关闭「中性配色」。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                             Text(
                                 "主色调",
                                 style = MaterialTheme.typography.titleSmall,
@@ -238,7 +262,6 @@ fun SettingsScreen(
                             )
                             Text(
                                 when {
-                                    ui.neutralTheme -> "中性配色下强调色仅用于按钮 / 图标 / 选中态等点缀，界面底色保持中性"
                                     ui.dynamicColor -> "动态取色已开启，主色调将在关闭动态取色后生效"
                                     else -> "选一个喜欢的强调色，界面会按它推导整套配色"
                                 },
