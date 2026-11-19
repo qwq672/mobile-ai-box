@@ -131,4 +131,3 @@ enum class ImageBackend(
         "需先安装 MNN 推理框架模块（必选）",
     ),
 }
-}
