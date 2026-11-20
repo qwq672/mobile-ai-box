@@ -601,8 +601,8 @@ fun SettingsScreen(
                         DiagnosticRow("上下文", if (ui.runtimeContextMax > 0) ui.runtimeContextMax.toString() else "--")
                         if (ui.requestedKv != ui.effectiveKv && ui.effectiveKv != "unknown") {
                             Text(
-                                "KV 量化请求 ${ui.requestedKv}，实际生效 ${ui.effectiveKv}：量化 V cache 需要 FlashAttention；" +
-                                    "当前模型或后端未启用 FA，已自动降级以保证能加载。",
+                                "KV 量化请求 ${ui.requestedKv}，实际生效 ${ui.effectiveKv}：KV 量化需要 FlashAttention；" +
+                                    "当前模型或后端未启用 FA，K 与 V 整体降级为 f16 以保证能加载。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

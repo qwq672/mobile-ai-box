@@ -38,6 +38,9 @@ import org.json.JSONObject
 fun MermaidBlock(code: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var heightPx by remember(code) { mutableStateOf(160) }
+    // 渲染去重：onHeight 回传高度会改变 heightPx → 触发重组 → update 再次渲染，
+    // 形成"渲染→改高度→再渲染"的循环竞态。用 key 只在 code/主题变化时渲染。
+    var lastRenderKey by remember { mutableStateOf<String?>(null) }
 
     val isDark = isSystemInDarkTheme()
     val themeJson = remember(isDark) {
@@ -117,7 +120,16 @@ fun MermaidBlock(code: String, modifier: Modifier = Modifier) {
                 loadDataWithBaseURL(null, pageHtml, "text/html", "utf-8", null)
             }
         },
-        update = { view: WebView -> renderMermaid(view, code, themeJson) }
+        update = { view: WebView ->
+            // factory 中的 onPageFinished 会渲染一次；这里只处理 code/主题在运行期变化的情况。
+            val key = code + "|" + themeJson
+            if (lastRenderKey == null) {
+                lastRenderKey = key
+            } else if (lastRenderKey != key) {
+                lastRenderKey = key
+                renderMermaid(view, code, themeJson)
+            }
+        }
     )
 }
 
@@ -132,40 +144,48 @@ private fun renderMermaid(view: WebView, code: String, themeJson: String) {
     val renderIdLiteral = Json.encodeToString(renderId)
     val script = """
         (function(){
-          if(typeof mermaid==='undefined'){
-            var d=document.getElementById('err');
-            if(d){d.style.display='block';d.textContent='Mermaid 引擎未加载';}
-            return;
-          }
           var c=document.getElementById('chart');
-          try{
-            mermaid.initialize({
-              startOnLoad:false, securityLevel:'strict', theme:'base',
-              themeVariables:JSON.parse($themeLiteral),
-              flowchart:{useMaxWidth:true,htmlLabels:true,curve:'basis'},
-              sequence:{useMaxWidth:true}, gantt:{useMaxWidth:true}
-            });
-            // 清空上一次结果，避免旧图残留 / svg 累加
-            if(c){c.innerHTML='';}
-            mermaid.render($renderIdLiteral, $codeLiteral).then(function(res){
-              if(!c){return;}
-              c.innerHTML=res.svg;
-              var node=c.querySelector('svg');
-              if(node){
-                node.style.maxWidth='100%';
-                node.style.height='auto';
-                if(window.AiboxHeight){
-                  window.AiboxHeight.onHeight(String(Math.ceil(node.getBoundingClientRect().height)+8));
+          var d=document.getElementById('err');
+          function hideErr(){ if(d){d.style.display='none';d.textContent='';} }
+          function showErr(msg){ if(d){d.style.display='block';d.textContent=msg;} }
+
+          // 内联 mermaid.js 可能尚未执行完：轮询等待引擎就绪（最多 ~3s），
+          // 避免误报"引擎未加载"。成功后 hideErr 清掉上一次的残留文案。
+          var tries=0;
+          function waitAndRender(){
+            if(typeof mermaid==='undefined'){
+              if(tries++ < 60){ setTimeout(waitAndRender, 50); }
+              else { showErr('Mermaid 引擎未加载'); }
+              return;
+            }
+            try{
+              mermaid.initialize({
+                startOnLoad:false, securityLevel:'strict', theme:'base',
+                themeVariables:JSON.parse($themeLiteral),
+                flowchart:{useMaxWidth:true,htmlLabels:true,curve:'basis'},
+                sequence:{useMaxWidth:true}, gantt:{useMaxWidth:true}
+              });
+              if(c){c.innerHTML='';}
+              mermaid.render($renderIdLiteral, $codeLiteral).then(function(res){
+                hideErr();
+                if(!c){return;}
+                c.innerHTML=res.svg;
+                var node=c.querySelector('svg');
+                if(node){
+                  node.style.maxWidth='100%';
+                  node.style.height='auto';
+                  if(window.AiboxHeight){
+                    window.AiboxHeight.onHeight(String(Math.ceil(node.getBoundingClientRect().height)+8));
+                  }
                 }
-              }
-            }).catch(function(e){
-              var d=document.getElementById('err');
-              if(d){d.style.display='block';d.textContent='图表语法错误：'+(e&&e.message?e.message:e);}
-            });
-          }catch(t){
-            var d=document.getElementById('err');
-            if(d){d.style.display='block';d.textContent='渲染失败：'+(t&&t.message?t.message:t);}
+              }).catch(function(e){
+                showErr('图表语法错误：'+(e&&e.message?e.message:e));
+              });
+            }catch(t){
+              showErr('渲染失败：'+(t&&t.message?t.message:t));
+            }
           }
+          waitAndRender();
         })();
     """.trimIndent()
     view.evaluateJavascript(script, null)

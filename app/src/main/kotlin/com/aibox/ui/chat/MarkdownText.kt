@@ -215,19 +215,26 @@ fun MarkdownText(
                 }
 
                 is MdBlock.Mermaid -> {
+                    val isMindmap = block.code.trimStart()
+                        .startsWith("mindmap", ignoreCase = true)
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         color = codeBg,
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Column(Modifier.padding(8.dp)) {
-                            Text(
-                                "mermaid",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
-                            )
-                            MermaidBlock(block.code)
+                            if (isMindmap) {
+                                // 思维导图：自研 Canvas 渲染，离线、无 WebView 竞态、无外链脚本。
+                                MindMapCanvas(block.code)
+                            } else {
+                                Text(
+                                    "mermaid",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+                                )
+                                MermaidBlock(block.code)
+                            }
                         }
                     }
                 }
@@ -569,24 +576,34 @@ private fun MdTable(block: MdBlock.Table) {
     val rowBg = MaterialTheme.colorScheme.surfaceContainerLow
     val cols = maxOf(block.header.size, block.rows.maxOfOrNull { it.size } ?: 0)
 
+    // 列数较多时保留横向滚动兜底，常见 2~4 列按可用宽度均分、自动换行，避免撑破屏幕。
+    val scrollable = cols > 4
+    val containerFill = if (scrollable) Modifier else Modifier.fillMaxWidth()
+    // weight 是 RowScope 扩展，必须在 Row 的 content lambda 内调用，不能在外部构造 Modifier。
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .then(if (scrollable) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
         color = rowBg,
         shape = RoundedCornerShape(10.dp)
     ) {
-        Column {
-            Row(Modifier.background(headerBg)) {
+        Column(containerFill) {
+            Row(
+                containerFill.background(headerBg)
+            ) {
                 for (c in 0 until cols) {
+                    val cellMod = if (scrollable) {
+                        Modifier.widthIn(min = 72.dp, max = 200.dp)
+                    } else {
+                        Modifier.weight(1f)
+                    }
                     Text(
                         parseInline(block.header.getOrElse(c) { "" }, primary),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .widthIn(min = 76.dp, max = 220.dp)
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                        modifier = cellMod.padding(horizontal = 8.dp, vertical = 8.dp)
                     )
                 }
             }
@@ -594,15 +611,18 @@ private fun MdTable(block: MdBlock.Table) {
                 if (idx > 0) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 }
-                Row {
+                Row(containerFill) {
                     for (c in 0 until cols) {
+                        val cellMod = if (scrollable) {
+                            Modifier.widthIn(min = 72.dp, max = 200.dp)
+                        } else {
+                            Modifier.weight(1f)
+                        }
                         Text(
                             parseInline(row.getOrElse(c) { "" }, primary),
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier
-                                .widthIn(min = 76.dp, max = 220.dp)
-                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                            modifier = cellMod.padding(horizontal = 8.dp, vertical = 7.dp)
                         )
                     }
                 }
@@ -700,6 +720,33 @@ private fun parseInline(src: String, primary: Color): AnnotatedString = buildAnn
         }
     }
 
+    // CommonMark 规则：'_' 作为强调标记不能出现在单词内部
+    // （两侧均为字母/数字时视为普通字符），'*' 无此限制。
+    // 否则 q8_0 / q4_0 这类量化名会被误配对成斜体、吞掉下划线。
+    fun isWordChar(c: Char) = c.isLetterOrDigit()
+
+    fun canOpen(marker: String, pos: Int): Boolean {
+        if (marker[0] == '*') return true
+        return !(pos > 0 && isWordChar(src[pos - 1]))
+    }
+
+    fun canClose(marker: String, pos: Int): Boolean {
+        if (marker[0] == '*') return true
+        val after = pos + marker.length
+        return !(after < src.length && isWordChar(src[after]))
+    }
+
+    fun findClosing(marker: String, from: Int): Int {
+        var p = from
+        while (p < src.length) {
+            val found = src.indexOf(marker, p)
+            if (found < 0) return -1
+            if (canClose(marker, found)) return found
+            p = found + marker.length
+        }
+        return -1
+    }
+
     var i = 0
     while (i < src.length) {
         when {
@@ -717,7 +764,7 @@ private fun parseInline(src: String, primary: Color): AnnotatedString = buildAnn
             // 加粗
             src.startsWith("**", i) || src.startsWith("__", i) -> {
                 val marker = src.substring(i, i + 2)
-                val end = src.indexOf(marker, i + 2)
+                val end = if (canOpen(marker, i)) findClosing(marker, i + 2) else -1
                 if (end > i + 2) {
                     flush()
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
@@ -762,8 +809,8 @@ private fun parseInline(src: String, primary: Color): AnnotatedString = buildAnn
             }
             // 斜体
             src[i] == '*' || src[i] == '_' -> {
-                val marker = src[i]
-                val end = src.indexOf(marker, i + 1)
+                val marker = src[i].toString()
+                val end = if (canOpen(marker, i)) findClosing(marker, i + 1) else -1
                 if (end > i + 1) {
                     flush()
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {

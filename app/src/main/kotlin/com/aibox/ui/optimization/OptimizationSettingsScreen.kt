@@ -179,7 +179,7 @@ fun OptimizationSettingsScreen(
                             Modifier.padding(vertical = DesignTokens.spacing8)
                         )
                         Text(
-                            "虚拟 NPU 会话（大模型加载）",
+                            "NPU 虚拟设备 / 分片（大模型加载）",
                             style = Type.titleSmall,
                             color = com.aibox.ui.theme.Colors.onSurface
                         )
@@ -202,8 +202,8 @@ fun OptimizationSettingsScreen(
                                 field = SettingField(
                                     key = "opt.htpSessionCount",
                                     type = FieldType.SLIDER,
-                                    title = "会话数量",
-                                    description = "手动指定虚拟会话数；越多能装下越大的模型，但跨会话开销更高",
+                                    title = "虚拟设备数量",
+                                    description = "手动指定虚拟设备/分片数；越多能装下越大的模型，但跨设备访问开销更高",
                                     defaultValue = settings.htpSessionCount,
                                     min = 1,
                                     max = 8,
@@ -214,9 +214,10 @@ fun OptimizationSettingsScreen(
                             )
                         }
                         Text(
-                            "自动：按模型体积决定会话数（>3.5GB 自动拆分，推荐）。" +
-                                "关闭：只用单个会话。加载时生效，改完需重新加载模型。" +
-                                "仅 Hexagon NPU 后端有效，其他后端无影响。",
+                            "这里的“虚拟设备/分片”是把 Hexagon 的 IOVA 地址账本拆开，用于加载更大的模型；" +
+                                "它不是对话上下文窗口，不会增加单次可读的上下文长度。" +
+                                "自动：按模型体积决定分片数（>3.5GB 自动拆分，推荐）；关闭：只用单个设备。" +
+                                "加载时生效，改完需重新加载模型。仅 Hexagon NPU 后端有效。",
                             style = Type.labelSmall,
                             color = com.aibox.ui.theme.Colors.onSurfaceVariant
                         )

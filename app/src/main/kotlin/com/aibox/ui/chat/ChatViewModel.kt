@@ -123,6 +123,13 @@ class ChatViewModel : ViewModel() {
     private val chatRepo: ChatRepository get() = container.chatRepository
 
     /**
+     * 推理链路专用作用域：应用级，脱离 ViewModel 生命周期。
+     * 页面被回收（切后台久置 / 导航销毁）时 viewModelScope 会取消，
+     * 导致正在生成的回复"中途停止"。用本作用域可让本轮生成 + 落库跑完。
+     */
+    private val inferenceScope get() = container.inferenceScope
+
+    /**
      * 工具调用流程管理器（B6 工具调用 UI）。
      *
      * 由 ChatViewModel 持有，用 [viewModelScope] 作协程作用域；
@@ -501,10 +508,12 @@ class ChatViewModel : ViewModel() {
         // 新一轮开始：清掉上一轮遗留的工具调用卡片（进行中的会保留）
         toolInvocationViewModel.clearHistory()
 
-        viewModelScope.launch {
+        inferenceScope.launch {
             // 用户消息先落库并等待完成，再做推理。旧实现用独立 launch fire-and-forget，
             // 进程在 launch 执行前被回收时这条消息就永久丢失（"对话随时间消失"的主因之一）。
             // 现在与推理在同一协程顺序执行：写入完成后才 generate，保证用户消息必已持久化。
+            // 用 inferenceScope（应用级）而非 viewModelScope：切后台导致页面销毁时，
+            // 本轮生成不会被取消，回复生成完后继续落库，不丢。
             runCatching { chatRepo.addMessage(sid, msg) }
                 .onSuccess { newId -> setPersistedId(msg.ts, msg.role, msg.content, newId) }
                 .onFailure { LogSystem.error("aibox.ui.chat", "ChatVM: persist user msg failed", it) }
@@ -581,7 +590,7 @@ class ChatViewModel : ViewModel() {
         // emit 在 Main 作用域按固定节奏把「已揭示前缀」推给 UI，把 NPU 上顿挫的出字铺平。
         val typewriter: StreamTypewriter? = if (!reduceMotion) {
             StreamTypewriter(
-                scope = viewModelScope,
+                scope = inferenceScope,
                 emit = { revealed ->
                     val current = if (revealed.length > baseLen) revealed.substring(baseLen) else ""
                     _ui.value = _ui.value.copy(

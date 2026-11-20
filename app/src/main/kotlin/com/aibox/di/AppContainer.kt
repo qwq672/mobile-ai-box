@@ -288,6 +288,19 @@ class AppContainer(context: Context) {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default
     )
 
+    /**
+     * 推理作用域：应用级 + Main 调度，脱离 ViewModel 生命周期。
+     *
+     * 聊天页被系统回收 / 用户切到后台导致 ViewModel onCleared 时，
+     * viewModelScope 会被取消，正在进行的生成随之停止（"后台回复中途就停"）。
+     * 把"落库 → 生成 → 落库"这条链放到本作用域，即使页面销毁也能跑完并写库；
+     * 用户下次进入会话时消息已完整落库，不丢回复。
+     * 推理本身是阻塞 JNI，在 CpuBackend 内部用 Dispatchers.Default 执行，不阻塞 Main。
+     */
+    val inferenceScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate
+    )
+
     init {
         // 安全模式：上一次启动 ANR/崩溃，本次只保证 UI 能起来，
         // 不做云端恢复、插件绑定、设备探测等可能拖慢启动的工作。

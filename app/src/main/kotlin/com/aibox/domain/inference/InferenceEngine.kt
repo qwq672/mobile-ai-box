@@ -335,8 +335,17 @@ class InferenceEngine(
             wakeLock = pm?.newWakeLock(
                 android.os.PowerManager.PARTIAL_WAKE_LOCK,
                 "aibox:infer"
-            )?.apply { acquire(60_000) } // 60 秒超时，避免泄漏
+            )?.apply {
+                // 10 分钟兜底：端侧一次回复通常几分钟内完成。相比原来的 60s，
+                // 长回复/慢 NPU 不会被 doze 冻结导致中途停止；finally 里会 release，不泄漏。
+                acquire(10 * 60 * 1000L)
+            }
         } catch (_: Throwable) {}
+
+        // 前台服务：切后台/息屏时提升进程优先级，避免被系统回收导致回复中断。
+        if (appContext != null) {
+            com.aibox.infra.inference.InferenceForegroundService.start(appContext!!)
+        }
 
         // 提升线程优先级
         val oldPriority = try {
@@ -351,7 +360,10 @@ class InferenceEngine(
         } finally {
             gpuGuard.onInferenceEnd(effectiveBackend)
             try { android.os.Process.setThreadPriority(oldPriority) } catch (_: Throwable) {}
-            try { wakeLock?.release() } catch (_: Throwable) {}
+            try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Throwable) {}
+            if (appContext != null) {
+                com.aibox.infra.inference.InferenceForegroundService.stop(appContext!!)
+            }
         }
     }
 
@@ -363,16 +375,18 @@ class InferenceEngine(
     /**
      * 系统内存紧张回调（由 Application.onTrimMemory 转发）。
      *
-     * - RUNNING_LOW 及以上：中断正在生成的请求，避免继续吃内存被直接杀进程
-     * - RUNNING_CRITICAL：额外释放内存池缓存
+     * 后台保活：切到后台时系统会频繁发 RUNNING_LOW，如果在这里 interrupt，
+     * 就会出现"后台 AI 回复中途就停了"。现在改为：
+     * - 任何 level 都不再主动中断正在进行的推理（推理期间有前台服务 + WakeLock 保活）；
+     * - 仅在 CRITICAL 时释放"非活跃"的内存池缓存，不碰正在加载的模型/生成中的张量。
+     * 真正扛不住时由系统回收，下次启动靠 GpuGuard / CrashHandler 识别并降级。
      */
     fun onTrimMemory(level: Int) {
-        LogSystem.warn("aibox.memory", "onTrimMemory(level=$level)")
-        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            interrupt()
-        }
+        LogSystem.warn("aibox.memory", "onTrimMemory(level=$level, 不中断推理)")
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
-            runCatching { memoryOptimizer.releaseAll() }
+            // 只收缩空闲 KV cache（keepTokens 保留最近上下文），不释放正在使用的内存，
+            // 也不会中断生成。这样既回收了大头内存，又不丢当前回复。
+            runCatching { memoryOptimizer.shrinkIfIdle(0L, 512) }
         }
     }
 

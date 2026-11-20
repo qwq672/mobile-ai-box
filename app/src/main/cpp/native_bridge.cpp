@@ -334,10 +334,17 @@ Java_com_aibox_infra_jni_NativeBridge_npuType(JNIEnv* env, jclass) {
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_aibox_infra_jni_NativeBridge_openclAvailable(JNIEnv*, jclass) {
-#if defined(POCKET_OPENCL)
-    void* h = dlopen("libOpenCL.so", RTLD_NOW | RTLD_LOCAL);
-    if (h) { dlclose(h); return JNI_TRUE; }
-#endif
+    // 只有「驱动」和「ggml backend」两者都在才报可用：
+    //  - libOpenCL.so      由 GPU 驱动提供（运行时 dlopen）
+    //  - libggml-opencl.so 必须编进 APK（普通 CI 包未编入，此时选 OpenCL 会回退 CPU）
+    // 原来只探测驱动就返回 true，导致 UI 误报可用、用户选了却静默回退 CPU。
+    void* driver = dlopen("libOpenCL.so", RTLD_NOW | RTLD_LOCAL);
+    if (!driver) return JNI_FALSE;
+    dlclose(driver);
+
+    // app 自带 so 位于系统搜索路径，直接按 soname 探测 backend 是否已编进 APK。
+    void* backend = dlopen("libggml-opencl.so", RTLD_NOW | RTLD_LOCAL);
+    if (backend) { dlclose(backend); return JNI_TRUE; }
     return JNI_FALSE;
 }
 
@@ -499,6 +506,12 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
         load_backend_lib("hexagon");
     } else if (g_backend_str == "vulkan" && !device_present("Vulkan")) {
         load_backend_lib("vulkan");
+    } else if (g_backend_str == "opencl" && !device_present("OpenCL")) {
+        // 修复：原来 OpenCL 没有加载分支，即使 openclAvailable()=true、用户选了 OpenCL，
+        // backend 也从未被 dlopen，最终静默回退 CPU。现在显式加载 libggml-opencl.so；
+        // 若该 so 未编进 APK（普通 CI 包），load_backend_lib 会打日志并安全返回 null，
+        // 后续设备钉选发现没有 OpenCL 设备会自动回退 CPU，不会崩溃。
+        load_backend_lib("opencl");
     }
     dump_backends("llamaLoad:init");
     set_last_error("");
