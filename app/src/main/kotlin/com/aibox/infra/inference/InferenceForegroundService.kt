@@ -91,7 +91,7 @@ class InferenceForegroundService : Service() {
 
     private fun stopSelfSafely() {
         try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         } catch (_: Throwable) {
         }
         stopSelf()
@@ -99,7 +99,7 @@ class InferenceForegroundService : Service() {
 
     override fun onDestroy() {
         // 兜底：无论从哪条路径结束，都确保通知被移除，不留常驻残留。
-        try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
+        try { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
         super.onDestroy()
     }
 
