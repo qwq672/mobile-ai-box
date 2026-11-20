@@ -190,6 +190,17 @@ class SettingsViewModel : ViewModel() {
                     val ctx = AIBoxApp.instance
                     val hasSkel = ctx.assets.list("hexagon")?.any { it.endsWith(".so") } == true
                     if (!hasSkel) return@withContext false
+                    // 虚拟会话 env 必须在 hexagon backend 枚举设备前设置。
+                    // 探测阶段按用户设置设置会话模式（auto 用 native 默认会话数）；
+                    // 这样 manual/off 也能在首次探测时生效，而不必等到 load。
+                    val opt = runCatching {
+                        container.optimizationSettingsRepository.settingsFlow.first()
+                    }.getOrNull()
+                    if (opt != null) {
+                        val count = if (opt.htpSessionMode == com.aibox.domain.power.HtpSessionMode.MANUAL)
+                            opt.htpSessionCount else 3
+                        runCatching { b.setHexagonNpuSessions(opt.htpSessionMode, count) }
+                    }
                     HexagonAssets.prepare(ctx)?.let { b.setAdspLibraryPath(it) }
                     b.npuAvailable()
                 }

@@ -132,12 +132,43 @@ static bool g_hybrid_arch = false;
 // 显式传进来，按需加载对应后端。
 static std::string g_native_lib_dir;
 
+// Hexagon 虚拟会话配置（全局状态）。
+// ggml-hexagon 在 backend 首次加载(load_backend_lib("hexagon"))时读取
+// GGML_HEXAGON_DEVICES 并固化 HTP 设备列表，之后 setenv 无效。因此必须在任何
+// 可能触发 hexagon 加载的入口(npuAvailable 探测 / llamaLoad)之前应用会话 env。
+// Kotlin 侧通过 setHexagonNpuSessions 更新这两个值；默认值 auto/3 覆盖到 9B Q4_0。
+static std::string g_hex_session_mode = "auto";
+static int g_hex_session_count = 3;
+
+/** 按当前全局会话配置写/清 ggml-hexagon 环境变量。可重复调用，幂等。 */
+static void apply_hexagon_session_env() {
+    bool enable = (g_hex_session_mode == "auto" || g_hex_session_mode == "manual");
+    int n = g_hex_session_count < 1 ? 1 : (g_hex_session_count > 8 ? 8 : g_hex_session_count);
+    if (!enable || n <= 1) {
+        unsetenv("GGML_HEXAGON_DEVICES");
+        unsetenv("GGML_HEXAGON_NDEV");
+        unsetenv("GGML_HEXAGON_OPPOLL");
+        return;
+    }
+    std::string devices = "HTP0:0";
+    for (int i = 1; i < n; ++i) devices += ",HTP0:" + std::to_string(i);
+    setenv("GGML_HEXAGON_DEVICES", devices.c_str(), 1);
+    setenv("GGML_HEXAGON_OPPOLL", "1", 1);
+    char ndev[8];
+    snprintf(ndev, sizeof(ndev), "%d", n);
+    setenv("GGML_HEXAGON_NDEV", ndev, 1);
+    LOGI("apply_hexagon_session_env: mode=%s count=%d -> %s",
+         g_hex_session_mode.c_str(), n, devices.c_str());
+}
+
 // 按完整路径加载 ggml 后端 .so，并打印结果。
 static ggml_backend_reg_t load_backend_lib(const char* name) {
     if (g_native_lib_dir.empty()) {
         LOGI("load_backend_lib(%s): nativeLibraryDir 未设置", name);
         return nullptr;
     }
+    // hexagon backend 加载即固化设备列表；加载前先应用会话 env（幂等）。
+    if (std::strcmp(name, "hexagon") == 0) apply_hexagon_session_env();
     std::string path = g_native_lib_dir + "/libggml-" + name + ".so";
     if (access(path.c_str(), F_OK) != 0) {
         LOGI("load_backend_lib(%s): 不存在 %s", name, path.c_str());
@@ -374,32 +405,12 @@ Java_com_aibox_infra_jni_NativeBridge_setHexagonNpuSessions(
     std::string mode_str = mode ? mode : "off";
     if (mode) env->ReleaseStringUTFChars(jmode, mode);
 
-    bool enable = (mode_str == "auto" || mode_str == "manual");
-    int n = count < 1 ? 1 : count;
-    if (n > 8) n = 8;  // HTP0:0..HTP0:7，防止端口越界
-
-    if (!enable || n <= 1) {
-        // 关闭额外虚拟会话：显式移除，避免上一次加载残留的诊断变量干扰
-        unsetenv("GGML_HEXAGON_DEVICES");
-        unsetenv("GGML_HEXAGON_NDEV");
-        LOGI("setHexagonNpuSessions: mode=%s -> single session (HTP0:0 default)", mode_str.c_str());
-        return;
-    }
-
-    // 单物理 NPU（SM8650 只有一块 Hexagon）上的多个虚拟会话，用 HTP0:<session> 命名。
-    // 多个物理 NPU 的板卡（IQ9/IQ10）才会用到 HTP1，手机场景固定 HTP0。
-    std::string devices = "HTP0:0";
-    for (int i = 1; i < n; ++i) {
-        devices += ",HTP0:" + std::to_string(i);
-    }
-    setenv("GGML_HEXAGON_DEVICES", devices.c_str(), 1);
-    // OPPOLL=1 让多会话走异步 poll，避免 dspqueue 忙等导致 host 挂起（上游 issue #30309 的规避）
-    setenv("GGML_HEXAGON_OPPOLL", "1", 1);
-    char ndev[8];
-    snprintf(ndev, sizeof(ndev), "%d", n);
-    setenv("GGML_HEXAGON_NDEV", ndev, 1);
-    LOGI("setHexagonNpuSessions: mode=%s count=%d -> GGML_HEXAGON_DEVICES=%s",
-         mode_str.c_str(), n, devices.c_str());
+    g_hex_session_mode = mode_str;
+    g_hex_session_count = count;
+    apply_hexagon_session_env();
+    LOGI("setHexagonNpuSessions: mode=%s count=%d (applied to env; "
+         "若 hexagon 已加载则下次启动生效)",
+         g_hex_session_mode.c_str(), g_hex_session_count);
 }
 
 // ---------- 架构检测 ----------
