@@ -112,20 +112,27 @@ fun MarkdownText(
     // （逐块正则、建 AnnotatedString），长文本后段会明显掉帧、发热。流式时直接纯文本直出，
     // 等生成结束（streaming=false）再切回完整 Markdown 解析。
     if (streaming) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                text = text,
-                color = color,
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontSize = baseFontSize.sp,
-                    lineHeight = lineHeight.sp
-                ),
-                modifier = modifier.weight(1f, fill = true)
-            )
-            if (showCaret) {
-                BreathingCaret(color = color)
+        // 呼吸光标直接拼在文字尾部：整段是一个 Text，光标随文字一起折行，
+        // 永远落在“最后一个字”之后。之前用 Row + Text(weight(1f,fill=true)) + 独立光标，
+        // weight 把文本撑满整行，光标被顶到“行尾”，看起来像在输入框末尾而不是文字末尾。
+        val shown: AnnotatedString = if (showCaret) {
+            val caretAlpha = rememberCaretAlpha()
+            buildAnnotatedString {
+                append(text)
+                withStyle(SpanStyle(color = color.copy(alpha = caretAlpha))) { append("▌") }
             }
+        } else {
+            AnnotatedString(text)
         }
+        Text(
+            text = shown,
+            color = color,
+            style = MaterialTheme.typography.bodyLarge.copy(
+                fontSize = baseFontSize.sp,
+                lineHeight = lineHeight.sp
+            ),
+            modifier = modifier.fillMaxWidth()
+        )
         return
     }
     val blocks = remember(text, choicesEnabled) { parseBlocks(text, choicesEnabled, false) }
@@ -348,9 +355,9 @@ fun MarkdownText(
     }
 }
 
-/** 流式文本末尾的呼吸光标：█ 在 1f↔0.15f 之间缓慢明灭，表明“还在写”。 */
+/** 呼吸光标的透明度：█ 在 1f↔0.15f 之间缓慢明灭，表明“还在写”。 */
 @Composable
-private fun BreathingCaret(color: Color) {
+private fun rememberCaretAlpha(): Float {
     val alpha by rememberInfiniteTransition(label = "caret").animateFloat(
         initialValue = 1f,
         targetValue = 0.15f,
@@ -360,12 +367,7 @@ private fun BreathingCaret(color: Color) {
         ),
         label = "caretAlpha"
     )
-    Text(
-        text = "▌",
-        color = color.copy(alpha = alpha),
-        style = MaterialTheme.typography.bodyLarge,
-        modifier = Modifier.padding(start = 1.dp)
-    )
+    return alpha
 }
 
 /* ---------------- 块级解析 ---------------- */
@@ -666,11 +668,17 @@ fun ThinkingSection(thinking: String, streaming: Boolean) {
                         .background(dim.copy(alpha = 0.25f))
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(
-                    thinking,
-                    style = MaterialTheme.typography.bodySmall,
+                // 思考正文也走 MarkdownText：标题/列表/加粗/行内代码/围栏代码块等都能渲染。
+                // 复用 streaming 轻量路径（生成中纯文本直出、结束再全解析），避免逐 token
+                // 重解析长思考内容；字号比正文略小，沿用 dim 色与淡竖线。
+                MarkdownText(
+                    text = thinking,
                     color = dim,
-                    lineHeight = 19.sp
+                    baseFontSize = 13,
+                    lineHeight = 19,
+                    streaming = streaming,
+                    choicesEnabled = false,
+                    showCaret = false
                 )
             }
         }
