@@ -82,11 +82,14 @@ class BackupRepository(private val context: Context) {
         when (format) {
             AiboxBackup.FORMAT -> importAibox(trimmed)
             else -> {
-                // 非本软件格式：逐个尝试第三方解析器，取解析出会话最多的那个
-                val cg = ExternalChatParser.parse(trimmed, ExternalChatParser.Source.CHATGPT)
-                val ds = ExternalChatParser.parse(trimmed, ExternalChatParser.Source.DEEPSEEK)
-                val best = if (cg.conversations.size >= ds.conversations.size) cg else ds
-                importExternal(best.conversations, best.warnings)
+                // 非本软件格式：先按特征字段轻量探测来源，只解析一次。
+                // 此前「ChatGPT / DeepSeek 各 parse 一遍取最大」会在大文件上构造两棵完整
+                // JSON 树导致 OOM；detectSource 只扫前几个 node，开销恒定。
+                val source = ExternalChatParser.detectSource(trimmed)
+                val parsed = source?.let { ExternalChatParser.parse(trimmed, it) }
+                    ?: runCatching { ExternalChatParser.parse(trimmed, ExternalChatParser.Source.CHATGPT) }
+                        .getOrElse { ExternalChatParser.Result(emptyList()) }
+                importExternal(parsed.conversations, parsed.warnings)
             }
         }
     }

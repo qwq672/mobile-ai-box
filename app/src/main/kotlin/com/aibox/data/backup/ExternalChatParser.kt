@@ -34,6 +34,37 @@ object ExternalChatParser {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+    /**
+     * 轻量探测第三方对话来源：只解析一次 JSON，扫描前若干个 node 找特征字段，
+     * 不构造完整 mapping 树、不提取消息。用于避免「两种格式各 parse 一遍」的
+     * 双倍内存开销（大文件 OOM 主因）。
+     *
+     * 判据：
+     * - DeepSeek：node.message.fragments[]（type=REQUEST/RESPONSE）
+     * - ChatGPT：node.message.author.role + node.message.content.parts[]
+     */
+    fun detectSource(raw: String): Source? {
+        val root = runCatching { json.parseToJsonElement(raw) }.getOrNull() as? JsonArray
+            ?: return null
+        var chatgptHits = 0
+        var deepseekHits = 0
+        // 最多扫前 8 个会话、每个会话前 12 个 node，足够判定且开销恒定
+        loop@ for (convElem in root.take(8)) {
+            val mapping = (convElem as? JsonObject)?.get("mapping") as? JsonObject ?: continue@loop
+            for (nodeElem in mapping.values.take(12)) {
+                val message = (nodeElem as? JsonObject)?.get("message") as? JsonObject ?: continue
+                if (message.containsKey("fragments")) deepseekHits++
+                else if (message.containsKey("author") || message.containsKey("content")) chatgptHits++
+                if (deepseekHits > 0 || chatgptHits > 0) break@loop
+            }
+        }
+        return when {
+            deepseekHits > 0 -> Source.DEEPSEEK
+            chatgptHits > 0 -> Source.CHATGPT
+            else -> null
+        }
+    }
+
     fun parse(raw: String, source: Source): Result {
         val root = runCatching { json.parseToJsonElement(raw) }.getOrElse {
             return Result(emptyList(), listOf("JSON 解析失败：${it.message ?: "格式错误"}"))

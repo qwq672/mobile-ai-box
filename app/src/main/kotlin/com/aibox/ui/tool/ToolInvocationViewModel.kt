@@ -78,6 +78,30 @@ class ToolInvocationViewModel(
         _pendingChoice.value = null
     }
 
+    /**
+     * 供云端工具循环（经 [com.aibox.domain.tool.UiInteractionBridge]）调用：
+     * 弹选择面板并挂起等待用户回答。云端没有本地 invocationId，用合成 id 即可；
+     * 面板与回答走的还是本 ViewModel 的同一套 pendingChoice / choiceDeferred 状态机。
+     */
+    suspend fun awaitCloudChoice(request: UserChoiceRequest): UserChoiceAnswer? =
+        awaitUserChoice(
+            invocationId = "cloud-${System.currentTimeMillis()}",
+            toolDisplayName = "询问用户",
+            request = request
+        )
+
+    /** 供云端工具循环经桥接调用：弹确认面板并等待用户批准。 */
+    suspend fun awaitCloudConfirm(toolId: String, params: Map<String, Any>): Boolean {
+        val tool = toolRegistry.getTool(toolId)
+        return awaitUserConfirmation(
+            invocationId = "cloud-${System.currentTimeMillis()}",
+            toolId = toolId,
+            toolDisplayName = tool?.displayName ?: toolId,
+            toolIcon = tool?.icon ?: "🔧",
+            params = params
+        )
+    }
+
     /** 每个 invocation 关联的执行上下文（sessionId + deviceInfo），用于重试时复用。 */
     private val invocationContexts = mutableMapOf<String, InvocationContext>()
 

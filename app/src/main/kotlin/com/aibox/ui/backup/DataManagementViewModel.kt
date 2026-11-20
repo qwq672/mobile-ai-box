@@ -71,12 +71,39 @@ class DataManagementViewModel : ViewModel() {
         update { it.copy(busy = true, message = null, report = null) }
         viewModelScope.launch {
             try {
+                // 先查文件大小：超大导出（>150MB）直接拦截，避免 readText 一次性把整文件
+                // 读进堆内存导致 OOM（大文件解析 OOM 的第一道闸门）。
+                val sizeBytes = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize }
+                    }.getOrNull() ?: -1L
+                }
+                if (sizeBytes > MAX_IMPORT_BYTES) {
+                    val mb = sizeBytes / (1024 * 1024)
+                    update {
+                        it.copy(
+                            busy = false,
+                            message = "文件约 ${mb}MB，超过 ${MAX_IMPORT_MB}MB 限制，可能导致内存不足。" +
+                                "建议拆分对话导出文件后分批导入。"
+                        )
+                    }
+                    return@launch
+                }
                 val text = withContext(Dispatchers.IO) {
                     context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
                         ?: error("无法读取所选文件")
                 }
                 val report = withContext(Dispatchers.IO) { repo.import(text) }
                 update { it.copy(busy = false, report = report) }
+            } catch (t: OutOfMemoryError) {
+                // 单独捕获 OOM：这是内存不足，不是文件损坏，别误导用户。
+                LogSystem.warn(TAG, "import OOM", t)
+                update {
+                    it.copy(
+                        busy = false,
+                        message = "文件过大导致内存不足。请拆分对话导出文件后分批导入，或只导入需要的会话。"
+                    )
+                }
             } catch (t: Throwable) {
                 LogSystem.warn(TAG, "import failed: ${t.message}", t)
                 update { it.copy(busy = false, message = "导入失败：${t.message ?: "未知错误"}") }
@@ -86,5 +113,7 @@ class DataManagementViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "aibox.ui.backup"
+        private const val MAX_IMPORT_MB = 150
+        private val MAX_IMPORT_BYTES = MAX_IMPORT_MB * 1024L * 1024L
     }
 }

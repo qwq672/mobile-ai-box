@@ -14,6 +14,7 @@ import com.aibox.domain.tool.FunctionCall
 import com.aibox.domain.tool.ToolContext
 import com.aibox.domain.tool.ToolExecutor
 import com.aibox.domain.tool.ToolRegistry
+import com.aibox.domain.tool.UiInteractionBridge
 import com.aibox.domain.tool.builtin.SearchResultItem
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.ui.chat.encodeToolPartMarker
@@ -87,9 +88,17 @@ class CloudChatService(
         val tools = runCatching { toolRegistry.getActiveToolsForLLM() }
             .onFailure { LogSystem.warn(TAG, "读取工具列表失败: ${it.message}") }
             .getOrDefault(emptyList())
+        // 交互式工具（user_choice）与需要确认的高级工具，必须能在前台弹面板。
+        // domain 层拿不到 ViewModel，改从 UiInteractionBridge 取 UI 层注册的回调；
+        // 未注册（后台执行）时保持默认失败，绝不挂起。
+        val uiChoice = UiInteractionBridge.choiceHandler
+        val uiConfirm = UiInteractionBridge.confirmHandler
+            ?: { _: String, _: Map<String, Any> -> false }
         val context = ToolContext(
             sessionId = "cloud-${System.currentTimeMillis()}",
-            deviceInfo = deviceInfo()
+            deviceInfo = deviceInfo(),
+            confirmCallback = uiConfirm,
+            choiceCallback = uiChoice
         )
 
         // 附件：图片转 data URL（多模态），文本附件已在 Kotlin 侧拼进 content

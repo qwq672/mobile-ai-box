@@ -2,6 +2,7 @@ package com.aibox.ui.optimization
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -92,31 +93,38 @@ fun OptimizationSettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner),
-            contentPadding = PaddingValues(vertical = DesignTokens.spacing16),
-            verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
+            contentPadding = PaddingValues(
+                horizontal = DesignTokens.spacing4,
+                vertical = DesignTokens.spacing16
+            ),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
         ) {
             // ============== 顶部：当前实际生效 ==============
             item {
                 UnifiedSection(title = "当前生效（实际）", showTopDivider = false) {
                     androidx.compose.foundation.layout.Column(
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16),
+                        verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
                     ) {
                         Text(
                             "模型：${runtime.model.ifBlank { "未加载" }}",
-                            style = Type.bodySmall
+                            style = Type.bodyMedium
                         )
                         Text(
                             "后端：${runtime.backend.ifBlank { "--" }} · 线程：${if (runtime.threads > 0) runtime.threads else "--"} · 上下文：${if (runtime.contextMax > 0) runtime.contextMax else "--"}",
-                            style = Type.bodySmall
+                            style = Type.bodySmall,
+                            color = com.aibox.ui.theme.Colors.onSurfaceVariant
                         )
                         Text(
                             "KV：${runtime.kv} · FlashAttention：${if (runtime.flashAttn) "开" else "关"}",
-                            style = Type.bodySmall
+                            style = Type.bodySmall,
+                            color = com.aibox.ui.theme.Colors.onSurfaceVariant
                         )
                         Text(
                             "标有「加载时生效」的开关需要重新加载模型才会应用；其余开关即时生效。",
                             style = Type.labelSmall,
-                            color = com.aibox.ui.theme.Colors.onSurfaceVariant
+                            color = com.aibox.ui.theme.Colors.onSurfaceVariant,
+                            modifier = Modifier.padding(top = DesignTokens.spacing4)
                         )
                     }
                 }
@@ -126,51 +134,51 @@ fun OptimizationSettingsScreen(
             item {
                 UnifiedSection(title = "电量与性能档", showTopDivider = false) {
                     androidx.compose.foundation.layout.Column(
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16),
+                        verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
                     ) {
                         val levelText = if (powerStatus.levelKnown) "${powerStatus.level}%" else "未知"
                         Text(
                             "电量：$levelText" +
                                 (if (powerStatus.charging) "（充电中，不提示低电量）" else "") +
                                 " · 当前档位：${powerMode.label}",
-                            style = Type.bodySmall
+                            style = Type.bodyMedium
                         )
                         Text(
                             "HTP 实际档位：${com.aibox.domain.power.HtpPerfMode.label(effectiveHtp)}" +
                                 if (settings.htpPerfMode == com.aibox.domain.power.HtpPerfMode.AUTO) "（自动解析）" else "（手动）",
-                            style = Type.bodySmall
+                            style = Type.bodySmall,
+                            color = com.aibox.ui.theme.Colors.onSurfaceVariant
                         )
+                        androidx.compose.foundation.layout.FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
+                        ) {
+                            com.aibox.domain.power.HtpPerfMode.all.forEach { id ->
+                                FilterChip(
+                                    selected = settings.htpPerfMode == id,
+                                    onClick = { vm.setHtpPerfMode(id) },
+                                    label = {
+                                        Text(com.aibox.domain.power.HtpPerfMode.label(id))
+                                    }
+                                )
+                            }
+                        }
                         Text(
-                            "手动选择性能优先时，低电量只会提示，不会自动降档；充电中不提示。",
+                            "手动选择性能优先时，低电量只会提示，不会自动降档；充电中不提示。" +
+                                "性能优先会让首 token 更快，但长文生成更容易发热降速；低电量时可能加快掉电。" +
+                                "当前版本通过批大小近似该档位，接入厂商性能接口后会直接下发给 DSP。",
                             style = Type.labelSmall,
                             color = com.aibox.ui.theme.Colors.onSurfaceVariant
                         )
                     }
-                    androidx.compose.foundation.layout.Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing8),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        com.aibox.domain.power.HtpPerfMode.all.forEach { id ->
-                            FilterChip(
-                                selected = settings.htpPerfMode == id,
-                                onClick = { vm.setHtpPerfMode(id) },
-                                label = {
-                                    Text(com.aibox.domain.power.HtpPerfMode.label(id))
-                                }
-                            )
-                        }
-                    }
-                    Text(
-                        "性能优先会让首 token 更快，但长文生成更容易发热降速；低电量时可能加快掉电。" +
-                            "当前版本通过批大小近似该档位，接入厂商性能接口后会直接下发给 DSP。",
-                        style = Type.labelSmall,
-                        color = com.aibox.ui.theme.Colors.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16)
-                    )
 
-                    HorizontalDivider(Modifier.padding(vertical = DesignTokens.spacing8))
+                    HorizontalDivider(
+                        Modifier.padding(
+                            horizontal = DesignTokens.spacing16,
+                            vertical = DesignTokens.spacing8
+                        )
+                    )
 
                     UnifiedSwitch(
                         field = SettingField(

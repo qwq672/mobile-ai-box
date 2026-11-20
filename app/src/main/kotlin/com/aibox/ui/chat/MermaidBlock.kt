@@ -126,6 +126,10 @@ private fun renderMermaid(view: WebView, code: String, themeJson: String) {
     val codeLiteral = Json.encodeToString(code)
     // themeJson 本身是 JSON 文本，作为 JS 字符串再编码一次
     val themeLiteral = Json.encodeToString(themeJson)
+    // 每次渲染用唯一 id：mermaid.render() 会在 document 里临时插入同名元素，
+    // 固定 id 在同一屏多图或重组时冲突，导致第二次渲染静默失败（图不显示）。
+    val renderId = "aiboxMermaid_${System.nanoTime()}"
+    val renderIdLiteral = Json.encodeToString(renderId)
     val script = """
         (function(){
           if(typeof mermaid==='undefined'){
@@ -133,6 +137,7 @@ private fun renderMermaid(view: WebView, code: String, themeJson: String) {
             if(d){d.style.display='block';d.textContent='Mermaid 引擎未加载';}
             return;
           }
+          var c=document.getElementById('chart');
           try{
             mermaid.initialize({
               startOnLoad:false, securityLevel:'strict', theme:'base',
@@ -140,12 +145,18 @@ private fun renderMermaid(view: WebView, code: String, themeJson: String) {
               flowchart:{useMaxWidth:true,htmlLabels:true,curve:'basis'},
               sequence:{useMaxWidth:true}, gantt:{useMaxWidth:true}
             });
-            mermaid.render('aiboxMermaid', $codeLiteral).then(function(res){
-              var c=document.getElementById('chart');
+            // 清空上一次结果，避免旧图残留 / svg 累加
+            if(c){c.innerHTML='';}
+            mermaid.render($renderIdLiteral, $codeLiteral).then(function(res){
+              if(!c){return;}
               c.innerHTML=res.svg;
               var node=c.querySelector('svg');
-              if(node && window.AiboxHeight){
-                window.AiboxHeight.onHeight(String(Math.ceil(node.getBoundingClientRect().height)+8));
+              if(node){
+                node.style.maxWidth='100%';
+                node.style.height='auto';
+                if(window.AiboxHeight){
+                  window.AiboxHeight.onHeight(String(Math.ceil(node.getBoundingClientRect().height)+8));
+                }
               }
             }).catch(function(e){
               var d=document.getElementById('err');

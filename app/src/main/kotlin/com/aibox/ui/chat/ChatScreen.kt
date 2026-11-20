@@ -124,6 +124,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -1701,12 +1702,13 @@ private fun Composer(
         else MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 17.sp,
         lineHeight = 26.sp,
-        // 固定行高下 Compose 默认按行框顶部排字，单行胶囊里字母/数字会显得偏上；
-        // CJK fallback 又改变 ascent，导致输入汉字后 baseline 跳动。改为在行框内垂直居中，
-        // 并 trim 首尾，保证 ASCII/CJK 混排时基线稳定、不上下跳。
+        // 固定行高下 Compose 默认按行框顶部排字，单行胶囊里字母/数字会显得偏上。
+        // 关键：单行输入必须用 Trim.None 保留完整行框（~26sp），再在行框内 Center；
+        // 若用 Trim.Both 会把行框顶部裁掉，文字反而贴顶（截图中的「文字偏上」根因）。
+        // Alignment.Center 保证 ASCII/CJK 混排时基线稳定、不上下跳。
         lineHeightStyle = LineHeightStyle(
             alignment = LineHeightStyle.Alignment.Center,
-            trim = LineHeightStyle.Trim.Both
+            trim = LineHeightStyle.Trim.None
         )
     )
     val placeholder = if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型"
@@ -1933,14 +1935,21 @@ private fun ComposerActionButton(
     onStop: () -> Unit,
     onMic: () -> Unit
 ) {
+    // 发送按钮是主操作，必须与 composer 背景明显区分。中性主题下 primaryContainer
+    // 与 surfaceContainerLow 同为灰阶、对比不足（深色模式尤其看不清）。改为高对比中性色：
+    // 深色底 → 近白按钮 + 近黑箭头；浅色底 → 近黑按钮 + 近白箭头。判断用实际 surface 亮度，
+    // 兼容 light/dark/system 三种主题模式，且不引入任何强调色。
+    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val sendContainer = if (isDarkSurface) Color(0xFFF2F2F2) else Color(0xFF1C1C1C)
+    val sendTint = if (isDarkSurface) Color(0xFF141414) else Color(0xFFFFFFFF)
     val container = when {
         streaming -> MaterialTheme.colorScheme.errorContainer
-        canSend || enabled -> MaterialTheme.colorScheme.primaryContainer
+        canSend || enabled -> sendContainer
         else -> MaterialTheme.colorScheme.surfaceContainerHighest
     }
     val tint = when {
         streaming -> MaterialTheme.colorScheme.onErrorContainer
-        canSend || enabled -> MaterialTheme.colorScheme.onPrimaryContainer
+        canSend || enabled -> sendTint
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Box(

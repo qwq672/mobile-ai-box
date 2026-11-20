@@ -20,6 +20,7 @@ import com.aibox.domain.shortcut.PresetConfig
 import com.aibox.domain.shortcut.Shortcut
 import com.aibox.domain.shortcut.ShortcutTargetType
 import com.aibox.domain.tool.DeviceInfo
+import com.aibox.domain.tool.UiInteractionBridge
 import com.aibox.domain.tool.builtin.SearchResultItem
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.util.outcome.Outcome
@@ -175,6 +176,15 @@ class ChatViewModel : ViewModel() {
         get() = _ui.value.thinkingLevel != "off"
 
     init {
+        // 把前台 UI 回调注册进桥，让云端工具循环（CloudChatService）也能弹
+        // user_choice 选择面板 / 高级工具确认面板——此前云端路径无 callback，
+        // 调用 user_choice 必然报「当前没有可用的选择界面」。
+        UiInteractionBridge.choiceHandler = { request ->
+            toolInvocationViewModel.awaitCloudChoice(request)
+        }
+        UiInteractionBridge.confirmHandler = { toolId, params ->
+            toolInvocationViewModel.awaitCloudConfirm(toolId, params)
+        }
         viewModelScope.launch {
             settings.config.collectLatest { systemPrompt = it.systemPrompt }
         }
@@ -1111,6 +1121,14 @@ class ChatViewModel : ViewModel() {
     /** 快捷切换思考档位（顶栏菜单里用）。 */
     fun setThinkingLevel(level: String) {
         viewModelScope.launch { settings.setThinkingLevel(level) }
+    }
+
+    override fun onCleared() {
+        // 页面销毁时撤销注册的 UI 交互回调，避免云端工具循环持有已销毁的 ViewModel。
+        if (UiInteractionBridge.choiceHandler != null || UiInteractionBridge.confirmHandler != null) {
+            UiInteractionBridge.clear()
+        }
+        super.onCleared()
     }
 
     private companion object {
