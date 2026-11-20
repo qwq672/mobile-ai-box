@@ -459,6 +459,194 @@ DEPENDENCY_CONFLICT
 
 ---
 
+
+### 4.7 原生库共享与 ABC 依赖
+
+#### 4.7.1 先明确 Android 的边界
+
+- 独立 APK 默认是不同 UID、不同进程
+- 一个进程不能 dlopen 另一个 APK 私有目录里的 .so
+- 即使宿主把 C 的 .so 解压出来，也只是复制到自己的目录，不是跨进程共享同一份映射
+- 所以：**跨 APK 能共享的是能力（Binder/服务），不是 .so 代码段**
+
+因此必须区分两种运行模型：
+
+```
+Mode H：宿主进程内加载（first-party / 动态模块）
+  可以按 provider + 拓扑序 + RTLD_GLOBAL 共享同一份 .so
+
+Mode S：独立 APK / 独立进程（third-party 插件）
+  不能共享 .so；用 Binder 服务组合，或各自带一份副本
+```
+
+#### 4.7.2 Mode H：宿主进程内
+
+适用：
+
+- 模块由宿主内置或作为 dynamic feature
+- 所有模块代码在宿主进程/同一 UID
+- ModuleLoader 负责 native 加载
+
+ABC 场景：
+
+```
+A 依赖宿主 libhost.so
+B 依赖宿主 libhost.so + C 的 libC.so
+C 只依赖自己的 libC.so
+```
+
+manifest：
+
+```json
+// A
+"depends_on_libs": [
+  {"soname": "libhost.so", "provider": "host", "shared": true, "required": true}
+]
+
+// B
+"depends_on_libs": [
+  {"soname": "libhost.so", "provider": "host", "shared": true, "required": true},
+  {"soname": "libC.so", "provider": "module.c", "shared": true, "required": true}
+]
+
+// C
+"native_libs_bundled": [
+  {"soname": "libC.so", "file_name": "libC.so", "abi": "arm64-v8a", "sha256": "..."}
+],
+"depends_on_libs": [
+  {"soname": "libC.so", "provider": "module.c", "shared": true, "required": true}
+]
+```
+
+加载算法：
+
+1. 扫描所有模块，建 provider 索引：
+   - `soname -> provider (host / moduleId)`
+   - 同一 soname 多个 provider → 冲突，拒绝加载
+2. 校验每个 `depends_on_libs.provider`：
+   - `host`：文件必须在宿主 `nativeLibraryDir` 或宿主声明的 host libs 中
+   - `module.c`：C 的 manifest 必须声明 `native_libs_bundled` 包含该 soname
+3. 按拓扑序加载：
+   - 先加载宿主共享库（`libhost.so`）
+   - 再加载 C 的 `libC.so`
+   - 最后加载 A / B 自己的库
+4. 路径解析：
+   - host：`context.applicationInfo.nativeLibraryDir/<file_name>`
+   - module：从 provider APK 的 `lib/<abi>/<file_name>` 解压到宿主私有目录
+     `files/modules/native/<providerModuleId>/<abi>/<file_name>`
+   - 解压后校验 sha256，原子替换，禁止符号链接/zip-slip
+5. 加载模式：
+   - `shared=true`：`RTLD_NOW | RTLD_GLOBAL`，让后续库能解析符号
+   - `shared=false`：`RTLD_NOW | RTLD_LOCAL`
+6. 引用计数：
+   - owner = 请求加载的 moduleId
+   - B 加载 libC 时，C 也是 owner；C 先卸载时引用计数不归零
+   - 最后所有 owner 卸载才 dlclose
+7. 卸载顺序：依赖者先卸，被依赖者后卸（拓扑逆序）
+
+关键细节：
+
+- `soname` 与文件名可能不同，manifest 必须提供 `file_name`
+- B 的 `DT_NEEDED` 必须与 `soname` 一致；构建期用 `readelf -d` 校验
+- 如果 B 的 .so 直接 `DT_NEEDED libC.so`，必须先 `dlopen` C 并 `RTLD_GLOBAL`，否则链接器找不到
+- 如果 C 的 .so 还依赖别的库，要先递归加载 C 的依赖
+- JNI 库注意：raw `dlopen` 不一定触发 `JNI_OnLoad`；JNI 入口库建议走 `System.load`/`Runtime.load0`，共享依赖库可走 `dlopen`
+- Android 10+ 从可写目录 dlopen 有限制，解压目录要私有、不可写、校验 hash
+
+失败处理：
+
+- provider 缺失 → 模块不可加载
+- provider 版本不满足 → 模块不可加载
+- soname 冲突 → 拒绝同时加载
+- ABI 不匹配 → 拒绝
+- hash 不匹配 → 拒绝并清理
+- `RTLD_GLOBAL` 冲突 → 要求 manifest 修正
+
+#### 4.7.3 Mode S：独立 APK / 独立进程
+
+ABC 场景下：
+
+- A 不能直接拿到宿主的 `libhost.so`
+- B 不能 dlopen C 的 `libC.so`
+- C 只能在自己的进程加载自己的库
+
+可选方案：
+
+1. **服务组合（推荐）**
+   - 宿主暴露 `IHostNativeService`
+   - C 暴露 `ICoreNativeService`
+   - A/B 通过 Binder 调用，不链接对方的 .so
+   - 大数据用 shared memory / AHardwareBuffer / ParcelFileDescriptor
+2. **各自带副本**
+   - A 自带 host lib 的副本（注意 license/体积）
+   - B 自带 C 的副本（内存/存储翻倍）
+   - 只适合小库或临时方案
+3. **同 APK / dynamic feature**
+   - 把 A/B/C 变成宿主同一 UID 的模块
+   - 回到 Mode H，才能真正共享 .so
+4. **共享进程**
+   - `sharedUserId` 已废弃且不安全，不推荐
+
+结论：
+
+- 第三方插件不要承诺“共享 .so”
+- 应该承诺“共享能力接口”
+- 真要共享 native 运行时，就把模块收进宿主或使用 first-party 动态模块
+
+#### 4.7.4 规范字段补充
+
+`native_libs_bundled` 增加：
+
+```json
+{
+  "soname": "libC.so",
+  "file_name": "libC.so",
+  "abi": "arm64-v8a",
+  "size_bytes": 123456,
+  "sha256": "..."
+}
+```
+
+`depends_on_libs` 增加：
+
+```json
+{
+  "soname": "libC.so",
+  "file_name": "libC.so",
+  "provider": "module.c",
+  "shared": true,
+  "required": true,
+  "min_version": "1.2.0"
+}
+```
+
+规则：
+
+- `provider` 必填：`host` 或 moduleId
+- `file_name` 默认等于 soname，但允许不同
+- `required=true` 缺失 → 模块不可加载
+- `shared=true` 的库必须唯一 provider
+- `sha256` 用于解压校验
+- 构建期必须校验 `readelf -d` 的 SONAME 与 manifest 一致
+
+#### 4.7.5 测试矩阵
+
+- A 只依赖 host：通过
+- B 依赖 host + C：C 先加载，B 后加载
+- C 先卸载、B 仍持有：不 dlclose
+- B 先卸载、C 后卸载：最后 dlclose
+- provider 缺失：拒绝
+- provider 版本不满足：拒绝
+- 两个模块提供同 soname：冲突
+- ABI 不匹配：拒绝
+- hash 不匹配：拒绝并清理
+- 解压目录不可写/被篡改：拒绝
+- JNI 入口库：JNI_OnLoad 正常
+- 独立进程插件：确认不会尝试跨 APK dlopen
+
+
+---
+
 ## 5. 生命周期契约
 
 ```
