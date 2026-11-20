@@ -396,7 +396,7 @@ private fun CharacterCard(
                     ) {
                         Text(
                             text = character.emoji.ifBlank { "🙂" },
-                            style = Type.displayMedium
+                            style = Type.headingLarge
                         )
                     }
                 }
@@ -622,7 +622,7 @@ private fun CharacterEditorPage(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
                     ) {
-                        Text(text = emoji.ifBlank { "🙂" }, style = Type.displayLarge)
+                        Text(text = emoji.ifBlank { "🙂" }, style = Type.headingLarge)
                         Text(
                             text = name.ifBlank { "角色卡片预览" },
                             style = Type.titleMedium,
