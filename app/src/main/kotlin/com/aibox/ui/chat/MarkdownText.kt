@@ -1,6 +1,11 @@
 package com.aibox.ui.chat
 
 import android.graphics.BitmapFactory
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.outlined.CheckBox
@@ -99,9 +104,31 @@ fun MarkdownText(
      */
     choicesEnabled: Boolean = true,
     /** 是否仍在流式输出。流式中的未闭合 mermaid 围栏先按代码块显示，结束后再兜底渲染成图。 */
-    streaming: Boolean = false
+    streaming: Boolean = false,
+    /** 流式时在文本末尾渲染呼吸光标；减弱动态效果时传 false。 */
+    showCaret: Boolean = false
 ) {
-    val blocks = remember(text, choicesEnabled, streaming) { parseBlocks(text, choicesEnabled, streaming) }
+    // B：流式期间轻量渲染——打字机每 20ms 推进一次，若每次都跑整段 parseBlocks + parseInline
+    // （逐块正则、建 AnnotatedString），长文本后段会明显掉帧、发热。流式时直接纯文本直出，
+    // 等生成结束（streaming=false）再切回完整 Markdown 解析。
+    if (streaming) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = text,
+                color = color,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = baseFontSize.sp,
+                    lineHeight = lineHeight.sp
+                ),
+                modifier = modifier.weight(1f, fill = true)
+            )
+            if (showCaret) {
+                BreathingCaret(color = color)
+            }
+        }
+        return
+    }
+    val blocks = remember(text, choicesEnabled) { parseBlocks(text, choicesEnabled, false) }
     val primary = MaterialTheme.colorScheme.primary
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val clipboard = LocalClipboardManager.current
@@ -319,6 +346,26 @@ fun MarkdownText(
             }
         }
     }
+}
+
+/** 流式文本末尾的呼吸光标：█ 在 1f↔0.15f 之间缓慢明灭，表明“还在写”。 */
+@Composable
+private fun BreathingCaret(color: Color) {
+    val alpha by rememberInfiniteTransition(label = "caret").animateFloat(
+        initialValue = 1f,
+        targetValue = 0.15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(520),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "caretAlpha"
+    )
+    Text(
+        text = "▌",
+        color = color.copy(alpha = alpha),
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.padding(start = 1.dp)
+    )
 }
 
 /* ---------------- 块级解析 ---------------- */

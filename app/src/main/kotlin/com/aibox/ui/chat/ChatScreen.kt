@@ -203,13 +203,23 @@ fun ChatScreen(
     }
     val listItemCount = visibleMessages.size +
         (if (ui.streaming) 1 else 0) + 1 // 最后一项是底部 spacer
+    // D：区分「流式逐 token 跟随」与「新增一条消息」。前者打字机每 20ms 推进，必须瞬时跟随
+    // （动画会被反复打断反而更抖）；后者是一次性跳动，用短 tween 平滑落位。减弱动态时一律瞬时。
+    var lastKnownItemCount by remember { mutableIntStateOf(listItemCount) }
     LaunchedEffect(listItemCount, ui.currentStream.length, ui.streamParts.size) {
+        val structuralChange = listItemCount != lastKnownItemCount
+        // 无论是否真的滚动都更新基线，避免用户上滑期间跳过的变化在回到底部后误触发动画
+        lastKnownItemCount = listItemCount
         val info = listState.layoutInfo
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
         // 用户主动往上翻时不要抢滚动；在底部附近（或首次）才自动跟随
         val nearBottom = lastVisible >= info.totalItemsCount - 2
         if (listItemCount > 0 && !listState.isScrollInProgress && nearBottom) {
-            listState.scrollToItem(listItemCount - 1)
+            if (structuralChange && !ui.reduceMotion && !ui.streaming) {
+                listState.animateScrollToItem(listItemCount - 1, animationSpec = tween(180))
+            } else {
+                listState.scrollToItem(listItemCount - 1)
+            }
         }
     }
     // 错误用 snackbar
@@ -498,13 +508,16 @@ fun ChatScreen(
                                         docStyle = ui.docStyle,
                                         showActions = false,
                                         animate = true,
+                                        reduceMotion = ui.reduceMotion,
                                         choicesEnabled = ui.choicesBeta,
                                         onChoice = { vm.send(it) }
                                     )
                                 }
                             }
                             if (ui.streaming && ui.currentStream.isEmpty() && ui.streamParts.isEmpty()) {
-                                item(key = "thinking") { ThinkingIndicator(docStyle = ui.docStyle) }
+                                item(key = "thinking") {
+                                    ThinkingIndicator(docStyle = ui.docStyle, reduceMotion = ui.reduceMotion)
+                                }
                             }
                             // 让最后一条消息不被输入栏挡住
                             item(key = "bottom_spacer") { Spacer(Modifier.height(8.dp)) }
@@ -1333,7 +1346,7 @@ private fun EmptyChatState(
 }
 
 @Composable
-private fun ThinkingIndicator(docStyle: Boolean) {
+private fun ThinkingIndicator(docStyle: Boolean, reduceMotion: Boolean = false) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1341,9 +1354,21 @@ private fun ThinkingIndicator(docStyle: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        BouncingDot(delay = 0)
-        BouncingDot(delay = 120)
-        BouncingDot(delay = 240)
+        if (reduceMotion) {
+            // 减弱动态：静态三连点，不做无限循环动画
+            repeat(3) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
+        } else {
+            BouncingDot(delay = 0)
+            BouncingDot(delay = 120)
+            BouncingDot(delay = 240)
+        }
         Spacer(Modifier.width(4.dp))
         Text(
             "正在生成",
@@ -1395,6 +1420,7 @@ private fun MessageItem(
     docStyle: Boolean,
     showActions: Boolean,
     animate: Boolean = false,
+    reduceMotion: Boolean = false,
     choicesEnabled: Boolean = true,
     onCopy: () -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
@@ -1465,9 +1491,10 @@ private fun MessageItem(
                     AssistantParts(
                         parts = parts,
                         streaming = animate,
+                        reduceMotion = reduceMotion,
                         onChoice = onChoice,
                         choicesEnabled = choicesEnabled,
-                        modifier = if (animate) {
+                        modifier = if (animate && !reduceMotion) {
                             Modifier.animateContentSize(animationSpec = tween(120))
                         } else Modifier
                     )
@@ -1491,6 +1518,7 @@ private fun MessageItem(
                             AssistantParts(
                                 parts = parts,
                                 streaming = animate,
+                                reduceMotion = reduceMotion,
                                 onChoice = onChoice,
                                 choicesEnabled = choicesEnabled
                             )
@@ -1567,6 +1595,7 @@ private fun MessageItem(
 private fun AssistantParts(
     parts: List<MsgPart>,
     streaming: Boolean,
+    reduceMotion: Boolean = false,
     onChoice: (String) -> Unit,
     choicesEnabled: Boolean = true,
     modifier: Modifier = Modifier
@@ -1588,7 +1617,9 @@ private fun AssistantParts(
                         color = MaterialTheme.colorScheme.onSurface,
                         onChoice = onChoice,
                         choicesEnabled = choicesEnabled,
-                        streaming = streaming
+                        streaming = streaming,
+                        // 光标只挂在最后一段正文末尾；减弱动态时彻底关闭
+                        showCaret = streaming && !reduceMotion && index == parts.lastIndex
                     )
                 }
             }

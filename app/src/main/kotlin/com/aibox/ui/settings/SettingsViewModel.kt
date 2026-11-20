@@ -43,6 +43,8 @@ class SettingsViewModel : ViewModel() {
         val chatDocStyle: Boolean = true,
         /** 输入框回车行为：true = 回车发送，false = 回车换行（默认）。 */
         val enterToSend: Boolean = false,
+        /** 减弱动态效果：关掉打字机/光标/过渡动画（默认关闭）。 */
+        val reduceMotion: Boolean = false,
         /** Beta：aibox:choices 选项卡片（默认关闭） */
         val choicesBeta: Boolean = false,
         // 设备状态采样周期（ms），设置页可切 1s/2s/5s
@@ -142,6 +144,11 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.enterToSend.collectLatest {
                 _ui.value = _ui.value.copy(enterToSend = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.reduceMotion.collectLatest {
+                _ui.value = _ui.value.copy(reduceMotion = it)
             }
         }
         viewModelScope.launch {
@@ -356,6 +363,11 @@ class SettingsViewModel : ViewModel() {
 
     fun onEnterToSendChange(on: Boolean) {
         viewModelScope.launch { container.settingsRepository.setEnterToSend(on) }
+    }
+
+    /** 减弱动态效果开关。 */
+    fun onReduceMotionChange(on: Boolean) {
+        viewModelScope.launch { container.settingsRepository.setReduceMotion(on) }
     }
 
     /** Beta：aibox:choices 选项卡片开关。 */

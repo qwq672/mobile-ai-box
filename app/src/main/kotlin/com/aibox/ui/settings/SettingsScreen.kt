@@ -355,6 +355,13 @@ fun SettingsScreen(
                             )
                             HelpText("统一调整气泡、卡片、输入框的圆角；0.5x 更方正，1.6x 更圆润。")
                         }
+                        HorizontalDivider()
+                        SwitchRow(
+                            title = "减弱动态效果",
+                            subtitle = "关闭打字机缓冲、呼吸光标与滚动/高度动画，回复逐 token 直出；对动画敏感或追求更低功耗时建议开启",
+                            checked = ui.reduceMotion,
+                            onCheckedChange = vm::onReduceMotionChange
+                        )
                     }
                 }
             }

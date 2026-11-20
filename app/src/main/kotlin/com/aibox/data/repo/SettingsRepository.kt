@@ -93,6 +93,8 @@ class SettingsRepository(private val context: Context) {
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         // Beta：aibox:choices 选项卡片（离线小模型下容易滥用，默认关闭）
         val CHOICES_BETA = booleanPreferencesKey("choices_beta")
+        // 减弱动态效果：关掉打字机缓冲/呼吸光标/高度过渡/平滑滚动/跳跳点，默认关闭
+        val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -142,6 +144,9 @@ class SettingsRepository(private val context: Context) {
 
     /** 输入框回车行为：true = 回车发送，false = 回车换行（默认，发送走按钮）。 */
     val enterToSend: Flow<Boolean> = context.dataStore.data.map { it[Keys.ENTER_TO_SEND] ?: false }
+
+    /** 减弱动态效果：关闭打字机缓冲/光标/过渡动画，token 直出。默认关闭。 */
+    val reduceMotion: Flow<Boolean> = context.dataStore.data.map { it[Keys.REDUCE_MOTION] ?: false }
 
     /** Material You 取色 */
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.DYNAMIC_COLOR] ?: true }
@@ -284,6 +289,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setEnterToSend(on: Boolean) =
         context.dataStore.edit { it[Keys.ENTER_TO_SEND] = on }
+
+    suspend fun setReduceMotion(on: Boolean) =
+        context.dataStore.edit { it[Keys.REDUCE_MOTION] = on }
 
     // ===================================================
     // B3 WebSearchTool：第三方搜索引擎 API key

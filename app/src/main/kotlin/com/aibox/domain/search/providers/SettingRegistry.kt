@@ -160,6 +160,14 @@ object SettingRegistry {
             sectionAnchor = "appearance"
         ))
         register(SettingEntry(
+            key = "reduce_motion",
+            title = "减弱动态效果",
+            description = "关闭打字机缓冲、呼吸光标与滚动动画，回复逐 token 直出",
+            path = listOf("外观", "动态效果"),
+            screen = "settings",
+            sectionAnchor = "appearance"
+        ))
+        register(SettingEntry(
             key = "logging_enabled",
             title = "启用文件日志",
             description = "写入外部存储，便于排查问题",

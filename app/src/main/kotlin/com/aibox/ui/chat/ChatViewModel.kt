@@ -28,12 +28,16 @@ import com.aibox.ui.tool.PendingToolConfirmation
 import com.aibox.ui.tool.ToolInvocation
 import com.aibox.ui.tool.ToolInvocationViewModel
 import com.aibox.util.log.LogSystem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -53,6 +57,63 @@ private const val UI_CAPABILITY_HINT = "回复用 Markdown。"
 private const val CHOICES_BETA_HINT =
     "（Beta）只有在确实需要用户在 2~4 个方案中做选择时，才输出 ```aibox:choices 代码块：" +
         "每行一条、用用户口吻、最多 4 条；不要每轮都给选项，不要用选项代替回答。"
+
+/**
+ * 流式打字机缓冲。
+ *
+ * token 到达节奏由后端决定：云端 / CPU 很快，NPU 上 7~15 tok/s 意味着每 70~150ms 才来一个 token，
+ * 逐 token 直推 UI 会一顿一顿。这里把 token 先攒进 [target]，再由一条独立协程按固定节奏匀速
+ * 往外吐字符（默认 20ms / 3 字 ≈ 150 字/s，快于任何端侧出字速度，故只会“铺平”不会显著滞后）。
+ * [emit] 在 ViewModel 的 Main 作用域执行，安全更新 `_ui`。
+ */
+private class StreamTypewriter(
+    private val scope: CoroutineScope,
+    private val emit: (String) -> Unit,
+    private val tickMs: Long = 20L,
+    private val charsPerTick: Int = 3
+) {
+    @Volatile
+    var target: String = ""
+    private var shown = 0
+    private var job: Job? = null
+
+    fun start() {
+        if (job != null) return
+        job = scope.launch {
+            while (isActive) {
+                val t = target
+                if (shown < t.length) {
+                    shown = (shown + charsPerTick).coerceAtMost(t.length)
+                    emit(t.substring(0, shown))
+                }
+                delay(tickMs)
+            }
+        }
+    }
+
+    /**
+     * 新的一轮生成开始。[alreadyShown] 是已完成轮次的前缀长度——必须跳过它，
+     * 否则多轮工具调用时 target 含旧文本，会从 0 重新“播放”一遍旧内容，造成明显延迟。
+     */
+    fun reset(alreadyShown: Int) {
+        shown = alreadyShown
+        target = ""
+    }
+
+    /** 一轮生成结束：立刻把剩余字符补到完整，避免中间态残留 / 回退。 */
+    fun flush() {
+        val t = target
+        if (shown < t.length) {
+            shown = t.length
+            emit(t)
+        }
+    }
+
+    fun stop() {
+        job?.cancel()
+        job = null
+    }
+}
 
 class ChatViewModel : ViewModel() {
 
@@ -136,6 +197,8 @@ class ChatViewModel : ViewModel() {
         val modelName: String = "",
         /** 输入框回车行为：true = 回车发送，false = 回车换行。 */
         val enterToSend: Boolean = false,
+        /** 减弱动态效果：true = token 直出，关闭打字机缓冲 / 光标 / 过渡动画。 */
+        val reduceMotion: Boolean = false,
         val contextUsed: Int = 0,
         val contextMax: Int = 0,
         val sessionId: Long = 0,
@@ -206,6 +269,11 @@ class ChatViewModel : ViewModel() {
         viewModelScope.launch {
             settings.enterToSend.collectLatest { on ->
                 _ui.value = _ui.value.copy(enterToSend = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.reduceMotion.collectLatest { on ->
+                _ui.value = _ui.value.copy(reduceMotion = on)
             }
         }
         viewModelScope.launch {
@@ -505,9 +573,29 @@ class ChatViewModel : ViewModel() {
         var error: String? = null
         var rounds = 0
 
+        // 当前轮正文在整段显示文本里的起始下标；emit 用它把「已完成轮次」与「本轮正在生成的正文」切开，
+        // 只对后者重新 parseTimeline，避免把上一轮的工具卡/思考块重复解析。
+        var baseLen = 0
+        val reduceMotion = _ui.value.reduceMotion
+        // 打字机缓冲：非减弱动态时启用。token 从推理线程写入 target（@Volatile），
+        // emit 在 Main 作用域按固定节奏把「已揭示前缀」推给 UI，把 NPU 上顿挫的出字铺平。
+        val typewriter: StreamTypewriter? = if (!reduceMotion) {
+            StreamTypewriter(viewModelScope) { revealed ->
+                val current = if (revealed.length > baseLen) revealed.substring(baseLen) else ""
+                _ui.value = _ui.value.copy(
+                    currentStream = revealed,
+                    streamParts = parts + parseTimeline(current)
+                )
+            }
+        } else null
+        typewriter?.start()
+
         try {
             while (rounds <= MAX_TOOL_ROUNDS) {
                 val turn = StringBuilder()
+                val roundBase = rawAll.toString()
+                baseLen = roundBase.length
+                typewriter?.reset(baseLen)
                 // 刷新空闲计时：省电档靠 idleUnloadTimeout 在"真的没人用"时卸载模型省电。
                 // 若推理路径不刷新 lastActivityAt，用户即使正在聊天，也会被误判为空闲，
                 // 模型被卸载后下次发消息又要重新 mmap/预热 —— 既变慢又更耗电，与省电目标相反。
@@ -520,15 +608,20 @@ class ChatViewModel : ViewModel() {
                         if (firstTokMs == 0L) firstTokMs = System.currentTimeMillis()
                         tokCount++
                         turn.append(tok)
-                        // 流式 UI 按 ~30fps 合批更新：逐 token 触发 Compose 重组 + Markdown
-                        // 全量解析会把 CPU 一直顶在高位，明显增加发热。
-                        val now = System.currentTimeMillis()
-                        if (now - lastUiPushMs >= 33L) {
-                            lastUiPushMs = now
-                            _ui.value = _ui.value.copy(
-                                currentStream = rawAll.toString() + turn,
-                                streamParts = parts + parseTimeline(turn.toString())
-                            )
+                        if (typewriter != null) {
+                            // 打字机模式：只更新目标缓冲，UI 由独立协程匀速推进。
+                            // 注意 target 是「已揭示前缀」的全量来源，必须包含已完成轮次前缀。
+                            typewriter.target = roundBase + turn.toString()
+                        } else {
+                            // 减弱动态效果：token 直出，仅保留 ~30fps 合批以压住重组风暴。
+                            val now = System.currentTimeMillis()
+                            if (now - lastUiPushMs >= 33L) {
+                                lastUiPushMs = now
+                                _ui.value = _ui.value.copy(
+                                    currentStream = roundBase + turn,
+                                    streamParts = parts + parseTimeline(turn.toString())
+                                )
+                            }
                         }
                     },
                     onStop = { reason ->
@@ -537,6 +630,9 @@ class ChatViewModel : ViewModel() {
                         }
                     }
                 )
+                // 本轮生成结束：先把打字机缓冲区剩余字符一次性推完，确保 shown 追上 target，
+                // 否则随后写入的完整状态会被协程残留的中间态覆盖，出现文字回退/闪烁。
+                typewriter?.flush()
                 val roundText = turn.toString()
                 rawAll.append(roundText)
                 val call = if (tools.isNotEmpty()) extractToolCall(roundText) else null
@@ -602,6 +698,9 @@ class ChatViewModel : ViewModel() {
         } catch (t: Throwable) {
             LogSystem.error("aibox.ui.chat", "ChatViewModel: generate threw", t)
             error = "推理异常: ${t.message}"
+        } finally {
+            // 无论正常结束、工具多轮 break 还是异常，都要停掉打字机协程，避免泄漏 / 残留覆盖。
+            typewriter?.stop()
         }
 
         val text = parts.filter { it.kind == MsgPart.KIND_TEXT && it.text.isNotBlank() }
