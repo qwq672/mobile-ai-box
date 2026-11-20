@@ -580,13 +580,16 @@ class ChatViewModel : ViewModel() {
         // 打字机缓冲：非减弱动态时启用。token 从推理线程写入 target（@Volatile），
         // emit 在 Main 作用域按固定节奏把「已揭示前缀」推给 UI，把 NPU 上顿挫的出字铺平。
         val typewriter: StreamTypewriter? = if (!reduceMotion) {
-            StreamTypewriter(viewModelScope) { revealed ->
-                val current = if (revealed.length > baseLen) revealed.substring(baseLen) else ""
-                _ui.value = _ui.value.copy(
-                    currentStream = revealed,
-                    streamParts = parts + parseTimeline(current)
-                )
-            }
+            StreamTypewriter(
+                scope = viewModelScope,
+                emit = { revealed ->
+                    val current = if (revealed.length > baseLen) revealed.substring(baseLen) else ""
+                    _ui.value = _ui.value.copy(
+                        currentStream = revealed,
+                        streamParts = parts + parseTimeline(current)
+                    )
+                }
+            )
         } else null
         typewriter?.start()
 

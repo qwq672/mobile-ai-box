@@ -216,7 +216,8 @@ fun ChatScreen(
         val nearBottom = lastVisible >= info.totalItemsCount - 2
         if (listItemCount > 0 && !listState.isScrollInProgress && nearBottom) {
             if (structuralChange && !ui.reduceMotion && !ui.streaming) {
-                listState.animateScrollToItem(listItemCount - 1, animationSpec = tween(180))
+                // 该 Compose 版本的 animateScrollToItem 无 animationSpec 参数，用默认动画即可
+                listState.animateScrollToItem(listItemCount - 1)
             } else {
                 listState.scrollToItem(listItemCount - 1)
             }
