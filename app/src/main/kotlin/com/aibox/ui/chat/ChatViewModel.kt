@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibox.AIBoxApp
 import com.aibox.data.attach.AttachmentStore
+import com.aibox.data.db.effectiveSystemPrompt
 import com.aibox.data.model.ChatAttachment
 import com.aibox.data.model.ChatMessage
 import com.aibox.data.model.MsgPart
@@ -280,7 +281,7 @@ class ChatViewModel : ViewModel() {
                 mode = mode,
                 characterName = character?.name.orEmpty(),
                 characterEmoji = character?.emoji.orEmpty(),
-                characterSetting = character?.systemPrompt.orEmpty(),
+                characterSetting = character?.effectiveSystemPrompt().orEmpty(),
                 characterGreeting = character?.greeting.orEmpty(),
                 personaName = persona?.name.orEmpty(),
                 personaDescription = persona?.description.orEmpty()
@@ -328,7 +329,7 @@ class ChatViewModel : ViewModel() {
                 mode = MODE_ROLEPLAY,
                 characterName = c.name,
                 characterEmoji = c.emoji,
-                characterSetting = c.systemPrompt,
+                characterSetting = c.effectiveSystemPrompt(),
                 characterGreeting = c.greeting,
                 personaName = p?.name.orEmpty(),
                 personaDescription = p?.description.orEmpty()

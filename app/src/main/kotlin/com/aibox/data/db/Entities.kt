@@ -46,7 +46,7 @@ data class SessionEntity(
 data class CharacterEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
-    /** 头像 emoji（不引入图片资源，保持轻量）。 */
+    /** 头像 emoji（无图片时的兜底）。 */
     val emoji: String = "🙂",
     /** 一句话简介，列表里展示。 */
     val description: String = "",
@@ -54,9 +54,29 @@ data class CharacterEntity(
     val systemPrompt: String = "",
     /** 开场白 / 进入会话时的第一句话。 */
     val greeting: String = "",
+    /** 角色卡片图片 content URI（SAF 持久化，空串表示纯色卡片）。 */
+    val cardImageUri: String = "",
+    /** 独立头像图片 content URI；与卡片图不同时使用。 */
+    val avatarImageUri: String = "",
+    /** true=头像复用卡片图（cardImageUri），false=用 avatarImageUri。 */
+    val avatarUseCard: Boolean = true,
+    /** 角色性格（独立字段，注入 system prompt）。 */
+    val personality: String = "",
+    /** 角色所属世界观（独立字段，注入 system prompt）。 */
+    val worldview: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val lastUsedAt: Long = 0
 )
+
+/**
+ * 角色最终 system prompt：世界观 + 性格 + 角色设定按序拼接。
+ * 贪心保留旧数据：老角色这三段为空时，结果就是原来的 systemPrompt。
+ */
+fun CharacterEntity.effectiveSystemPrompt(): String = buildString {
+    if (worldview.isNotBlank()) append("世界观：").append(worldview.trim()).append('\n')
+    if (personality.isNotBlank()) append("性格：").append(personality.trim()).append('\n')
+    append(systemPrompt.trim())
+}.trim()
 
 /** 用户身份（角色扮演里的“我是谁”）。 */
 @Entity(tableName = "personas")

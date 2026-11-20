@@ -1,5 +1,10 @@
 package com.aibox.ui.roleplay
 
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -25,6 +31,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +51,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -265,6 +275,40 @@ private fun PersonaRow(
     }
 }
 
+/**
+ * 从 content URI 加载缩略位图（零第三方依赖）。
+ * 仅在 uri 非空时解码，并限制采样尺寸避免大图占内存。
+ */
+@Composable
+private fun rememberUriBitmap(uri: String): android.graphics.Bitmap? {
+    val context = LocalContext.current
+    return remember(uri) {
+        if (uri.isBlank()) {
+            null
+        } else {
+            runCatching {
+                val fd = context.contentResolver.openFileDescriptor(Uri.parse(uri), "r")
+                if (fd == null) {
+                    null
+                } else {
+                    fd.use {
+                        val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+                        BitmapFactory.decodeFileDescriptor(it.fileDescriptor, null, opts)
+                    }
+                }
+            }.getOrNull()
+        }
+    }
+}
+
+/** 角色头像来源：共用卡片图 → 独立头像图 → emoji 兜底。 */
+private fun avatarUriOf(c: CharacterEntity): String =
+    if (c.avatarUseCard) {
+        c.cardImageUri.ifBlank { c.avatarImageUri }
+    } else {
+        c.avatarImageUri.ifBlank { c.cardImageUri }
+    }
+
 @Composable
 private fun CharacterCard(
     character: CharacterEntity,
@@ -272,10 +316,31 @@ private fun CharacterCard(
     onEdit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val cardBitmap = rememberUriBitmap(character.cardImageUri)
+    val avatarUri = avatarUriOf(character)
+    // 头像若与卡片图同源，直接复用已解码的位图，避免重复解码
+    val avatarBitmap = if (avatarUri == character.cardImageUri && cardBitmap != null) {
+        cardBitmap
+    } else {
+        rememberUriBitmap(avatarUri)
+    }
     UnifiedCard(
         modifier = modifier.fillMaxWidth(),
         tone = UnifiedCardTone.SURFACE_LOW
     ) {
+        // 卡片图横幅：设置了卡片图才显示，体现“图片样式”卡片
+        if (cardBitmap != null) {
+            Image(
+                bitmap = cardBitmap.asImageBitmap(),
+                contentDescription = "${character.name} 的卡片图",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(112.dp)
+                    .clip(RoundedCornerShape(10.dp))
+            )
+            Spacer(Modifier.height(DesignTokens.spacing8))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
@@ -284,10 +349,19 @@ private fun CharacterCard(
                     .background(Colors.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = character.emoji.ifBlank { "🙂" },
-                    style = Type.titleLarge
-                )
+                if (avatarBitmap != null) {
+                    Image(
+                        bitmap = avatarBitmap.asImageBitmap(),
+                        contentDescription = "${character.name} 的头像",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(44.dp).clip(CircleShape)
+                    )
+                } else {
+                    Text(
+                        text = character.emoji.ifBlank { "🙂" },
+                        style = Type.titleLarge
+                    )
+                }
             }
             Spacer(Modifier.width(DesignTokens.spacing12))
             Column(modifier = Modifier.weight(1f)) {
@@ -299,9 +373,10 @@ private fun CharacterCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (character.description.isNotBlank()) {
+                val sub = character.personality.ifBlank { character.description }
+                if (sub.isNotBlank()) {
                     Text(
-                        text = character.description,
+                        text = sub,
                         style = Type.bodySmall,
                         color = Colors.onSurfaceVariant,
                         maxLines = 2,
@@ -371,11 +446,43 @@ private fun CharacterEditDialog(
     onSave: (CharacterEntity) -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
     var name by remember(initial) { mutableStateOf(initial?.name.orEmpty()) }
     var emoji by remember(initial) { mutableStateOf(initial?.emoji ?: "🙂") }
     var description by remember(initial) { mutableStateOf(initial?.description.orEmpty()) }
     var systemPrompt by remember(initial) { mutableStateOf(initial?.systemPrompt.orEmpty()) }
     var greeting by remember(initial) { mutableStateOf(initial?.greeting.orEmpty()) }
+    var cardImageUri by remember(initial) { mutableStateOf(initial?.cardImageUri.orEmpty()) }
+    var avatarImageUri by remember(initial) { mutableStateOf(initial?.avatarImageUri.orEmpty()) }
+    var avatarUseCard by remember(initial) { mutableStateOf(initial?.avatarUseCard ?: true) }
+    var personality by remember(initial) { mutableStateOf(initial?.personality.orEmpty()) }
+    var worldview by remember(initial) { mutableStateOf(initial?.worldview.orEmpty()) }
+
+    // 选图后必须 takePersistableUriPermission，否则重启后 URI 权限失效、图片丢失
+    val pickCard = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            cardImageUri = uri.toString()
+        }
+    }
+    val pickAvatar = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            avatarImageUri = uri.toString()
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -396,11 +503,44 @@ private fun CharacterEditDialog(
                     OutlinedTextField(
                         value = emoji,
                         onValueChange = { emoji = it.take(4) },
-                        label = { Text("头像") },
+                        label = { Text("头像 Emoji") },
                         singleLine = true,
-                        modifier = Modifier.width(84.dp)
+                        modifier = Modifier.width(96.dp)
                     )
                 }
+
+                // ===== 卡片图片 / 头像图片 =====
+                Text("卡片图片", style = Type.titleSmall, color = Colors.onSurface)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { pickCard.launch(arrayOf("image/*")) }) {
+                        Text(if (cardImageUri.isBlank()) "选择卡片图" else "更换卡片图")
+                    }
+                    if (cardImageUri.isNotBlank()) {
+                        TextButton(onClick = { cardImageUri = "" }) { Text("清除") }
+                    }
+                }
+                FilterChip(
+                    selected = avatarUseCard,
+                    onClick = { avatarUseCard = !avatarUseCard },
+                    label = { Text("头像与卡片图共用") }
+                )
+                if (!avatarUseCard) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { pickAvatar.launch(arrayOf("image/*")) }) {
+                            Text(if (avatarImageUri.isBlank()) "选择独立头像" else "更换头像")
+                        }
+                        if (avatarImageUri.isNotBlank()) {
+                            TextButton(onClick = { avatarImageUri = "" }) { Text("清除") }
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
@@ -409,9 +549,25 @@ private fun CharacterEditDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
+                    value = personality,
+                    onValueChange = { personality = it },
+                    label = { Text("性格（如：冷静、毒舌、乐观）") },
+                    minLines = 1,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = worldview,
+                    onValueChange = { worldview = it },
+                    label = { Text("所属世界观 / 背景设定") },
+                    minLines = 1,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
                     value = systemPrompt,
                     onValueChange = { systemPrompt = it },
-                    label = { Text("角色设定（性格 / 说话方式 / 背景）") },
+                    label = { Text("角色设定（说话方式 / 补充约束）") },
                     minLines = 3,
                     maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
@@ -438,6 +594,11 @@ private fun CharacterEditDialog(
                             description = description.trim(),
                             systemPrompt = systemPrompt.trim(),
                             greeting = greeting.trim(),
+                            cardImageUri = cardImageUri,
+                            avatarImageUri = avatarImageUri,
+                            avatarUseCard = avatarUseCard,
+                            personality = personality.trim(),
+                            worldview = worldview.trim(),
                             createdAt = initial?.createdAt ?: System.currentTimeMillis(),
                             lastUsedAt = initial?.lastUsedAt ?: 0L
                         )

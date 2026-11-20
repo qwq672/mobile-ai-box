@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ModelEntity::class, SessionEntity::class, MessageEntity::class, BenchmarkResultEntity::class,
         CharacterEntity::class, PersonaEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -139,15 +139,29 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // v7 → v8: characters 表新增卡片图片 / 头像模式 / 性格 / 世界观（角色卡片体验）
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE characters ADD COLUMN cardImageUri TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE characters ADD COLUMN avatarImageUri TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE characters ADD COLUMN avatarUseCard INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE characters ADD COLUMN personality TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE characters ADD COLUMN worldview TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun get(ctx: Context): AppDatabase = INSTANCE ?: synchronized(this) {
             INSTANCE ?: Room.databaseBuilder(
                 ctx.applicationContext,
                 AppDatabase::class.java,
                 "aibox.db"
             )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            .addMigrations(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+            )
             // 绝不销毁数据：移除 fallbackToDestructiveMigration()。
-            // - 升级：显式迁移链 1→7 完整，正常升级全部走迁移，保留全部对话与工具历史。
+            // - 升级：显式迁移链 1→8 完整，正常升级全部走迁移，保留全部对话与工具历史。
             // - 若将来升到 v8 漏写迁移：Room 抛 IllegalStateException（可被日志发现、补迁移修复），
             //   而不是静默清空整库。数据完好优先于「带错 schema 强行启动」。
             // - 降级：同样不设 OnDowngrade 销毁兜底——宁可抛错让数据留在磁盘上可被 Recovery 取回，
