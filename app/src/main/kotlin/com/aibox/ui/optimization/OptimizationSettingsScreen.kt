@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.aibox.ui.optimization
 
 import androidx.compose.foundation.layout.Arrangement

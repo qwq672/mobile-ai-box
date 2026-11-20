@@ -93,11 +93,15 @@ class CloudChatService(
         // 未注册（后台执行）时保持默认失败，绝不挂起。
         val uiChoice = UiInteractionBridge.choiceHandler
         val uiConfirm = UiInteractionBridge.confirmHandler
-            ?: { _: String, _: Map<String, Any> -> false }
+        // 桥里的 confirmHandler 返回 Boolean?，而 ToolContext 要求非空 Boolean；
+        // 用显式类型的单一 lambda 收敛，避免 elvis 把 lambda 推断成普通函数类型。
+        val confirmCb: suspend (String, Map<String, Any>) -> Boolean = { name, args ->
+            uiConfirm?.invoke(name, args) ?: false
+        }
         val context = ToolContext(
             sessionId = "cloud-${System.currentTimeMillis()}",
             deviceInfo = deviceInfo(),
-            confirmCallback = uiConfirm,
+            confirmCallback = confirmCb,
             choiceCallback = uiChoice
         )
 
