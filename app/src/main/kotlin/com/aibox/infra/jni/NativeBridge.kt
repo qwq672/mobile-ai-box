@@ -111,6 +111,15 @@ class NativeBridge {
      */
     external fun setAdspLibraryPath(dir: String)
 
+    /**
+     * 设置 Hexagon 虚拟 NPU 会话数（多会话层切分，突破单 NPU 3.5GB 窗口）。
+     * 必须在 backend 枚举 HTP 设备之前调用（setAdspLibraryPath 之后、llamaLoad 之前）。
+     *
+     * @param mode  "auto" / "manual" / "off"；off 或 count<=1 走默认单会话
+     * @param count 虚拟会话数 1-8（由调用方按模型体积/手动设定算好）
+     */
+    external fun setHexagonNpuSessions(mode: String, count: Int)
+
     // -------- 状态查询 --------
     /** 实际生效的 KV 量化（请求 q8_0 但未开 FA 时会降级成 f16）。 */
     external fun llamaEffectiveKv(): String

@@ -57,6 +57,18 @@ class ImageGenViewModel : ViewModel() {
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
+    /** 内置 sd.cpp 框架版本（诊断用）；native 库缺失时降级为字符串提示。 */
+    val sdCppVersion: String by lazy {
+        runCatching { com.aibox.infra.jni.SdCppBridge.sdVersion() }
+            .getOrDefault("sd.cpp 未编译进本包")
+    }
+
+    /** 内置 sd.cpp 引擎是否已接入（阶段一恒为 false）。 */
+    val sdCppAvailable: Boolean by lazy {
+        runCatching { com.aibox.infra.jni.SdCppBridge.sdAvailable() }
+            .getOrDefault(false)
+    }
+
     init {
         rescan()
     }
@@ -129,5 +141,11 @@ enum class ImageBackend(
         "B2：依赖 C=MNN 推理框架模块，兼容普通设备，仅支持 SD 1.5",
         "仅 SD 1.5",
         "需先安装 MNN 推理框架模块（必选）",
+    ),
+    SDCPP(
+        "CPU · sd.cpp（内置）",
+        "B0：宿主内置 sd.cpp 推理框架骨架，当前为接口阶段，尚未接入真实出图",
+        "待接入",
+        "宿主内置，无需安装",
     ),
 }

@@ -50,6 +50,27 @@ class NpuBackend(
         }
         runCatching { native.setAdspLibraryPath(skelDir) }
             .onFailure { com.aibox.util.log.LogSystem.warn("aibox.hexagon", "setAdspLibraryPath 失败: ${it.message}") }
+
+        // 虚拟 NPU 会话：必须在 hexagon backend 枚举 HTP 设备之前设置。
+        // auto 模式按模型文件体积推算会话数（大模型多会话层切分，突破单会话 3.5GB 窗口）；
+        // manual 用用户设定值；off 走默认单会话。
+        val sessionMode = config.npuSessionMode.ifBlank { com.aibox.domain.power.HtpSessionMode.AUTO }
+        val sessionCount = when (sessionMode) {
+            com.aibox.domain.power.HtpSessionMode.MANUAL ->
+                config.npuSessionCount.coerceIn(1, 8)
+            com.aibox.domain.power.HtpSessionMode.AUTO -> {
+                val bytes = runCatching { java.io.File(modelPath).length() }.getOrDefault(0L)
+                com.aibox.domain.power.HtpSessionMode.resolveSessionCount(bytes)
+            }
+            else -> 1
+        }
+        runCatching { native.setHexagonNpuSessions(sessionMode, sessionCount) }
+            .onFailure { com.aibox.util.log.LogSystem.warn("aibox.hexagon", "setHexagonNpuSessions 失败: ${it.message}") }
+        com.aibox.util.log.LogSystem.info(
+            "aibox.hexagon",
+            "虚拟会话: mode=$sessionMode count=$sessionCount"
+        )
+
         val gpuLayers = if (config.nGpuLayers == 0) Int.MAX_VALUE / 2 else config.nGpuLayers
         val threads = config.effectiveThreads(cpuInfo.bigCores)
         val ok = try {

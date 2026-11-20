@@ -57,6 +57,9 @@ class OptimizationSettingsRepository(private val context: Context) {
         val LOW_POWER_MODE               = booleanPreferencesKey("low_power_mode")
         val LOW_POWER_THRESHOLD          = intPreferencesKey("low_power_threshold")
         val HTP_PERF_MODE                = stringPreferencesKey("htp_perf_mode")
+        // Hexagon 虚拟 NPU 会话（大模型加载）
+        val HTP_SESSION_MODE             = stringPreferencesKey("htp_session_mode")
+        val HTP_SESSION_COUNT            = intPreferencesKey("htp_session_count")
     }
 
     /**
@@ -87,7 +90,9 @@ class OptimizationSettingsRepository(private val context: Context) {
                 lowPowerOnBattery          = p[Keys.LOW_POWER_ON_BATTERY]         ?: false,
                 lowPowerMode               = p[Keys.LOW_POWER_MODE]               ?: true,
                 lowPowerThreshold          = (p[Keys.LOW_POWER_THRESHOLD]         ?: 20).coerceIn(5, 50),
-                htpPerfMode                = p[Keys.HTP_PERF_MODE]                ?: "auto"
+                htpPerfMode                = p[Keys.HTP_PERF_MODE]                ?: "auto",
+                htpSessionMode             = p[Keys.HTP_SESSION_MODE]             ?: "auto",
+                htpSessionCount            = (p[Keys.HTP_SESSION_COUNT]          ?: 2).coerceIn(1, 8)
             )
         }
 
@@ -120,7 +125,9 @@ class OptimizationSettingsRepository(private val context: Context) {
                 lowPowerOnBattery          = p[Keys.LOW_POWER_ON_BATTERY]         ?: false,
                 lowPowerMode               = p[Keys.LOW_POWER_MODE]               ?: true,
                 lowPowerThreshold          = (p[Keys.LOW_POWER_THRESHOLD]         ?: 20).coerceIn(5, 50),
-                htpPerfMode                = p[Keys.HTP_PERF_MODE]                ?: "auto"
+                htpPerfMode                = p[Keys.HTP_PERF_MODE]                ?: "auto",
+                htpSessionMode             = p[Keys.HTP_SESSION_MODE]             ?: "auto",
+                htpSessionCount            = (p[Keys.HTP_SESSION_COUNT]          ?: 2).coerceIn(1, 8)
             )
             val next = transform(current)
             // 写回所有字段（包括未变的；这样保证下次读出来的就是 next 而不是缺省）
@@ -142,6 +149,8 @@ class OptimizationSettingsRepository(private val context: Context) {
             p[Keys.LOW_POWER_MODE]               = next.lowPowerMode
             p[Keys.LOW_POWER_THRESHOLD]          = next.lowPowerThreshold
             p[Keys.HTP_PERF_MODE]                = next.htpPerfMode
+            p[Keys.HTP_SESSION_MODE]             = next.htpSessionMode
+            p[Keys.HTP_SESSION_COUNT]            = next.htpSessionCount
         }
     }
 

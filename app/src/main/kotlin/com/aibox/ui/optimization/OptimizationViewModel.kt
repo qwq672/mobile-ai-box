@@ -151,6 +151,17 @@ class OptimizationViewModel : ViewModel() {
         update { it.copy(htpPerfMode = id) }
     }
 
+    /** 设置 Hexagon 虚拟 NPU 会话模式："auto" / "manual" / "off"。重新加载模型生效。 */
+    fun setHtpSessionMode(id: String) {
+        LogSystem.info("aibox.hexagon", "user set htpSessionMode=$id")
+        update { it.copy(htpSessionMode = id) }
+    }
+
+    /** 设置手动虚拟会话数（1-8）。仅在 htpSessionMode=manual 时生效。 */
+    fun setHtpSessionCount(count: Int) {
+        update { it.copy(htpSessionCount = count.coerceIn(1, 8)) }
+    }
+
     /** 设置低电量模式开关（只影响自动提示与后台策略，不改手动 HTP 档）。 */
     fun setLowPowerMode(on: Boolean) = update { it.copy(lowPowerMode = on) }
 

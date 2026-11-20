@@ -124,7 +124,15 @@ class ModelsViewModel : ViewModel() {
                 withContext(Dispatchers.IO) { container.optimizationSettingsRepository.settingsFlow.first() }
             }.getOrNull()
             val effectiveConfig = if (opt != null) {
-                config.copy(forceFlashAttention = opt.forceFlashAttention)
+                config.copy(
+                    forceFlashAttention = opt.forceFlashAttention,
+                    // Hexagon 虚拟会话：大模型多会话层切分，突破单会话 3.5GB 窗口。
+                    // auto 时 count 由 NpuBackend 按模型体积解析，这里只传模式；
+                    // manual 时把用户设定的会话数一并传入。
+                    npuSessionMode = opt.htpSessionMode,
+                    npuSessionCount = if (opt.htpSessionMode == com.aibox.domain.power.HtpSessionMode.MANUAL)
+                        opt.htpSessionCount else 0
+                )
             } else config
             // 低电量档：只削峰值功率（批大小），不改上下文与 KV，避免静默影响质量。
             val powerMode = container.powerController.mode.value

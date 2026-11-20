@@ -122,3 +122,24 @@ target_compile_options(aibox_module_loader PRIVATE
 target_link_options(aibox_module_loader PRIVATE
     -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-s
 )
+
+# ============================================================
+# sd.cpp 生图推理框架 JNI (独立库,不依赖 llama.cpp)
+# - libaibox_sdcpp.so
+# - 阶段一: 稳定 JNI 接口 + stub 实现,可编译可加载
+# - 阶段二: add_subdirectory(sd.cpp) 引入真实引擎,替换 stub 内部实现
+# ============================================================
+add_library(aibox_sdcpp SHARED
+    sdcpp_bridge.cpp
+)
+target_include_directories(aibox_sdcpp PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+find_library(LOG_LIB_SD log REQUIRED)
+target_link_libraries(aibox_sdcpp PRIVATE ${LOG_LIB_SD})
+target_compile_options(aibox_sdcpp PRIVATE
+    -Os -fvisibility=hidden -ffunction-sections -fdata-sections
+)
+target_link_options(aibox_sdcpp PRIVATE
+    -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-s
+)

@@ -41,6 +41,55 @@ object HtpPerfMode {
 }
 
 /**
+ * Hexagon 虚拟 NPU 会话模式。
+ *
+ * - off：不创建额外虚拟会话，ggml 用默认单会话（HTP0:0）。大模型会受单会话
+ *   约 3.5GB 地址窗口限制，可能加载失败或回退 CPU。
+ * - auto：按模型文件体积估算会话数（见 [resolveSessionCount]），适合绝大多数用户。
+ * - manual：完全按用户设定的 [sessionCount] 创建虚拟会话。
+ *
+ * 会话数越多，能装下的模型越大，但跨会话通信与 DSP 队列开销也越高；手机通常
+ * 只有一块物理 Hexagon，2-3 个虚拟会话对 7B-9B 已是甜点，不建议拉满 8。
+ */
+object HtpSessionMode {
+    const val AUTO = "auto"
+    const val MANUAL = "manual"
+    const val OFF = "off"
+
+    val all = listOf(AUTO, MANUAL, OFF)
+
+    fun label(id: String): String = when (id) {
+        AUTO -> "自动"
+        MANUAL -> "手动"
+        OFF -> "关闭"
+        else -> id
+    }
+
+    /**
+     * auto 模式：按模型文件体积推算虚拟会话数。
+     *
+     * 经验阈值（Hexagon 单会话约 3.5GB 窗口，Q4_0 权重体积近似模型大小）：
+     * - <= 2.4GB：1 会话（3B 及以下，单会话装得下）
+     * - 2.4-3.6GB：2 会话（4B 级，跨过窗口边界）
+     * - 3.6-5.0GB：3 会话（7B-9B Q4_0）
+     * - > 5.0GB：4 会话（更大模型，仍可能吃力）
+     *
+     * @param modelBytes 模型文件字节数
+     * @param maxSessions 设备允许的会话数上限（默认 4，手机一般够用）
+     */
+    fun resolveSessionCount(modelBytes: Long, maxSessions: Int = 4): Int {
+        val gb = modelBytes / (1024.0 * 1024.0 * 1024.0)
+        val raw = when {
+            gb <= 2.4 -> 1
+            gb <= 3.6 -> 2
+            gb <= 5.0 -> 3
+            else -> 4
+        }
+        return raw.coerceIn(1, maxSessions.coerceIn(1, 8))
+    }
+}
+
+/**
  * 电量策略：把「设置 + 当前电量」换算成可展示、可解释的决策。
  *
  * 关键约定：

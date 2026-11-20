@@ -78,7 +78,22 @@ data class OptimizationSettings(
      * - performance：允许 burst（可能发热、掉电更快）
      * - balanced / powersave：固定档位
      */
-    val htpPerfMode: String = "auto"
+    val htpPerfMode: String = "auto",
+
+    // === Hexagon 虚拟 NPU 会话（大模型加载） ===
+    /**
+     * 虚拟 NPU 会话模式："auto" / "manual" / "off"。
+     *
+     * - auto：按模型体积自动决定会话数（默认，推荐）。大模型（>3.5GB）靠多会话
+     *   层切分突破单会话地址窗口，避免加载失败/回退。
+     * - manual：按 [htpSessionCount] 手动指定会话数。
+     * - off：关闭额外虚拟会话，只用默认单会话。
+     *
+     * 加载时生效：改变后需重新加载模型。非 NPU 构建无副作用。
+     */
+    val htpSessionMode: String = "auto",
+    /** 手动模式下的虚拟会话数（1-8）；auto 模式下忽略此值。默认 2。 */
+    val htpSessionCount: Int = 2
 ) {
     companion object {
         /** 默认档：当前主流手机上的最优折中。 */

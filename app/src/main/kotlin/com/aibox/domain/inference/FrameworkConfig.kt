@@ -85,6 +85,8 @@ data class FrameworkOverride(
         forceFlashAttention = base.forceFlashAttention,
         flashAttention  = base.flashAttention,
         gpuUseVulkan    = base.gpuUseVulkan,
+        npuSessionMode  = base.npuSessionMode, // 框架覆盖不涉及 NPU 会话设置，保留 base
+        npuSessionCount = base.npuSessionCount,
         systemPrompt    = base.systemPrompt   // 框架覆盖不涉及 system prompt
     )
 }

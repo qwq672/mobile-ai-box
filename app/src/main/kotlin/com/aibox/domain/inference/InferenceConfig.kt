@@ -55,6 +55,15 @@ data class InferenceConfig(
     val flashAttention: Boolean = true,
     /** GPU 后端是否使用 Vulkan（关闭则走 OpenCL）。 */
     val gpuUseVulkan: Boolean = true,
+    /**
+     * Hexagon 虚拟 NPU 会话模式："auto" / "manual" / "off"。
+     * - auto：由加载链按模型体积自动决定会话数（见 HtpSessionMode.resolveSessionCount）
+     * - manual：用 [npuSessionCount] 手动指定
+     * - off：只用默认单会话
+     */
+    val npuSessionMode: String = "auto",
+    /** 手动模式下的虚拟会话数（1-8）；auto 模式下由加载链覆盖。0 = 未指定。 */
+    val npuSessionCount: Int = 0,
     // 注：autoLoadModel 字段已删除（G-settings-fix）
     // "模型预加载" 开关归 OptimizationSettings.preloadModel 统一管理
     // （开关式优化 → OptimizationSettings；本字段原属 V1 dead code 无消费方）

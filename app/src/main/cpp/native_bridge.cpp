@@ -15,6 +15,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -349,6 +350,58 @@ Java_com_aibox_infra_jni_NativeBridge_setAdspLibraryPath(JNIEnv* env, jclass, js
     env->ReleaseStringUTFChars(jdir, dir);
 }
 
+/**
+ * 设置 Hexagon 虚拟 NPU 会话数（ggml-hexagon 多会话拆分）。
+ *
+ * ggml-hexagon 通过 GGML_HEXAGON_DEVICES 在加载后端时枚举设备：
+ *  - "HTP0:0"               单会话（默认）
+ *  - "HTP0:0,HTP0:1"        单物理 NPU 上的 2 个虚拟会话（层切分，突破 3.5GB 窗口）
+ *
+ * 关键：必须在 hexagon backend 枚举 HTP 设备之前设置（与 ADSP_LIBRARY_PATH 同理），
+ * 否则 ggml 会把「0/1 个设备」缓存下来，之后补设无效。因此本方法由 NpuBackend
+ * 在 isAvailable()/load() 里于 setAdspLibraryPath 之后、llamaLoad 之前调用。
+ *
+ * @param mode  "auto" / "manual" / "off"
+ *              - off：不设置环境变量，走 ggml 默认单会话
+ *              - auto：由 Kotlin 侧按模型体积算好 count 传入，语义同 manual
+ *              - manual：按 count 建立虚拟会话
+ * @param count 虚拟会话数（1-8）。<=1 时等价于 off（单会话）。
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_com_aibox_infra_jni_NativeBridge_setHexagonNpuSessions(
+        JNIEnv* env, jclass, jstring jmode, jint count) {
+    const char* mode = jmode ? env->GetStringUTFChars(jmode, nullptr) : nullptr;
+    std::string mode_str = mode ? mode : "off";
+    if (mode) env->ReleaseStringUTFChars(jmode, mode);
+
+    bool enable = (mode_str == "auto" || mode_str == "manual");
+    int n = count < 1 ? 1 : count;
+    if (n > 8) n = 8;  // HTP0:0..HTP0:7，防止端口越界
+
+    if (!enable || n <= 1) {
+        // 关闭额外虚拟会话：显式移除，避免上一次加载残留的诊断变量干扰
+        unsetenv("GGML_HEXAGON_DEVICES");
+        unsetenv("GGML_HEXAGON_NDEV");
+        LOGI("setHexagonNpuSessions: mode=%s -> single session (HTP0:0 default)", mode_str.c_str());
+        return;
+    }
+
+    // 单物理 NPU（SM8650 只有一块 Hexagon）上的多个虚拟会话，用 HTP0:<session> 命名。
+    // 多个物理 NPU 的板卡（IQ9/IQ10）才会用到 HTP1，手机场景固定 HTP0。
+    std::string devices = "HTP0:0";
+    for (int i = 1; i < n; ++i) {
+        devices += ",HTP0:" + std::to_string(i);
+    }
+    setenv("GGML_HEXAGON_DEVICES", devices.c_str(), 1);
+    // OPPOLL=1 让多会话走异步 poll，避免 dspqueue 忙等导致 host 挂起（上游 issue #30309 的规避）
+    setenv("GGML_HEXAGON_OPPOLL", "1", 1);
+    char ndev[8];
+    snprintf(ndev, sizeof(ndev), "%d", n);
+    setenv("GGML_HEXAGON_NDEV", ndev, 1);
+    LOGI("setHexagonNpuSessions: mode=%s count=%d -> GGML_HEXAGON_DEVICES=%s",
+         mode_str.c_str(), n, devices.c_str());
+}
+
 // ---------- 架构检测 ----------
 // 读取 GGUF 元数据 general.architecture,返回小写字符串
 // llama.cpp v0.4.1 暴露 llama_model_meta_val_str(model, key, buf, size)
@@ -518,16 +571,21 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
     // Hexagon 和 Vulkan 在 ggml 里都注册为 GPU 类型。如果不显式指定设备，
     // llama.cpp 会把所有 GPU 设备都纳入默认列表，模型可能被拆到 NPU 上
     // （或反过来选错设备）。按用户选择的后端强制只用一个设备。
-    static ggml_backend_dev_t s_selected[2] = { nullptr, nullptr };
-    s_selected[0] = nullptr;
+    // 最多 8 个虚拟会话 + 1 个 nullptr 终止符。
+    // 之前这里是 [2] 且只取第一个 HTP 设备就 break —— 即使 GGML_HEXAGON_DEVICES
+    // 开了多个虚拟会话，llama.cpp 也只会看到 1 个设备，层切分形同虚设，大模型仍
+    // 因单个 3.5GB 窗口装不下而回退/失败。现在 NPU 路径收集所有 HTP* 设备，
+    // 让多会话真正生效（每个会话独立地址窗口，突破大模型加载上限）。
+    static ggml_backend_dev_t s_selected[9] = { nullptr };
+    for (auto& d : s_selected) d = nullptr;
     const char* want_dev = nullptr;
     if (g_backend_str == "npu")         want_dev = "HTP";
     else if (g_backend_str == "vulkan") want_dev = "Vulkan";
     else if (g_backend_str == "opencl") want_dev = "OpenCL";
 
-    s_selected[1] = nullptr;
     if (want_dev != nullptr) {
-        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        int nsel = 0;
+        for (size_t i = 0; i < ggml_backend_dev_count() && nsel < 8; ++i) {
             ggml_backend_dev_t d = ggml_backend_dev_get(i);
             if (d == nullptr) continue;
             ggml_backend_reg_t r = ggml_backend_dev_backend_reg(d);
@@ -535,13 +593,15 @@ Java_com_aibox_infra_jni_NativeBridge_llamaLoad(
             const char* dev_name = ggml_backend_dev_name(d);
             if ((reg_name && strstr(reg_name, want_dev)) ||
                 (dev_name && strstr(dev_name, want_dev))) {
-                s_selected[0] = d;
-                break;
+                s_selected[nsel++] = d;
+                // Vulkan/OpenCL 只需一个设备；NPU(HTP) 需收集全部虚拟会话
+                if (g_backend_str != "npu") break;
             }
         }
-        if (s_selected[0] != nullptr) {
+        if (nsel > 0) {
+            s_selected[nsel] = nullptr;  // mp.devices 以 nullptr 结尾
             mp.devices = s_selected;
-            LOGI("llamaLoad: backend=%s -> device %s (%s)", backend,
+            LOGI("llamaLoad: backend=%s -> %d device(s), first=%s (%s)", backend, nsel,
                  ggml_backend_dev_name(s_selected[0]),
                  ggml_backend_dev_description(s_selected[0]));
         } else {

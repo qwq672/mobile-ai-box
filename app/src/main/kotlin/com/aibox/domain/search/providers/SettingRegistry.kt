@@ -194,6 +194,14 @@ object SettingRegistry {
             sectionAnchor = "preset"
         ))
         register(SettingEntry(
+            key = "opt.htpSessionMode",
+            title = "虚拟 NPU 会话",
+            description = "Hexagon 大模型加载：自动按体积拆分 / 手动指定会话数 / 关闭",
+            path = listOf("推理框架", "优化", "NPU 会话"),
+            screen = "optimization",
+            sectionAnchor = "power"
+        ))
+        register(SettingEntry(
             key = "opt.preloadModel",
             title = "模型预加载",
             description = "App 启动时异步加载常用模型，避开冷启动延迟",

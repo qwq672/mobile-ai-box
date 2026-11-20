@@ -173,6 +173,53 @@ fun OptimizationSettingsScreen(
                             style = Type.labelSmall,
                             color = com.aibox.ui.theme.Colors.onSurfaceVariant
                         )
+
+                        // ---- 虚拟 NPU 会话（大模型加载，Hexagon 专用）----
+                        HorizontalDivider(
+                            Modifier.padding(vertical = DesignTokens.spacing8)
+                        )
+                        Text(
+                            "虚拟 NPU 会话（大模型加载）",
+                            style = Type.titleSmall,
+                            color = com.aibox.ui.theme.Colors.onSurface
+                        )
+                        androidx.compose.foundation.layout.FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
+                        ) {
+                            com.aibox.domain.power.HtpSessionMode.all.forEach { id ->
+                                FilterChip(
+                                    selected = settings.htpSessionMode == id,
+                                    onClick = { vm.setHtpSessionMode(id) },
+                                    label = {
+                                        Text(com.aibox.domain.power.HtpSessionMode.label(id))
+                                    }
+                                )
+                            }
+                        }
+                        if (settings.htpSessionMode == com.aibox.domain.power.HtpSessionMode.MANUAL) {
+                            UnifiedSlider(
+                                field = SettingField(
+                                    key = "opt.htpSessionCount",
+                                    type = FieldType.SLIDER,
+                                    title = "会话数量",
+                                    description = "手动指定虚拟会话数；越多能装下越大的模型，但跨会话开销更高",
+                                    defaultValue = settings.htpSessionCount,
+                                    min = 1,
+                                    max = 8,
+                                    step = 1
+                                ),
+                                value = settings.htpSessionCount.toFloat(),
+                                onValueChange = { vm.setHtpSessionCount(it.toInt()) }
+                            )
+                        }
+                        Text(
+                            "自动：按模型体积决定会话数（>3.5GB 自动拆分，推荐）。" +
+                                "关闭：只用单个会话。加载时生效，改完需重新加载模型。" +
+                                "仅 Hexagon NPU 后端有效，其他后端无影响。",
+                            style = Type.labelSmall,
+                            color = com.aibox.ui.theme.Colors.onSurfaceVariant
+                        )
                     }
 
                     HorizontalDivider(
