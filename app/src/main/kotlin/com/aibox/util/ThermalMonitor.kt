@@ -35,6 +35,11 @@ import java.io.File
  */
 class ThermalMonitor {
 
+    private val TAG = "aibox.thermal"
+
+    /** 体感温度日志去重键（来源@0.5℃ 粒度），避免 2 秒一次刷屏。 */
+    private var lastSkinLogKey: String = ""
+
     /** -1 = 未读到,0..100 = 热档位 */
     private val _thermalPercent = MutableStateFlow(-1)
     val thermalPercent: StateFlow<Int> = _thermalPercent.asStateFlow()
@@ -44,11 +49,19 @@ class ThermalMonitor {
     val celsius: StateFlow<Double> = _celsius.asStateFlow()
 
     /**
-     * 体感温度（机身表面/skin 热区）摄氏度；-1.0 表示未读到。
+     * 体感温度（摄氏度）；-1.0 表示未读到。
      *
-     * 与 [celsius] 分开：celsius 取“最热传感器”（多为芯片结温，驱动降频与热档位，不能改），
-     * skinCelsius 只取 skin/case/back 这类贴近外壳的热区，供 UI 展示“摸起来多烫”。
-     * 读不到 skin 时保持 -1，由 UI 回退到 [celsius]，绝不拿结温冒充体感。
+     * 与 [celsius] 分开：celsius 取"最热传感器"（多为芯片结温，驱动降频与热档位，不能改），
+     * skinCelsius 供 UI 展示"摸起来多烫"，用于七档体感文案。
+     *
+     * 采集优先级（[readSkinCelsius]）：
+     * 1. skin/case/back 等贴近外壳的 sysfs/hwmon 热区；
+     * 2. **电池温度兜底**——电池紧贴机身、是最稳定的可读热区，很多机型（如 Magic6 在
+     *    Android 16 上 sysfs_zones=0）读不到 skin 节点，此时电池温度是合理的体表代理；
+     * 3. 仍读不到才返回 -1，由 UI 回退到 [celsius] 数值。
+     *
+     * 注意：绝不拿芯片结温（CPU/GPU die）冒充体感——那不是"摸起来"的温度。
+     * 电池温度外壳代理与结温是两回事，不能混为一谈；此处回退是有意为之。
      */
     private val _skinCelsius = MutableStateFlow(-1.0)
     val skinCelsius: StateFlow<Double> = _skinCelsius.asStateFlow()
@@ -200,8 +213,16 @@ class ThermalMonitor {
         val (pct, c) = readPercentWithCelsius()
         _thermalPercent.value = pct
         _celsius.value = c
-        // 1b. 体感温度（机身表面 skin 热区），与结温分开采集
-        _skinCelsius.value = readSkinCelsius()
+        // 1b. 体感温度（机身表面 skin 热区，读不到时电池温度兜底），与结温分开采集
+        val skin = readSkinCelsius()
+        _skinCelsius.value = skin
+        // 仅在来源或数值（0.5℃ 粒度）变化时打一条日志，便于诊断"体感读的是哪个传感器"，
+        // 避免 2 秒一次刷屏。用户反馈"日志里没有体感温度的注释"，这里补上可追溯记录。
+        val logKey = "$skinSource@${(skin * 2).toInt() / 2.0}"
+        if (logKey != lastSkinLogKey) {
+            lastSkinLogKey = logKey
+            LogSystem.info(TAG, "体感温度: ${if (skin > 0) "%.1f℃".format(skin) else "未读到"} (来源=$skinSource)")
+        }
 
         // 2. 读 CPU 主频
         _cpuFreqKhz.value = readCpuFreq()
@@ -306,9 +327,16 @@ class ThermalMonitor {
     }
 
     /**
-     * 读取机身表面（体感）温度：只认 skin/case/back/idle/cover 这类贴近外壳的热区，
-     * 读不到返回 -1.0 让 UI 回退到 [readRealCelsius]，绝不拿芯片结温冒充体感。
+     * 读取机身表面（体感）温度，返回摄氏度；读不到返回 -1.0。
      *
+     * 采集优先级：
+     * 1. skin/case/back/idle/cover/board/surface 这类贴近外壳的 sysfs 热区；
+     * 2. hwmon 中名字带 skin/case 的壳体传感器；
+     * 3. **电池温度兜底**：电池紧贴机身，是 Android 上最稳定可读的体表代理。
+     *    Magic6/MagicOS（Android 16）实测 sysfs_zones=0，前两步全落空，若不做兜底
+     *    体感档就永远不显示——这正是"体感温度未出现"的根因。
+     *
+     * 绝不拿芯片结温（CPU/GPU die）冒充体感；电池温度是外壳代理，与结温不同。
      * sysfsPaths 已按温度从高到低排序，命中类型里取第一个即可。
      */
     private fun readSkinCelsius(): Double {
@@ -317,7 +345,7 @@ class ThermalMonitor {
             val type = sysfsTypes[path].orEmpty()
             if (skinKeys.any { type.contains(it) }) {
                 val c = readTempFile(path) ?: continue
-                if (c in -20.0..120.0) return c
+                if (c in -20.0..120.0) { skinSource = "sysfs:${type}"; return c }
             }
         }
         // hwmon 里部分机型给的是壳体传感器（名字带 skin/case）
@@ -325,11 +353,19 @@ class ThermalMonitor {
             val name = File(path).parentFile?.name.orEmpty() + File(path).name
             if (skinKeys.any { name.lowercase().contains(it) }) {
                 val c = readTempFile(path) ?: continue
-                if (c in -20.0..120.0) return c
+                if (c in -20.0..120.0) { skinSource = "hwmon:${name}"; return c }
             }
         }
+        // 兜底：电池温度（电池紧贴机身，体表代理；tick 中已先于本函数读过电池）
+        val battery = _batteryCelsius.value
+        if (battery in 0.0..60.0) { skinSource = "battery(体表代理)"; return battery }
+        skinSource = "unavailable"
         return -1.0
     }
+
+    /** 体感温度来源标记，供日志诊断"体感读的是哪个传感器"。 */
+    @Volatile
+    private var skinSource: String = "unavailable"
 
     /** 温度文件可能是毫摄氏度（45000）或摄氏度（45），统一化。 */
     private fun readTempFile(path: String): Double? {

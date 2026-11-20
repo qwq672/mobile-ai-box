@@ -25,6 +25,16 @@ object MemoryGuard {
     /** 加载后系统占用超过该比例就认为随时会被 OOM kill。 */
     private const val POST_LOAD_LIMIT = 0.95
 
+    /**
+     * 运行缓冲预估上限（MB）：KV cache + compute buffer + 系统余量。
+     *
+     * GGUF 权重走 mmap、按需换页，并不在加载时一次性常驻，旧版按“总内存 1/5”估算
+     * （16GB 机器 ≈ 3057MB）过于保守：会把 4.4GB 的 Q4_0 模型误判为放不下、直接拦截。
+     * 实测 KV（8K 上下文、Q8_0）+ compute（batch 512）合计约 1GB，这里按 1GB 封顶。
+     * 加载后仍有 [postLoadProblem] 复核兜底，因此预检偏宽松是安全的。
+     */
+    private const val RUN_BUFFER_MB = 1024L
+
     data class Snapshot(
         val totalMb: Long,
         val availableMb: Long,
@@ -45,15 +55,16 @@ object MemoryGuard {
     /**
      * 加载前预检。
      *
-     * 注意：GGUF 是 mmap 加载，文件大小不等于常驻内存；但推理时大部分权重会被读到页缓存，
-     * 所以按"文件大小 + 20% 总内存（KV/compute/系统余量，至少 512MB）"做保守估算。
+     * 注意：GGUF 是 mmap 加载，文件大小不等于常驻内存；权重按需换页，加载期真正额外
+     * 占用的是 KV cache + compute buffer，用 [RUN_BUFFER_MB]（约 1GB）估算即可。
+     * 加载后另有 [postLoadProblem] 按实际占用复核，避免误拦截可运行的模型。
      */
     fun canLoad(context: Context?, modelPath: String): Result<Unit> {
         val snap = snapshot(context)
         if (snap.totalMb <= 0) return Result.success(Unit)
 
         val fileMb = runCatching { File(modelPath).length() / MB }.getOrDefault(0L)
-        val bufferMb = maxOf(512L, (snap.totalMb / 5))
+        val bufferMb = RUN_BUFFER_MB
         val needMb = fileMb + bufferMb
 
         if (needMb > snap.availableMb) {

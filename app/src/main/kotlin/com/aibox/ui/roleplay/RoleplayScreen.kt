@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,10 +27,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -55,6 +59,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,11 +74,12 @@ import com.aibox.ui.theme.Type
 import kotlinx.coroutines.launch
 
 /**
- * 角色扮演页（MVP）。
+ * 角色扮演页。
  *
  * 两段内容：
  * 1. 我的身份（[PersonaEntity]）：选择 / 新建 / 编辑“我是谁”；
- * 2. 角色（[CharacterEntity]）：选择 AI 角色并进入聊天。
+ * 2. 角色（[CharacterEntity]）：**两列 2:3 竖卡片**浏览，进入独立“添加 / 编辑角色页”创建，
+ *    点卡片开始聊天。
  *
  * 角色和身份互相独立：换角色不影响身份，同一条会话同时记住两者。
  * 数据直接走 [com.aibox.data.repo.RoleplayRepository]，页面本身不持有 ViewModel，
@@ -91,8 +97,8 @@ fun RoleplayScreen(
     val personas by repo.personas.collectAsStateWithLifecycle(initialValue = emptyList())
 
     var activePersonaId by remember { mutableLongStateOf(0L) }
-    var editingCharacter by remember { mutableStateOf<CharacterEntity?>(null) }
-    var creatingCharacter by remember { mutableStateOf(false) }
+    // 角色编辑：null=列表页；非 null=进入全屏添加/编辑角色页（新增角色时传一个空白实体）
+    var characterEditor by remember { mutableStateOf<CharacterEntity?>(null) }
     var editingPersona by remember { mutableStateOf<PersonaEntity?>(null) }
     var creatingPersona by remember { mutableStateOf(false) }
 
@@ -105,6 +111,24 @@ fun RoleplayScreen(
         }
     }
 
+    // ===== 全屏角色添加/编辑页（与列表页互斥）=====
+    val editorTarget = characterEditor
+    if (editorTarget != null) {
+        CharacterEditorPage(
+            initial = editorTarget,
+            onBack = { characterEditor = null },
+            onSave = { c ->
+                scope.launch { runCatching { repo.upsertCharacter(c) } }
+                characterEditor = null
+            },
+            onDelete = { c ->
+                scope.launch { runCatching { repo.deleteCharacter(c) } }
+                characterEditor = null
+            }
+        )
+        return
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -115,8 +139,9 @@ fun RoleplayScreen(
                 },
                 title = { Text("角色扮演", fontWeight = FontWeight.SemiBold) },
                 actions = {
-                    IconButton(onClick = { creatingCharacter = true }) {
-                        Icon(Icons.Outlined.Add, contentDescription = "新建角色")
+                    // 右上角 + 直接进“添加角色页”（空白实体）
+                    IconButton(onClick = { characterEditor = blankCharacter() }) {
+                        Icon(Icons.Outlined.Add, contentDescription = "添加角色")
                     }
                 }
             )
@@ -159,41 +184,41 @@ fun RoleplayScreen(
 
             if (characters.isEmpty()) {
                 item(key = "character_empty") {
-                    HintCard("还没有角色，点右上角 ＋ 新建一个")
+                    HintCard("还没有角色，点右上角 ＋ 添加")
                 }
             } else {
-                items(items = characters, key = { "character_${it.id}" }) { c ->
-                    CharacterCard(
-                        character = c,
-                        onStart = { onStartChat(c.id, activePersonaId) },
-                        onEdit = { editingCharacter = c },
-                        modifier = Modifier.padding(horizontal = DesignTokens.spacing16)
-                    )
+                // 两列网格：手动两两分组，避免在 LazyColumn 内嵌 LazyVerticalGrid（嵌套滚动冲突）
+                val rows = characters.chunked(2)
+                items(items = rows, key = { "character_row_${it.first().id}" }) { pair ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = DesignTokens.spacing16),
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
+                    ) {
+                        CharacterCard(
+                            character = pair[0],
+                            onStart = { onStartChat(pair[0].id, activePersonaId) },
+                            onEdit = { characterEditor = pair[0] },
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (pair.size > 1) {
+                            CharacterCard(
+                                character = pair[1],
+                                onStart = { onStartChat(pair[1].id, activePersonaId) },
+                                onEdit = { characterEditor = pair[1] },
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            // 奇数个时补一个等宽的占位，保持两列对齐
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
             }
 
             item(key = "bottom_spacer") { Spacer(Modifier.height(DesignTokens.spacing24)) }
         }
-    }
-
-    if (creatingCharacter || editingCharacter != null) {
-        val initial = editingCharacter
-        CharacterEditDialog(
-            initial = initial,
-            onDismiss = { creatingCharacter = false; editingCharacter = null },
-            onSave = { c ->
-                scope.launch { runCatching { repo.upsertCharacter(c) } }
-                creatingCharacter = false
-                editingCharacter = null
-            },
-            onDelete = if (initial != null) {
-                {
-                    scope.launch { runCatching { repo.deleteCharacter(initial) } }
-                    creatingCharacter = false
-                    editingCharacter = null
-                }
-            } else null
-        )
     }
 
     if (creatingPersona || editingPersona != null) {
@@ -216,6 +241,13 @@ fun RoleplayScreen(
         )
     }
 }
+
+/** 新增角色时的空白实体；id=0 表示未落库。 */
+private fun blankCharacter() = CharacterEntity(
+    name = "",
+    emoji = "🙂",
+    avatarUseCard = true
+)
 
 /* ============================================================
  * 列表项
@@ -309,6 +341,12 @@ private fun avatarUriOf(c: CharacterEntity): String =
         c.avatarImageUri.ifBlank { c.cardImageUri }
     }
 
+/**
+ * 两列网格中的角色竖卡片（宽:高 = 2:3）。
+ *
+ * 上半部为卡片图（无图则用 emoji + 主色渐变占位），下半部为头像 + 名字 + 简介 + “开始”，
+ * 右下角小铅笔进编辑页。整体固定 2:3 比例，视觉上是一张竖版角色卡。
+ */
 @Composable
 private fun CharacterCard(
     character: CharacterEntity,
@@ -318,81 +356,109 @@ private fun CharacterCard(
 ) {
     val cardBitmap = rememberUriBitmap(character.cardImageUri)
     val avatarUri = avatarUriOf(character)
-    // 头像若与卡片图同源，直接复用已解码的位图，避免重复解码
     val avatarBitmap = if (avatarUri == character.cardImageUri && cardBitmap != null) {
         cardBitmap
     } else {
         rememberUriBitmap(avatarUri)
     }
-    UnifiedCard(
-        modifier = modifier.fillMaxWidth(),
-        tone = UnifiedCardTone.SURFACE_LOW
+    Card(
+        modifier = modifier.aspectRatio(2f / 3f),
+        shape = RoundedCornerShape(DesignTokens.radiusLarge),
+        colors = CardDefaults.cardColors(containerColor = Colors.surfaceContainerLow),
+        onClick = onStart
     ) {
-        // 卡片图横幅：设置了卡片图才显示，体现“图片样式”卡片
-        if (cardBitmap != null) {
-            Image(
-                bitmap = cardBitmap.asImageBitmap(),
-                contentDescription = "${character.name} 的卡片图",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(112.dp)
-                    .clip(RoundedCornerShape(10.dp))
-            )
-            Spacer(Modifier.height(DesignTokens.spacing8))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(DesignTokens.spacing8)
+        ) {
+            // 上半部：卡片图 / emoji 占位（约占 2:3 的六成高）
             Box(
                 modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(Colors.primaryContainer),
+                    .fillMaxWidth()
+                    .weight(1.6f)
+                    .clip(RoundedCornerShape(DesignTokens.radiusMedium)),
                 contentAlignment = Alignment.Center
             ) {
-                if (avatarBitmap != null) {
+                if (cardBitmap != null) {
                     Image(
-                        bitmap = avatarBitmap.asImageBitmap(),
-                        contentDescription = "${character.name} 的头像",
+                        bitmap = cardBitmap.asImageBitmap(),
+                        contentDescription = "${character.name} 的卡片图",
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(44.dp).clip(CircleShape)
+                        modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Text(
-                        text = character.emoji.ifBlank { "🙂" },
-                        style = Type.titleLarge
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Colors.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = character.emoji.ifBlank { "🙂" },
+                            style = Type.displayMedium
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.width(DesignTokens.spacing12))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = character.name,
-                    style = Type.titleSmall,
-                    color = Colors.onSurface,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val sub = character.personality.ifBlank { character.description }
-                if (sub.isNotBlank()) {
+            Spacer(Modifier.height(DesignTokens.spacing8))
+            // 下半部：头像 + 名字 + 简介 + 开始
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Colors.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (avatarBitmap != null) {
+                        Image(
+                            bitmap = avatarBitmap.asImageBitmap(),
+                            contentDescription = "${character.name} 的头像",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(32.dp).clip(CircleShape)
+                        )
+                    } else {
+                        Text(text = character.emoji.ifBlank { "🙂" }, style = Type.titleSmall)
+                    }
+                }
+                Spacer(Modifier.width(DesignTokens.spacing8))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = sub,
-                        style = Type.bodySmall,
-                        color = Colors.onSurfaceVariant,
-                        maxLines = 2,
+                        text = character.name.ifBlank { "未命名" },
+                        style = Type.titleSmall,
+                        color = Colors.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val sub = character.personality.ifBlank { character.description }
+                    if (sub.isNotBlank()) {
+                        Text(
+                            text = sub,
+                            style = Type.labelSmall,
+                            color = Colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.width(DesignTokens.spacing8))
-            TextButton(onClick = onStart) { Text("开始") }
-            IconButton(onClick = onEdit) {
-                Icon(
-                    Icons.Outlined.Edit,
-                    contentDescription = "编辑角色",
-                    tint = Colors.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
-                )
+            Spacer(Modifier.height(DesignTokens.spacing4))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = onStart,
+                    modifier = Modifier.height(32.dp)
+                ) { Text("开始聊天") }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Outlined.Edit,
+                        contentDescription = "编辑角色",
+                        tint = Colors.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }
@@ -411,7 +477,7 @@ private fun SectionTitle(title: String) {
             modifier = Modifier
                 .width(3.dp)
                 .height(16.dp)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                .clip(RoundedCornerShape(2.dp))
                 .background(Colors.primary)
         )
         Text(
@@ -436,17 +502,26 @@ private fun HintCard(text: String) {
 }
 
 /* ============================================================
- * 编辑弹窗
+ * 全屏角色添加 / 编辑页
  * ============================================================ */
 
+/**
+ * 独立的角色添加/编辑页（替代原来的 AlertDialog 弹窗）。
+ *
+ * 用整页滚动表单承载更多字段，并给卡片图/头像实时预览；“保存”回写仓库后退出本页。
+ * 新建时 [initial].id = 0，删除按钮隐藏。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CharacterEditDialog(
+private fun CharacterEditorPage(
     initial: CharacterEntity?,
-    onDismiss: () -> Unit,
+    onBack: () -> Unit,
     onSave: (CharacterEntity) -> Unit,
-    onDelete: (() -> Unit)? = null
+    onDelete: (CharacterEntity) -> Unit
 ) {
     val context = LocalContext.current
+    val isNew = initial == null || initial.id == 0L
+
     var name by remember(initial) { mutableStateOf(initial?.name.orEmpty()) }
     var emoji by remember(initial) { mutableStateOf(initial?.emoji ?: "🙂") }
     var description by remember(initial) { mutableStateOf(initial?.description.orEmpty()) }
@@ -457,11 +532,10 @@ private fun CharacterEditDialog(
     var avatarUseCard by remember(initial) { mutableStateOf(initial?.avatarUseCard ?: true) }
     var personality by remember(initial) { mutableStateOf(initial?.personality.orEmpty()) }
     var worldview by remember(initial) { mutableStateOf(initial?.worldview.orEmpty()) }
+    var confirmDelete by remember(initial) { mutableStateOf(false) }
 
-    // 选图后必须 takePersistableUriPermission，否则重启后 URI 权限失效、图片丢失
-    val pickCard = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
+    // SAF 选图后必须 takePersistableUriPermission，否则重启后 URI 权限失效、图片丢失
+    val cardPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(
@@ -471,9 +545,7 @@ private fun CharacterEditDialog(
             cardImageUri = uri.toString()
         }
     }
-    val pickAvatar = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
+    val avatarPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(
@@ -484,140 +556,207 @@ private fun CharacterEditDialog(
         }
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "新建角色" else "编辑角色") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)) {
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("角色名") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = emoji,
-                        onValueChange = { emoji = it.take(4) },
-                        label = { Text("头像 Emoji") },
-                        singleLine = true,
-                        modifier = Modifier.width(96.dp)
-                    )
-                }
+    val cardBitmap = rememberUriBitmap(cardImageUri)
 
-                // ===== 卡片图片 / 头像图片 =====
-                Text("卡片图片", style = Type.titleSmall, color = Colors.onSurface)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                title = { Text(if (isNew) "添加角色" else "编辑角色", fontWeight = FontWeight.SemiBold) },
+                actions = {
+                    TextButton(
+                        enabled = name.isNotBlank(),
+                        onClick = {
+                            onSave(
+                                CharacterEntity(
+                                    id = initial?.id ?: 0L,
+                                    name = name.trim(),
+                                    emoji = emoji.ifBlank { "🙂" },
+                                    description = description.trim(),
+                                    systemPrompt = systemPrompt.trim(),
+                                    greeting = greeting.trim(),
+                                    cardImageUri = cardImageUri,
+                                    avatarImageUri = avatarImageUri,
+                                    avatarUseCard = avatarUseCard,
+                                    personality = personality.trim(),
+                                    worldview = worldview.trim(),
+                                    createdAt = initial?.createdAt ?: System.currentTimeMillis(),
+                                    lastUsedAt = initial?.lastUsedAt ?: 0L
+                                )
+                            )
+                        }
+                    ) { Text("保存") }
+                }
+            )
+        }
+    ) { inner ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing12),
+            verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
+        ) {
+            // ===== 卡片预览（2:3 竖卡缩略）=====
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(DesignTokens.radiusLarge)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (cardBitmap != null) {
+                    Image(
+                        bitmap = cardBitmap.asImageBitmap(),
+                        contentDescription = "卡片预览",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
+                    ) {
+                        Text(text = emoji.ifBlank { "🙂" }, style = Type.displayLarge)
+                        Text(
+                            text = name.ifBlank { "角色卡片预览" },
+                            style = Type.titleMedium,
+                            color = Colors.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+
+            // ===== 基本信息 =====
+            SectionTitle("基本信息")
+            Row(horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("角色名") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = emoji,
+                    onValueChange = { emoji = it.take(4) },
+                    label = { Text("Emoji") },
+                    singleLine = true,
+                    modifier = Modifier.width(96.dp)
+                )
+            }
+            OutlinedTextField(
+                value = description,
+                onValueChange = { description = it },
+                label = { Text("一句话简介") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = personality,
+                onValueChange = { personality = it },
+                label = { Text("性格（如：冷静、毒舌、乐观）") },
+                minLines = 1,
+                maxLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = worldview,
+                onValueChange = { worldview = it },
+                label = { Text("所属世界观 / 背景设定") },
+                minLines = 1,
+                maxLines = 4,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ===== 图片 =====
+            SectionTitle("图片")
+            Text("卡片图片", style = Type.titleSmall, color = Colors.onSurface)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = { cardPick.launch(arrayOf("image/*")) }) {
+                    Text(if (cardImageUri.isBlank()) "选择卡片图" else "更换卡片图")
+                }
+                if (cardImageUri.isNotBlank()) {
+                    TextButton(onClick = { cardImageUri = "" }) { Text("清除") }
+                }
+            }
+            FilterChip(
+                selected = avatarUseCard,
+                onClick = { avatarUseCard = !avatarUseCard },
+                label = { Text("头像与卡片图共用") }
+            )
+            if (!avatarUseCard) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = { pickCard.launch(arrayOf("image/*")) }) {
-                        Text(if (cardImageUri.isBlank()) "选择卡片图" else "更换卡片图")
+                    TextButton(onClick = { avatarPick.launch(arrayOf("image/*")) }) {
+                        Text(if (avatarImageUri.isBlank()) "选择独立头像" else "更换头像")
                     }
-                    if (cardImageUri.isNotBlank()) {
-                        TextButton(onClick = { cardImageUri = "" }) { Text("清除") }
-                    }
-                }
-                FilterChip(
-                    selected = avatarUseCard,
-                    onClick = { avatarUseCard = !avatarUseCard },
-                    label = { Text("头像与卡片图共用") }
-                )
-                if (!avatarUseCard) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing8),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TextButton(onClick = { pickAvatar.launch(arrayOf("image/*")) }) {
-                            Text(if (avatarImageUri.isBlank()) "选择独立头像" else "更换头像")
-                        }
-                        if (avatarImageUri.isNotBlank()) {
-                            TextButton(onClick = { avatarImageUri = "" }) { Text("清除") }
-                        }
+                    if (avatarImageUri.isNotBlank()) {
+                        TextButton(onClick = { avatarImageUri = "" }) { Text("清除") }
                     }
                 }
+            }
 
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("一句话简介") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = personality,
-                    onValueChange = { personality = it },
-                    label = { Text("性格（如：冷静、毒舌、乐观）") },
-                    minLines = 1,
-                    maxLines = 3,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = worldview,
-                    onValueChange = { worldview = it },
-                    label = { Text("所属世界观 / 背景设定") },
-                    minLines = 1,
-                    maxLines = 4,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = systemPrompt,
-                    onValueChange = { systemPrompt = it },
-                    label = { Text("角色设定（说话方式 / 补充约束）") },
-                    minLines = 3,
-                    maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = greeting,
-                    onValueChange = { greeting = it },
-                    label = { Text("开场白（空会话时展示）") },
-                    minLines = 1,
-                    maxLines = 3,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = name.isNotBlank(),
-                onClick = {
-                    onSave(
-                        CharacterEntity(
-                            id = initial?.id ?: 0L,
-                            name = name.trim(),
-                            emoji = emoji.ifBlank { "🙂" },
-                            description = description.trim(),
-                            systemPrompt = systemPrompt.trim(),
-                            greeting = greeting.trim(),
-                            cardImageUri = cardImageUri,
-                            avatarImageUri = avatarImageUri,
-                            avatarUseCard = avatarUseCard,
-                            personality = personality.trim(),
-                            worldview = worldview.trim(),
-                            createdAt = initial?.createdAt ?: System.currentTimeMillis(),
-                            lastUsedAt = initial?.lastUsedAt ?: 0L
+            // ===== 对话设定 =====
+            SectionTitle("对话设定")
+            OutlinedTextField(
+                value = systemPrompt,
+                onValueChange = { systemPrompt = it },
+                label = { Text("角色设定（说话方式 / 补充约束）") },
+                minLines = 3,
+                maxLines = 6,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = greeting,
+                onValueChange = { greeting = it },
+                label = { Text("开场白（空会话时展示）") },
+                minLines = 1,
+                maxLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ===== 危险操作 =====
+            if (!isNew && initial != null) {
+                Spacer(Modifier.height(DesignTokens.spacing8))
+                if (!confirmDelete) {
+                    TextButton(onClick = { confirmDelete = true }) {
+                        Text("删除角色", color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "确认删除？此操作不可撤销",
+                            style = Type.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f)
                         )
-                    )
-                }
-            ) { Text("保存") }
-        },
-        dismissButton = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (initial != null && onDelete != null) {
-                    TextButton(onClick = onDelete) {
-                        Text("删除", color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+                        IconButton(onClick = { onDelete(initial) }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "确认删除", tint = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
-                TextButton(onClick = onDismiss) { Text("取消") }
             }
+            Spacer(Modifier.height(DesignTokens.spacing24))
         }
-    )
+    }
 }
+
+/* ============================================================
+ * 身份编辑弹窗
+ * ============================================================ */
 
 @Composable
 private fun PersonaEditDialog(
