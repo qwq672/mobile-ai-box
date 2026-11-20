@@ -80,7 +80,23 @@ OptimizationSettingsScreen（FilterChip 自动/手动/关闭 + 手动时滑块 1
 - 新增观测点：日志 `setHexagonNpuSessions`、`llamaLoad: backend=npu -> N device(s)`、
   `虚拟会话: mode=... count=...`；Qwen3.5-9B Q4_0 应看到多设备（2-3）而非 1。
 
-## 编译
+## 时序修复（第二个提交 afb6ec2）
+
+发现并修正一个会让多会话失效的运行时问题：ggml-hexagon 在 **backend 首次加载**
+（`load_backend_lib("hexagon")`，发生在 App 启动的 `npuAvailable()` 探测）时就读取
+`GGML_HEXAGON_DEVICES` 并固化 HTP 设备列表，之后 setenv 无效。若只在 load 阶段设 env，
+设备已缓存为单会话，多会话设置形同虚设。
+
+修法：
+- native 新增全局会话状态 `g_hex_session_mode/count`（默认 auto/3，覆盖 9B Q4_0）
+  + `apply_hexagon_session_env()`，在 `load_backend_lib("hexagon")` 入口前置应用；
+- `setHexagonNpuSessions` 改为更新全局状态并 apply；
+- SettingsViewModel 探测前按用户设置设置会话模式（manual/off 冷启动即生效）。
+
+## 编译与交付
 
 - 本地无 Android SDK，走 hosted NPU job（build-apk.yml `build_npu_hosted`），
   llama.cpp pin v1.0.0 保持不变。
+- hosted run 44700023498：Hexagon NPU job + 普通 APK job 均 ✓ success（8m35s / 8m50s）。
+- 交付 APK：`aibox-v261120-npu-sessions.apk`（16MB，SHA256 305b05df...），
+  源自 artifact `aibox-hexagon-hosted-145.apk`，校验和一致。
