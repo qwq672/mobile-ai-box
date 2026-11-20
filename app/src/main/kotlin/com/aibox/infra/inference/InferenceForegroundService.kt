@@ -97,6 +97,12 @@ class InferenceForegroundService : Service() {
         stopSelf()
     }
 
+    override fun onDestroy() {
+        // 兜底：无论从哪条路径结束，都确保通知被移除，不留常驻残留。
+        try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
+        super.onDestroy()
+    }
+
     companion object {
         private const val TAG = "aibox.inference.fgs"
         private const val CHANNEL_ID = "aibox_inference"
@@ -118,8 +124,10 @@ class InferenceForegroundService : Service() {
         /** 推理结束：移除通知并停止服务。 */
         fun stop(context: Context) {
             runCatching {
-                val intent = Intent(context, InferenceForegroundService::class.java).setAction(ACTION_STOP)
-                context.startService(intent)
+                // 用 stopService（后台允许）而非 startService（Android 8+ 后台抛限制异常），
+                // onDestroy 里会移除通知，避免推理在后台结束时通知残留。
+                val intent = Intent(context, InferenceForegroundService::class.java)
+                context.stopService(intent)
             }.onFailure { LogSystem.warn(TAG, "stop 前台服务失败: ${it.message}") }
         }
     }

@@ -53,9 +53,11 @@ fun MindMapCanvas(code: String, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val cs = MaterialTheme.colorScheme
-    val textStyle = TextStyle(fontSize = 13.sp, color = cs.onSurface, textAlign = TextAlign.Center)
+    val textStyle = remember(cs.onSurface) {
+        TextStyle(fontSize = 13.sp, color = cs.onSurface, textAlign = TextAlign.Center)
+    }
 
-    val layout = remember(tree, measurer, density, cs, textStyle) {
+    val layout = remember(tree, measurer, density, textStyle) {
         val nodeH = with(density) { 40.dp.toPx() }
         val vGap = with(density) { 30.dp.toPx() }
         val hGap = with(density) { 18.dp.toPx() }
