@@ -62,7 +62,10 @@ class ChatRepository(context: Context) {
         title: String,
         mode: String = "CHAT",
         createdAt: Long,
-        lastUsedAt: Long
+        lastUsedAt: Long,
+        modelPath: String? = null,
+        characterId: Long? = null,
+        personaId: Long? = null
     ): Long {
         val s = SessionEntity(
             title = title,
@@ -70,8 +73,10 @@ class ChatRepository(context: Context) {
             createdAt = createdAt,
             lastUsedAt = lastUsedAt,
             messageCount = 0,
-            modelPath = null,
-            mode = mode
+            modelPath = modelPath,
+            mode = mode,
+            characterId = characterId,
+            personaId = personaId
         )
         return sessionDao.insert(s)
     }
@@ -116,6 +121,26 @@ class ChatRepository(context: Context) {
             ))
         }
         return id
+    }
+
+    /**
+     * 导入专用：落消息但不把会话 time 冲成系统当前时间。
+     *
+     * 普通 [addMessage] 每次都把 lastUsedAt 重置为 now —— 这对实时聊天是对的，
+     * 但导入历史数据时会把「数据里标注的时间」覆盖成导入时刻，历史列表排序全乱。
+     * 这里只增加 messageCount，保留 createSessionAt 写入的 createdAt/lastUsedAt。
+     */
+    suspend fun addMessageAt(sessionId: Long, msg: ChatMessage): Long {
+        val id = messageDao.insert(msg.toEntity(sessionId))
+        val s = sessionDao.getById(sessionId)
+        if (s != null) sessionDao.update(s.copy(messageCount = s.messageCount + 1))
+        return id
+    }
+
+    /** 导入完成后，把会话时间定稿为数据里标注的时间（防 addMessage 类调用中途改写）。 */
+    suspend fun setSessionTimes(id: Long, createdAt: Long, lastUsedAt: Long) {
+        val s = sessionDao.getById(id) ?: return
+        sessionDao.update(s.copy(createdAt = createdAt, lastUsedAt = lastUsedAt))
     }
 
     suspend fun updateMessage(msg: ChatMessage) {

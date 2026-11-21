@@ -81,18 +81,41 @@ class CloudChatService(
         val messages = listOf(
             CloudMsg(
                 role = "system",
-                content = "你是一个标题生成器。根据用户的问题，输出一个不超过 12 个汉字的简短标题。" +
-                    "只输出标题本身，不要引号、不要标点、不要解释、不要加『标题：』之类前缀。"
+                content = TITLE_SYSTEM_PROMPT
             ),
-            CloudMsg(role = "user", content = clean)
+            CloudMsg(role = "user", content = "给这段对话起标题：\n$clean")
         )
-        return client.chatOnce(settings.cloudConfig.first(), messages, maxTokens = 32)
-            .getOrNull()
-            ?.lineSequence()
-            ?.map { it.trim().trim('"', '「', '」', '《', '》', '“', '”') }
-            ?.firstOrNull { it.isNotBlank() }
-            ?.take(24)
-            ?.takeIf { it.length >= 2 }
+        val raw = client.chatOnce(settings.cloudConfig.first(), messages, maxTokens = 48)
+            .getOrNull() ?: return null
+        return sanitizeTitle(raw)
+    }
+
+    /** 把模型原始输出清洗成一句干净短标题；失败返回 null 让调用方降级。 */
+    private fun sanitizeTitle(raw: String): String? {
+        var s = raw.trim()
+        // 推理型模型会先吐 <think>…</think> 思考过程，整段丢掉
+        s = s.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "")
+        s = s.replace(Regex("<[a-z_]+>[\\s\\S]*?</[a-z_]+>", RegexOption.IGNORE_CASE), "")
+        // 取第一行有效文本（标题就该是一行）
+        s = s.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() }
+            ?: return null
+        // 去掉常见前缀：「标题：」「标题:」「Title:」以及列表符号
+        s = s.replace(Regex("^(标题|题目|Title)\\s*[:：]\\s*", RegexOption.IGNORE_CASE), "")
+        s = s.replace(Regex("^[-*•\\d.、]\\s*"), "")
+        // 去掉包裹引号
+        s = s.trim().trim('"', '\'', '「', '」', '《', '》', '“', '”', '『', '』')
+        // 拒绝把指令复述当标题：这类输出说明模型没理解任务，宁可降级
+        if (s.contains("用户说", ignoreCase = true) ||
+            s.contains("回答用户", ignoreCase = true) ||
+            s.contains("需要作为标题", ignoreCase = true) ||
+            s.contains("起标题", ignoreCase = true) ||
+            s.startsWith("好的", ignoreCase = true) ||
+            s.startsWith("以下是", ignoreCase = true)
+        ) return null
+        s = s.take(24).trim()
+        return s.takeIf { it.length >= 2 }
     }
 
     /**
@@ -313,5 +336,27 @@ class CloudChatService(
         const val TAG = "aibox.cloud"
         const val MAX_TOOL_ROUNDS = 4
         const val MAX_IMAGE_BYTES = 16 * 1024 * 1024
+
+        /**
+         * 会话标题生成专用 system prompt。
+         *
+         * 要点：推理型模型容易把「给对话起标题」当成待分析问题，吐出
+         * 「我们需要回答用户……用户说『X』……需要作为标题」这类思考过程。
+         * 因此这里用 few-shot 把输出严格锚定成「一个名词短语」，并明确禁止分析/复述。
+         */
+        const val TITLE_SYSTEM_PROMPT =
+            "你是一个对话标题生成器。你的唯一任务是把用户给的对话内容概括成一个简短标题。\n" +
+            "规则：\n" +
+            "1. 只输出标题本身，是一个名词短语，不超过 12 个汉字。\n" +
+            "2. 严禁分析、解释、复述用户的话，严禁输出『用户说』『我们需要回答』『作为标题』等字样。\n" +
+            "3. 严禁加引号、标点、『标题：』前缀或任何多余文字。\n" +
+            "4. 不要回答用户的问题，只要给这段内容起个名字。\n" +
+            "示例：\n" +
+            "用户内容：帮我写一个冒泡排序的 Python 函数\n" +
+            "标题：Python冒泡排序\n" +
+            "用户内容：明天上海天气怎么样\n" +
+            "标题：上海明日天气\n" +
+            "用户内容：解释一下量子纠缠的原理\n" +
+            "标题：量子纠缠原理"
     }
 }

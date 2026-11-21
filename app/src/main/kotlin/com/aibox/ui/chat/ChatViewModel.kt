@@ -629,7 +629,11 @@ class ChatViewModel : ViewModel() {
                     val current = if (revealed.length > baseLen) revealed.substring(baseLen) else ""
                     _ui.value = _ui.value.copy(
                         currentStream = revealed,
+                        // 工具卡只由 parts 里手动维护的 toolPart 表达（带准确状态/结果）。
+                        // 打字机逐字 revealed 时对 aibox:tool 块的二次解析会产出重复的、
+                        // 无结果的 tool part，与之竞争覆盖导致状态来回跳，这里直接滤掉。
                         streamParts = parts + parseTimeline(current)
+                            .filterNot { it.kind == MsgPart.KIND_TOOL }
                     )
                 }
             )
@@ -666,6 +670,7 @@ class ChatViewModel : ViewModel() {
                                 _ui.value = _ui.value.copy(
                                     currentStream = roundBase + turn,
                                     streamParts = parts + parseTimeline(turn.toString())
+                                        .filterNot { it.kind == MsgPart.KIND_TOOL }
                                 )
                             }
                         }
@@ -700,13 +705,20 @@ class ChatViewModel : ViewModel() {
                 val toolPart = MsgPart.tool(call.name, displayName, call.argumentsJson, running = true)
                 parts += toolPart
                 _ui.value = _ui.value.copy(streamParts = parts.toList())
-
-                val outcome = toolInvocationViewModel.executeAwait(
-                    toolId = call.name,
-                    params = call.arguments,
-                    sessionId = "chat-$sid",
-                    deviceInfo = buildDeviceInfo()
-                )
+                // 让 Compose 真正渲染出「正在调用」这一帧再执行工具。
+                // generate 跑在 Main.immediate，若同步执行工具（计算器/日期/GPS 等），
+                // Main 被独占到 running=false 落到 _ui 为止，中间态永远不会被重组观察到——
+                // 表现出来就是「第一次工具卡在正在调用，直到回答结束才一次性全刷出来」。
+                // yield 把主线程让给一帧合成；工具体本身切到 IO 执行，避免慢工具继续占 Main。
+                kotlinx.coroutines.yield()
+                val outcome = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    toolInvocationViewModel.executeAwait(
+                        toolId = call.name,
+                        params = call.arguments,
+                        sessionId = "chat-$sid",
+                        deviceInfo = buildDeviceInfo()
+                    )
+                }
                 var success = false
                 var output = ""
                 var hits: List<ToolHit> = emptyList()

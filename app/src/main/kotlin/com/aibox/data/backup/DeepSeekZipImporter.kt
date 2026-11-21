@@ -215,10 +215,13 @@ object DeepSeekZipImporter {
                     versions = if (isUser) versions else listOf(dm.content),
                     versionIndex = if (isUser) vi else 0
                 )
-                repo.addMessage(newId, msg)
+                repo.addMessageAt(newId, msg)
                 written++
             }
             if (written > 0) repo.setSessionMessageCount(newId, written)
+            // 定稿时间：即便落消息链里有人 touch 过，也把列表显示/排序用的 lastUsedAt
+            // 锁回数据里标注的时间，确保历史列表按真实时间而非导入时刻排列。
+            repo.setSessionTimes(newId, createdAt, updatedAt)
             written
         }.onFailure {
             if (warnings.size < 30) warnings.add("会话「$title」落库失败：${it.message}")

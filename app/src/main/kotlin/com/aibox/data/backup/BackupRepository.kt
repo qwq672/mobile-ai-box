@@ -120,16 +120,25 @@ class BackupRepository(private val context: Context) {
         backup.conversations?.forEach { conv ->
             runCatching {
                 val suffix = " · 导入 ${java.text.SimpleDateFormat("MMdd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
-                val newId = container.chatRepository.createSession(
+                // 用备份里记录的时间创建会话，而不是导入时刻；0 表示老备份没带时间，回落到现在。
+                val now = System.currentTimeMillis()
+                val createdAt = conv.session.createdAt.takeIf { it > 0 } ?: now
+                val lastUsedAt = conv.session.lastUsedAt.takeIf { it > 0 } ?: createdAt
+                val newId = container.chatRepository.createSessionAt(
                     title = conv.session.title + suffix,
-                    modelPath = conv.session.modelPath,
                     mode = conv.session.mode.ifBlank { "CHAT" },
+                    createdAt = createdAt,
+                    lastUsedAt = lastUsedAt,
+                    modelPath = conv.session.modelPath,
                 )
                 sessions++
                 conv.messages.forEach { m ->
-                    container.chatRepository.addMessage(newId, m.copy(id = 0, sessionId = newId))
+                    // addMessageAt 不重置会话时间，保留备份里的原始时间
+                    container.chatRepository.addMessageAt(newId, m.copy(id = 0, sessionId = newId))
                     messages++
                 }
+                // 定稿：列表显示/排序用的 lastUsedAt 锁回数据里的时间
+                container.chatRepository.setSessionTimes(newId, createdAt, lastUsedAt)
             }.onFailure { warnings.add("会话「${conv.session.title}」导入失败：${it.message}") }
         }
 
@@ -167,21 +176,31 @@ class BackupRepository(private val context: Context) {
         val warnings = parseWarnings.toMutableList()
         var sessions = 0
         var messages = 0
-        val now = System.currentTimeMillis()
         conversations.forEach { conv ->
             runCatching {
-                val newId = container.chatRepository.createSession(
-                    title = conv.title, modelPath = null, mode = "CHAT"
+                // 外部导出没有独立的会话时间字段，用消息里明确标注的 ts 推导：
+                // createdAt=最早一条消息时间，lastUsedAt=最晚一条消息时间。
+                // 都不带时间才回落到 now —— 绝不无条件用导入时刻冒充数据时间。
+                val stamps = conv.messages.mapNotNull { it.ts.takeIf { t -> t > 0 } }
+                val now = System.currentTimeMillis()
+                val createdAt = stamps.minOrNull() ?: now
+                val lastUsedAt = stamps.maxOrNull() ?: createdAt
+                val newId = container.chatRepository.createSessionAt(
+                    title = conv.title,
+                    mode = "CHAT",
+                    createdAt = createdAt,
+                    lastUsedAt = lastUsedAt,
                 )
                 sessions++
                 conv.messages.forEach { m ->
-                    val ts = if (m.ts > 0) m.ts else now
-                    container.chatRepository.addMessage(
+                    val ts = if (m.ts > 0) m.ts else createdAt
+                    container.chatRepository.addMessageAt(
                         newId,
                         ChatMessage(sessionId = newId, role = m.role, content = m.content, ts = ts)
                     )
                     messages++
                 }
+                container.chatRepository.setSessionTimes(newId, createdAt, lastUsedAt)
             }.onFailure { warnings.add("会话「${conv.title}」导入失败：${it.message}") }
         }
         if (sessions == 0 && warnings.isEmpty()) warnings.add("未识别到可导入的对话，请选择正确的来源格式")
