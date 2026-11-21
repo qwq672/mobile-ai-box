@@ -560,14 +560,10 @@ fun ChatScreen(
                 )
 
                 // 回到底部：上滑翻看更早消息时出现，点击平滑落到最新一条。
-                AnimatedVisibility(
-                    visible = showJumpDown && !ui.streaming && ui.hasModel,
-                    enter = fadeIn(tween(150)),
-                    exit = fadeOut(tween(150)),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 28.dp)
-                ) {
+                // 用 if 直接控制而非 AnimatedVisibility：此处处于 BoxScope，
+                // 而外层 Column 的 ColumnScope 隐式接收者仍在作用域内，
+                // 会让 AnimatedVisibility 错误解析成 ColumnScope 重载并报接收者歧义。
+                if (showJumpDown && !ui.streaming && ui.hasModel) {
                     androidx.compose.material3.FloatingActionButton(
                         onClick = {
                             scope.launch {
@@ -577,7 +573,10 @@ fun ChatScreen(
                         },
                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(48.dp)
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 28.dp)
+                            .size(48.dp)
                     ) {
                         Icon(
                             Icons.Filled.KeyboardArrowDown,
