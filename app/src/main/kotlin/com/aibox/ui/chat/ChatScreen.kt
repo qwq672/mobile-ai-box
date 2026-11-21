@@ -387,7 +387,7 @@ fun ChatScreen(
                                 },
                                 enabled = findMatches.isNotEmpty(),
                                 modifier = Modifier.size(32.dp)
-                            ) { Icon(Icons.Outlined.ExpandLess, contentDescription = "上一条") }
+                            ) { Text("↑", style = MaterialTheme.typography.titleMedium) }
                             IconButton(
                                 onClick = {
                                     if (findMatches.isNotEmpty()) {
@@ -396,7 +396,7 @@ fun ChatScreen(
                                 },
                                 enabled = findMatches.isNotEmpty(),
                                 modifier = Modifier.size(32.dp)
-                            ) { Icon(Icons.Outlined.ExpandMore, contentDescription = "下一条") }
+                            ) { Text("↓", style = MaterialTheme.typography.titleMedium) }
                         }
                     } else Column {
                         val isRoleplay = ui.mode == "ROLEPLAY" && ui.characterName.isNotBlank()
