@@ -94,6 +94,18 @@ class BackupRepository(private val context: Context) {
         }
     }
 
+    /**
+     * 导入 DeepSeek 新版全量 zip（seek_data-20xx.zip）。
+     * 两遍流式扫描，整包不入内存、不拆分、不减少数据；每落库一个会话回调进度。
+     * @param openStream 每次返回一个全新的 zip InputStream。
+     */
+    suspend fun importDeepSeekZip(
+        openStream: () -> java.io.InputStream?,
+        onProgress: (DeepSeekZipImporter.Progress) -> Unit = {},
+    ): ImportReport = withContext(Dispatchers.IO) {
+        DeepSeekZipImporter.import(openStream, onProgress)
+    }
+
     private suspend fun importAibox(raw: String): ImportReport {
         val backup = runCatching { json.decodeFromString<AiboxBackup>(raw) }.getOrElse {
             return ImportReport(warnings = listOf("备份解析失败：${it.message ?: "格式错误"}"))

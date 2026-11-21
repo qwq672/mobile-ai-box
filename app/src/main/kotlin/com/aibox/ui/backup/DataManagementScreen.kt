@@ -130,16 +130,29 @@ fun DataManagementScreen(
                 UnifiedSection(title = "导入数据") {
                     Column(Modifier.padding(horizontal = DesignTokens.spacing16)) {
                         Text(
-                            text = "选择文件后自动识别格式：AIBox 备份 / ChatGPT conversations.json / DeepSeek conversations.json。",
+                            text = "选择文件后自动识别格式：AIBox 备份 / ChatGPT conversations.json / " +
+                                "DeepSeek conversations.json / DeepSeek 新版全量 zip（chat_sessions 目录，流式导入）。" +
+                                "导入一律追加，不覆盖现有数据。",
                             style = Type.bodySmall, color = Colors.onSurfaceVariant,
                         )
                         Spacer(Modifier.size(DesignTokens.spacing8))
                         OutlinedButton(
-                            onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                            onClick = {
+                                importLauncher.launch(
+                                    arrayOf("application/zip", "application/json", "text/plain", "*/*")
+                                )
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !ui.busy,
                         ) {
-                            Text(if (ui.busy) "导入中…" else "选择文件并导入")
+                            Text(
+                                when {
+                                    ui.busy && ui.importProgress != null ->
+                                        "导入中… ${ui.importProgress!!.done}/${ui.importProgress!!.total} 会话"
+                                    ui.busy -> "导入中…"
+                                    else -> "选择文件并导入"
+                                }
+                            )
                         }
                     }
                 }

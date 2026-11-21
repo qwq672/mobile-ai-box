@@ -63,6 +63,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowUpward
@@ -113,6 +114,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -175,11 +177,14 @@ fun ChatScreen(
     val enabledTools by vm.enabledToolIds.collectAsStateWithLifecycle()
     val networkMode = com.aibox.domain.tool.NetworkMode.fromEnabled(enabledTools)
     val listState = rememberLazyListState()
+    // 进入会话默认停在最新消息：切换会话时置位，等消息加载出来后一次性瞬时跳到底。
+    var pendingJumpToBottom by remember { mutableStateOf(true) }
     val keyboard = LocalSoftwareKeyboardController.current
     val snackbarHost = remember { SnackbarHostState() }
 
     // 当 sessionId 变化时加载该 session；若有角色扮演请求则优先新建角色会话
     LaunchedEffect(sessionId) {
+        pendingJumpToBottom = true
         val req = com.aibox.ui.roleplay.RoleplayLauncher.consume()
         when {
             req == null -> if (sessionId != 0L) vm.loadSession(sessionId)
@@ -203,6 +208,13 @@ fun ChatScreen(
     }
     val listItemCount = visibleMessages.size +
         (if (ui.streaming) 1 else 0) + 1 // 最后一项是底部 spacer
+    // 会话切换后首次拿到消息：瞬时落到最新一条（不走动画，避免进页看到飞滚）。
+    LaunchedEffect(listItemCount) {
+        if (pendingJumpToBottom && listItemCount > 1 && ui.messages.isNotEmpty()) {
+            listState.scrollToItem(listItemCount - 1)
+            pendingJumpToBottom = false
+        }
+    }
     // D：区分「流式逐 token 跟随」与「新增一条消息」。前者打字机每 20ms 推进，必须瞬时跟随
     // （动画会被反复打断反而更抖）；后者是一次性跳动，用短 tween 平滑落位。减弱动态时一律瞬时。
     var lastKnownItemCount by remember { mutableIntStateOf(listItemCount) }
@@ -221,6 +233,14 @@ fun ChatScreen(
             } else {
                 listState.scrollToItem(listItemCount - 1)
             }
+        }
+    }
+    // 用户上滑翻看更早消息时，显示"回到底部"按钮；流式生成期间不显示（自动跟随中）。
+    val showJumpDown by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            info.totalItemsCount > 3 && lastVisible < info.totalItemsCount - 3
         }
     }
     // 错误用 snackbar
@@ -538,6 +558,33 @@ fun ChatScreen(
                             )
                         )
                 )
+
+                // 回到底部：上滑翻看更早消息时出现，点击平滑落到最新一条。
+                AnimatedVisibility(
+                    visible = showJumpDown && !ui.streaming && ui.hasModel,
+                    enter = fadeIn(tween(150)),
+                    exit = fadeOut(tween(150)),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 28.dp)
+                ) {
+                    androidx.compose.material3.FloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                if (ui.reduceMotion) listState.scrollToItem(listItemCount - 1)
+                                else listState.animateScrollToItem(listItemCount - 1)
+                            }
+                        },
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "回到最新消息"
+                        )
+                    }
+                }
 
             }
 

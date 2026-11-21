@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibox.AIBoxApp
+import com.aibox.data.backup.DeepSeekZipImporter
 import com.aibox.data.backup.BackupRepository
 import com.aibox.data.backup.ExportSelection
 import com.aibox.data.backup.ImportReport
@@ -27,6 +28,7 @@ class DataManagementViewModel : ViewModel() {
         val busy: Boolean = false,
         val message: String? = null,
         val report: ImportReport? = null,
+        val importProgress: DeepSeekZipImporter.Progress? = null,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -68,9 +70,32 @@ class DataManagementViewModel : ViewModel() {
     /** 导入：读取用户选择的文件（本软件备份 / ChatGPT / DeepSeek），自动识别格式。 */
     fun importFrom(uri: Uri) {
         if (_ui.value.busy) return
-        update { it.copy(busy = true, message = null, report = null) }
+        update { it.copy(busy = true, message = null, report = null, importProgress = null) }
         viewModelScope.launch {
             try {
+                // 先探测文件类型：zip 魔数 PK\x03\x04 → DeepSeek 新版全量包，走流式导入。
+                // 流式导入整包不入内存，因此不受 150MB 文本闸门限制。
+                val isZip = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { ins ->
+                            val head = ByteArray(4)
+                            val n = ins.read(head)
+                            n == 4 && head[0] == 0x50.toByte() && head[1] == 0x4B.toByte()
+                        }
+                    }.getOrDefault(false) ?: false
+                }
+                if (isZip) {
+                    val report = withContext(Dispatchers.IO) {
+                        repo.importDeepSeekZip(
+                            openStream = { context.contentResolver.openInputStream(uri) },
+                            onProgress = { p -> update { it.copy(importProgress = p) } }
+                        )
+                    }
+                    update { it.copy(busy = false, report = report, importProgress = null) }
+                    return@launch
+                }
+
+                // ---------- 非 zip：原文本导入路径 ----------
                 // 先查文件大小：超大导出（>150MB）直接拦截，避免 readText 一次性把整文件
                 // 读进堆内存导致 OOM（大文件解析 OOM 的第一道闸门）。
                 val sizeBytes = withContext(Dispatchers.IO) {
@@ -84,7 +109,7 @@ class DataManagementViewModel : ViewModel() {
                         it.copy(
                             busy = false,
                             message = "文件约 ${mb}MB，超过 ${MAX_IMPORT_MB}MB 限制，可能导致内存不足。" +
-                                "建议拆分对话导出文件后分批导入。"
+                                "DeepSeek 新版全量 zip 请直接导入（流式处理，无此限制）。"
                         )
                     }
                     return@launch

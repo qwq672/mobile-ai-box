@@ -39,6 +39,7 @@ import com.aibox.ui.theme.DesignTokens
 import com.aibox.ui.theme.Type
 import com.aibox.util.ThermalLevel
 import com.aibox.util.ThermalSample
+import com.aibox.util.skinFeel
 
 /**
  * 散热监控详细页：展示完整历史曲线 + 各项明细 + 后端建议。
@@ -63,6 +64,7 @@ fun ThermalMonitorScreen(
     val monitor = AIBoxApp.instance.container.thermalMonitor
     val percent by monitor.thermalPercent.collectAsStateWithLifecycle()
     val celsius by monitor.celsius.collectAsStateWithLifecycle()
+    val skinCelsius by monitor.skinCelsius.collectAsStateWithLifecycle()
     val cpuFreqKhz by monitor.cpuFreqKhz.collectAsStateWithLifecycle()
     val cpuUsage by monitor.cpuUsage.collectAsStateWithLifecycle()
     val gpuFreqKhz by monitor.gpuFreqKhz.collectAsStateWithLifecycle()
@@ -95,44 +97,77 @@ fun ThermalMonitorScreen(
             contentPadding = PaddingValues(vertical = DesignTokens.spacing16),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
         ) {
-            // ============== 当前状态 ==============
+            // ============== 温度：原始温度 / 体感温度 双卡 ==============
             item {
-                UnifiedSection(title = "温度状态", showTopDivider = false) {
-                    UnifiedCard(
+                UnifiedSection(title = "温度", showTopDivider = false) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = DesignTokens.spacing16),
-                        tone = UnifiedCardTone.SURFACE_LOW
+                        horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(DesignTokens.spacing16)
+                        // 左卡：原始温度（结温，驱动热档位、降频）
+                        UnifiedCard(
+                            modifier = Modifier.weight(1f),
+                            tone = UnifiedCardTone.SURFACE_LOW
                         ) {
-                            Icon(
-                                Icons.Outlined.Thermostat,
-                                contentDescription = null,
-                                tint = Colors.primary,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stateLabel(level),
-                                    style = Type.headingSmall,
-                                    color = Colors.onSurface,
-                                    fontWeight = FontWeight.SemiBold
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Outlined.Thermostat,
+                                    contentDescription = null,
+                                    tint = Colors.primary,
+                                    modifier = Modifier.size(20.dp)
                                 )
                                 Text(
-                                    text = if (percent < 0) "热度 —" else "热度 $percent%",
-                                    style = Type.bodyLarge,
-                                    color = Colors.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "温度 ${formatCelsius(celsius)} · CPU ${formatFreq(cpuFreqKhz)}",
-                                    style = Type.bodyMedium,
-                                    color = Colors.onSurfaceVariant
+                                    "原始温度",
+                                    style = Type.labelSmall,
+                                    color = Colors.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 6.dp)
                                 )
                             }
+                            Spacer(Modifier.height(DesignTokens.spacing8))
+                            Text(
+                                formatCelsius(celsius),
+                                style = Type.headingSmall,
+                                color = Colors.onSurface,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            val rawFeel = skinFeel(celsius)
+                            Text(
+                                if (celsius > 0) rawFeel.label else "—",
+                                style = Type.bodyMedium,
+                                color = if (rawFeel.severity >= 5) MaterialTheme.colorScheme.error else Colors.onSurfaceVariant
+                            )
+                            Text(
+                                text = if (percent < 0) "热度 —" else "热度 $percent%",
+                                style = Type.labelSmall,
+                                color = Colors.onSurfaceVariant
+                            )
+                        }
+                        // 右卡：体感温度（机身表面；读不到显示"—"，绝不拿结温冒充）
+                        UnifiedCard(
+                            modifier = Modifier.weight(1f),
+                            tone = UnifiedCardTone.SURFACE_LOW
+                        ) {
+                            Text("体感温度", style = Type.labelSmall, color = Colors.onSurfaceVariant)
+                            Spacer(Modifier.height(DesignTokens.spacing8))
+                            val feel = skinFeel(skinCelsius)
+                            Text(
+                                if (skinCelsius > 0) feel.label else "—",
+                                style = Type.bodyMedium,
+                                color = if (feel.severity >= 5) MaterialTheme.colorScheme.error else Colors.onSurfaceVariant
+                            )
+                            Text(
+                                if (skinCelsius > 0) formatCelsius(skinCelsius) else "未读到",
+                                style = Type.headingSmall,
+                                color = Colors.onSurface,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "电池 ${formatCelsius(batteryCelsius)}",
+                                style = Type.labelSmall,
+                                color = Colors.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -362,7 +397,14 @@ private fun DetailRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(text = label, style = Type.bodyMedium, color = Colors.onSurfaceVariant)
-        Text(text = value, style = Type.bodyMedium, color = Colors.onSurface)
+        Text(
+            text = value,
+            style = Type.bodyMedium,
+            color = if (value == "未读到" || value == "—" || value == "无数据")
+                Colors.onSurfaceVariant.copy(alpha = 0.5f)
+            else
+                Colors.onSurface
+        )
     }
 }
 
