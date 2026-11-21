@@ -54,6 +54,34 @@ class ChatRepository(context: Context) {
         sessionDao.update(s.copy(title = title, lastUsedAt = System.currentTimeMillis()))
     }
 
+    /**
+     * 导入用：以来源里记录的时间创建会话（而非当前时间）。
+     * 让 DeepSeek / 其它备份导入后，历史列表按真实时间排序。
+     */
+    suspend fun createSessionAt(
+        title: String,
+        mode: String = "CHAT",
+        createdAt: Long,
+        lastUsedAt: Long
+    ): Long {
+        val s = SessionEntity(
+            title = title,
+            modelId = null,
+            createdAt = createdAt,
+            lastUsedAt = lastUsedAt,
+            messageCount = 0,
+            modelPath = null,
+            mode = mode
+        )
+        return sessionDao.insert(s)
+    }
+
+    /** 导入用：会话全部消息落库后，把 messageCount 校正为真实条数。 */
+    suspend fun setSessionMessageCount(id: Long, count: Int) {
+        val s = sessionDao.getById(id) ?: return
+        sessionDao.update(s.copy(messageCount = count))
+    }
+
     suspend fun touchSession(id: Long) {
         val s = sessionDao.getById(id) ?: return
         sessionDao.update(s.copy(lastUsedAt = System.currentTimeMillis()))

@@ -95,6 +95,8 @@ class SettingsRepository(private val context: Context) {
         val CHOICES_BETA = booleanPreferencesKey("choices_beta")
         // 减弱动态效果：关掉打字机缓冲/呼吸光标/高度过渡/平滑滚动/跳跳点，默认关闭
         val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
+        // 云端模型首次建会话时自动生成标题（默认开启，失败降级，不覆盖用户已命名标题）
+        val AI_AUTO_TITLE = booleanPreferencesKey("ai_auto_title")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -147,6 +149,9 @@ class SettingsRepository(private val context: Context) {
 
     /** 减弱动态效果：关闭打字机缓冲/光标/过渡动画，token 直出。默认关闭。 */
     val reduceMotion: Flow<Boolean> = context.dataStore.data.map { it[Keys.REDUCE_MOTION] ?: false }
+
+    /** 云端模型首次建会话时自动生成标题。默认开启；失败降级，不覆盖用户已命名标题。 */
+    val aiAutoTitle: Flow<Boolean> = context.dataStore.data.map { it[Keys.AI_AUTO_TITLE] ?: true }
 
     /** Material You 取色 */
     val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[Keys.DYNAMIC_COLOR] ?: true }
@@ -292,6 +297,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setReduceMotion(on: Boolean) =
         context.dataStore.edit { it[Keys.REDUCE_MOTION] = on }
+
+    suspend fun setAiAutoTittle(on: Boolean) =
+        context.dataStore.edit { it[Keys.AI_AUTO_TITLE] = on }
 
     // ===================================================
     // B3 WebSearchTool：第三方搜索引擎 API key

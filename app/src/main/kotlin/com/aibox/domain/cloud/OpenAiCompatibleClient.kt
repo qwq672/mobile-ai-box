@@ -203,6 +203,69 @@ class OpenAiCompatibleClient {
         }
     }
 
+    /**
+     * 发一次【非流式】短请求，只取正文文本。
+     *
+     * 用于「AI 自动生成会话标题」这类辅助任务：stream=false、不带 tools、
+     * max_tokens 很小，返回快、花费低。失败统一走 Result.failure，调用方降级即可。
+     * 与 [chat] 共用连接/鉴权/URL 拼接，但不碰 activeCall（避免打断正在进行的对话流）。
+     *
+     * @param maxTokens 输出上限，标题建议 24~40。
+     */
+    suspend fun chatOnce(
+        config: CloudConfig,
+        messages: List<CloudMsg>,
+        maxTokens: Int = 32
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = config.baseUrl.trimEnd('/') + "/chat/completions"
+            val body = buildJsonObject {
+                put("model", config.model)
+                put("stream", false)
+                put("temperature", 0.3)
+                put("max_tokens", maxTokens.coerceIn(8, 128))
+                putJsonArray("messages") {
+                    messages.forEach { m -> add(msgToJson(m)) }
+                }
+            }
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .post(body.toString().toRequestBody(JSON_MEDIA))
+            if (config.apiKey.isNotBlank()) {
+                reqBuilder.header("Authorization", "Bearer ${config.apiKey}")
+            }
+            // 标题生成不用 Accept: text/event-stream，走普通 JSON 响应
+            val response = client.newCall(reqBuilder.build()).execute()
+            try {
+                if (!response.isSuccessful) {
+                    val err = response.body?.string().orEmpty().take(500)
+                    error("HTTP ${response.code}: $err")
+                }
+                val text = response.body?.string().orEmpty()
+                val root = Json.parseToJsonElement(text).jsonObject
+                // 部分 provider 把错误包在 200 响应里
+                (root["error"] as? kotlinx.serialization.json.JsonObject)
+                    ?.get("message")?.jsonPrimitive?.contentOrNull?.let { error("provider error: $it") }
+                val content = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                    ?.get("message")?.jsonObject
+                    ?.get("content")?.jsonPrimitive?.contentOrNull
+                    .orEmpty()
+                // 推理模型可能把标题写进 reasoning_content，content 为空时兜底取它
+                val finalText = content.ifBlank {
+                    root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("message")?.jsonObject
+                        ?.get("reasoning_content")?.jsonPrimitive?.contentOrNull
+                        .orEmpty()
+                }
+                finalText.trim()
+            } finally {
+                runCatching { response.close() }
+            }
+        }.onFailure {
+            LogSystem.warn(TAG, "chatOnce failed: ${it.message}")
+        }
+    }
+
     private fun msgToJson(m: CloudMsg) = buildJsonObject {
         put("role", m.role)
         if (m.images.isEmpty()) {

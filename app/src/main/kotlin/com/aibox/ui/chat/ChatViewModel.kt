@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -483,13 +484,46 @@ class ChatViewModel : ViewModel() {
         if (sid == 0L) {
             viewModelScope.launch {
                 val modelPath = engine.state.value.modelPath
-                val title = text.take(20).ifBlank { attachments.firstOrNull()?.name ?: "新话题" }
-                sid = chatRepo.createSession(title, modelPath)
-                _ui.value = _ui.value.copy(sessionId = sid, sessionTitle = title)
+                val defaultTitle = text.take(20).ifBlank { attachments.firstOrNull()?.name ?: "新话题" }
+                val isCloud = runCatching { engine.isCloudActive() }.getOrDefault(false)
+                sid = chatRepo.createSession(defaultTitle, modelPath)
+                _ui.value = _ui.value.copy(sessionId = sid, sessionTitle = defaultTitle)
+                // 云端 + 全局开关时才尝试 AI 命名：仅首次建会话触发，失败降级，
+                // 且只在标题仍等于默认值（用户没手动改名）时写回，绝不覆盖已有标题。
+                if (isCloud && runCatching { settings.aiAutoTitle.first() }.getOrDefault(true)) {
+                    maybeAutoTitle(sid, defaultTitle, text)
+                }
                 continueSend(text, sid, attachments)
             }
         } else {
             continueSend(text, sid, attachments)
+        }
+    }
+
+    /**
+     * 云端首次建会话后用模型生成标题。
+     *
+     * 在独立协程里异步跑，不阻塞本轮回复；拿到候选后再次核对：
+     * 会话确实还叫我们刚写入的默认标题才覆盖——这样用户若在这几百毫秒里
+     * 手动改了名，或历史会话被重新打开，都不会被 AI 悄悄改掉标题。
+     */
+    private fun maybeAutoTitle(sessionId: Long, defaultTitle: String, firstUserText: String) {
+        inferenceScope.launch {
+            runCatching { container.cloudChatService.generateTitle(firstUserText) }
+                .onFailure { LogSystem.warn("aibox.chat", "AI 自动标题失败，保留默认标题：${it.message}") }
+                .getOrNull()
+                ?.let { generated ->
+                    runCatching {
+                        val current = chatRepo.getSession(sessionId)?.title
+                        if (current == defaultTitle && generated.isNotBlank()) {
+                            chatRepo.updateSessionTitle(sessionId, generated)
+                            if (_ui.value.sessionId == sessionId) {
+                                _ui.value = _ui.value.copy(sessionTitle = generated)
+                            }
+                            LogSystem.info("aibox.chat", "AI 自动标题：$defaultTitle → $generated")
+                        }
+                    }.onFailure { LogSystem.warn("aibox.chat", "写回 AI 标题失败：${it.message}") }
+                }
         }
     }
 
@@ -790,6 +824,70 @@ class ChatViewModel : ViewModel() {
             val base = if (last.versions.isEmpty()) listOf(last.content) else last.versions
             val versions = base + gen.text
             val updated = last.copy(
+                content = gen.text,
+                parts = gen.parts,
+                versions = versions,
+                versionIndex = versions.lastIndex,
+                tokensPerSecond = gen.tps
+            )
+            val list = _ui.value.messages.toMutableList()
+            list.add(updated)
+            _ui.value = _ui.value.copy(
+                messages = list.toList(),
+                streaming = false,
+                currentStream = "",
+                streamParts = emptyList(),
+                errorMessage = gen.error
+            )
+            persistUpdate(updated)
+        }
+    }
+
+    /**
+     * 从指定的助手消息分叉出一个新分支（聊天分支功能）。
+     *
+     * 与 [regenerate] 的区别：regenerate 只能重生成最后一条；本方法可对会话里
+     * 【任意一条助手消息】重生成。旧回复作为 [ChatMessage.versions] 的一版保留，
+     * 新回复追加为最后一版，消息下方版本切换器（‹ n/m ›）即可在各分支间切换。
+     * 上下文只取该消息之前的可见消息，不包含它之后的后续对话——这正是“从此处
+     * 重新分支”的语义。用户消息分支由 [editMessage] + [switchVersion] 负责。
+     */
+    fun regenerateAt(target: ChatMessage) {
+        if (_ui.value.streaming) return
+        if (target.role != "assistant") return
+        val full = _ui.value.messages
+        val targetIdx = full.indexOfFirst { it.id == target.id && it.ts == target.ts }
+        if (targetIdx < 0) return
+
+        // 只在该助手消息之前的可见消息作为上下文，重建一个分叉点
+        val visible = visibleMessages(full)
+        val vIdx = visible.indexOfFirst { it.id == target.id && it.ts == target.ts }
+        val history = if (vIdx >= 0) visible.take(vIdx) else visible.take(targetIdx)
+        // 从列表里移除这条旧回复（连同其后属于同一轮的重复回复），流式展示新回复
+        val remaining = full.filterNot { it.id == target.id && it.ts == target.ts }
+        _ui.value = _ui.value.copy(
+            messages = remaining,
+            streaming = true,
+            currentStream = "",
+            streamParts = emptyList(),
+            errorMessage = null
+        )
+        LogSystem.info("aibox.ui.chat", "ChatVM: regenerateAt id=${target.id}")
+
+        viewModelScope.launch {
+            val gen = generate(_ui.value.sessionId, history)
+            if (gen.text.isBlank()) {
+                // 生成失败：把原消息放回，避免分支点凭空消失
+                _ui.value = _ui.value.copy(
+                    messages = full,
+                    streaming = false,
+                    errorMessage = gen.error ?: "模型本轮没有产生可见文本，分支已保留原样。"
+                )
+                return@launch
+            }
+            val base = if (target.versions.isEmpty()) listOf(target.content) else target.versions
+            val versions = (base + gen.text).distinct()
+            val updated = target.copy(
                 content = gen.text,
                 parts = gen.parts,
                 versions = versions,

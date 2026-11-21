@@ -21,6 +21,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -171,7 +172,8 @@ fun ChatScreen(
     vm: ChatViewModel = viewModel(),
     sessionId: Long = 0L,
     onOpenSearch: () -> Unit = {},
-    onOpenShortcutEditor: () -> Unit = {}
+    onOpenShortcutEditor: () -> Unit ={},
+    onOpenToolSettings: () -> Unit = {}
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val enabledTools by vm.enabledToolIds.collectAsStateWithLifecycle()
@@ -206,6 +208,22 @@ fun ChatScreen(
             m.role != "assistant" || m.content.isNotBlank() || m.parts.isNotEmpty()
         }
     }
+    // 页内查找：命中项在 visibleMessages 中的下标（忽略大小写，正文 + 思考 + 工具输出都算）
+    val findMatches = remember(visibleMessages, findQuery) {
+        val q = findQuery.trim()
+        if (q.isBlank()) emptyList()
+        else visibleMessages.mapIndexedNotNull { idx, m ->
+            val haystack = buildString {
+                append(m.content)
+                m.parts.forEach { append('\n').append(it.text).append('\n').append(it.output) }
+            }
+            if (haystack.contains(q, ignoreCase = true)) idx else null
+        }
+    }
+    // 查询变化时把游标归零
+    LaunchedEffect(findQuery) { findCursor = 0 }
+    val currentFindIndex = findMatches.getOrNull(findCursor.coerceIn(0, (findMatches.size - 1).coerceAtLeast(0)))
+
     val listItemCount = visibleMessages.size +
         (if (ui.streaming) 1 else 0) + 1 // 最后一项是底部 spacer
     // 会话切换后首次拿到消息：瞬时落到最新一条（不走动画，避免进页看到飞滚）。
@@ -226,7 +244,7 @@ fun ChatScreen(
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
         // 用户主动往上翻时不要抢滚动；在底部附近（或首次）才自动跟随
         val nearBottom = lastVisible >= info.totalItemsCount - 2
-        if (listItemCount > 0 && !listState.isScrollInProgress && nearBottom) {
+        if (listItemCount > 0 && !listState.isScrollInProgress && nearBottom && !findOpen) {
             if (structuralChange && !ui.reduceMotion && !ui.streaming) {
                 // 该 Compose 版本的 animateScrollToItem 无 animationSpec 参数，用默认动画即可
                 listState.animateScrollToItem(listItemCount - 1)
@@ -235,6 +253,13 @@ fun ChatScreen(
             }
         }
     }
+    // 页内查找：命中游标或当前命中项变化时，把该项滚到可视区中部。
+    LaunchedEffect(currentFindIndex, findCursor) {
+        if (findOpen && currentFindIndex != null) {
+            listState.animateScrollToItem(currentFindIndex)
+        }
+    }
+
     // 用户上滑翻看更早消息时，显示"回到底部"按钮；流式生成期间不显示（自动跟随中）。
     val showJumpDown by remember {
         derivedStateOf {
@@ -262,6 +287,11 @@ fun ChatScreen(
     // 用户消息编辑：编辑前的内容会作为历史版本保留
     var editTarget by remember { mutableStateOf<ChatMessage?>(null) }
     var editText by remember { mutableStateOf("") }
+
+    // 页内查找：在当前会话消息里定位关键字，命中项高亮并可逐条跳转
+    var findOpen by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var findCursor by remember { mutableStateOf(0) }
 
     // 进入页面时内容渐显（导航 → 聊天）：透明度 + 轻微上移，避免只剩一瞬间的淡入
     var contentVisible by remember { mutableStateOf(false) }
@@ -330,7 +360,45 @@ fun ChatScreen(
                     }
                 },
                 title = {
-                    Column {
+                    if (findOpen) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.TextField(
+                                value = findQuery,
+                                onValueChange = { findQuery = it },
+                                placeholder = { Text("在本页查找…") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                colors = androidx.compose.material3.TextFieldDefaults.colors(
+                                    focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                    unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent
+                                )
+                            )
+                            Text(
+                                if (findQuery.isBlank()) "" else "${if (findMatches.isEmpty()) 0 else findCursor + 1}/${findMatches.size}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 2.dp)
+                            )
+                            IconButton(
+                                onClick = {
+                                    if (findMatches.isNotEmpty()) {
+                                        findCursor = (findCursor - 1 + findMatches.size) % findMatches.size
+                                    }
+                                },
+                                enabled = findMatches.isNotEmpty(),
+                                modifier = Modifier.size(32.dp)
+                            ) { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "上一条") }
+                            IconButton(
+                                onClick = {
+                                    if (findMatches.isNotEmpty()) {
+                                        findCursor = (findCursor + 1) % findMatches.size
+                                    }
+                                },
+                                enabled = findMatches.isNotEmpty(),
+                                modifier = Modifier.size(32.dp)
+                            ) { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "下一条") }
+                        }
+                    } else Column {
                         val isRoleplay = ui.mode == "ROLEPLAY" && ui.characterName.isNotBlank()
                         val title = if (isRoleplay) {
                             "${ui.characterEmoji} ${ui.characterName}".trim()
@@ -368,8 +436,11 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenSearch) {
-                        Icon(Icons.Outlined.Search, contentDescription = "搜索")
+                    IconButton(onClick = { findOpen = !findOpen; if (!findOpen) findQuery = "" }) {
+                        Icon(
+                            if (findOpen) Icons.Outlined.Close else Icons.Outlined.Search,
+                            contentDescription = if (findOpen) "关闭查找" else "页内查找"
+                        )
                     }
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
@@ -387,6 +458,16 @@ fun ChatScreen(
                                 onClick = {
                                     menuOpen = false
                                     Toast.makeText(context, "请到「模型」页加载", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("全局搜索所有会话") },
+                                leadingIcon = {
+                                    Icon(Icons.Outlined.TravelExplore, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    onOpenSearch()
                                 }
                             )
                             if (ui.mode == "ROLEPLAY") {
@@ -495,6 +576,7 @@ fun ChatScreen(
                                     m = m,
                                     docStyle = ui.docStyle,
                                     showActions = !ui.streaming && index == lastAssistantIndex,
+                                    highlight = findOpen && findQuery.isNotBlank() && index == currentFindIndex,
                                     animate = false,
                                     choicesEnabled = ui.choicesBeta && !ui.streaming && index == lastAssistantIndex,
                                     onCopy = {
@@ -505,6 +587,9 @@ fun ChatScreen(
                                     },
                                     onRegenerate = if (m.role == "assistant") {
                                         { vm.regenerate() }
+                                    } else null,
+                                    onRegenerateAt = if (m.role == "assistant") {
+                                        { vm.regenerateAt(m) }
                                     } else null,
                                     onDelete = { vm.deleteMessage(m) },
                                     onChoice = { vm.send(it) },
@@ -729,6 +814,15 @@ fun ChatScreen(
                     title = "联网",
                     value = networkMode.label,
                     onClick = { networkDialog = true }
+                )
+                SheetSettingRow(
+                    icon = Icons.Outlined.Build,
+                    title = "工具",
+                    value = "已启用 ${enabledTools.size} 个",
+                    onClick = {
+                        sheetOpen = false
+                        onOpenToolSettings()
+                    }
                 )
                 HorizontalDivider(
                     Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
@@ -1469,8 +1563,10 @@ private fun MessageItem(
     animate: Boolean = false,
     reduceMotion: Boolean = false,
     choicesEnabled: Boolean = true,
+    highlight: Boolean = false,
     onCopy: () -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
+    onRegenerateAt: (() -> Unit)? = null,
     onDelete: () -> Unit = {},
     onChoice: (String) -> Unit = {},
     onSwitchVersion: (Int) -> Unit = {},
@@ -1491,7 +1587,15 @@ private fun MessageItem(
         onLongClick = { menuOpen = true }
     )
 
-    Column(Modifier.fillMaxWidth()) {
+    val highlightModifier = if (highlight) {
+        Modifier
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), MaterialTheme.shapes.medium)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    } else Modifier
+
+    Column(Modifier.fillMaxWidth().then(highlightModifier)) {
         Box(Modifier.fillMaxWidth()) {
             when {
             // 用户：左右都靠右的浅色气泡
@@ -1598,6 +1702,13 @@ private fun MessageItem(
                     onClick = { menuOpen = false; onRegenerate() }
                 )
             }
+            if (onRegenerateAt != null) {
+                DropdownMenuItem(
+                    text = { Text("从此处分支") },
+                    leadingIcon = { Icon(Icons.Outlined.AccountTree, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    onClick = { menuOpen = false; onRegenerateAt() }
+                )
+            }
             DropdownMenuItem(
                 text = { Text("删除", color = MaterialTheme.colorScheme.error) },
                 leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error) },
@@ -1674,7 +1785,7 @@ private fun AssistantParts(
     }
 }
 
-/** 版本切换器：‹ 2/3 ›，切换重新生成或编辑前的历史版本。 */
+/** 分支/版本切换器：‹ 2/3 ›，切换重新生成、编辑或分叉出的多个版本。 */
 @Composable
 private fun VersionSwitcher(m: ChatMessage, onSwitch: (Int) -> Unit) {
     Row(
@@ -1682,6 +1793,12 @@ private fun VersionSwitcher(m: ChatMessage, onSwitch: (Int) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
+        Text(
+            "分支",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = 2.dp)
+        )
         VersionArrow("‹", enabled = m.versionIndex > 0) { onSwitch(m.versionIndex - 1) }
         Text(
             "${m.versionIndex + 1}/${m.versions.size}",

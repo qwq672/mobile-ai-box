@@ -44,7 +44,7 @@ class GpsLocationTool(
     override val id: String = "gps_location"
     override val displayName: String = "GPS 定位"
     override val description: String =
-        "获取设备当前位置（单次定位），返回经纬度、精度与坐标系。室内可能失败。"
+        "获取设备当前位置（单次定位），返回经纬度、精度与坐标系；开启精确位置时附带海拔（WGS84 椭球高）、速度与方位（定位数据有才报）。室内可能失败。"
     override val category: ToolCategory = ToolCategory.ADVANCED
     override val icon: String = "📍"
 
@@ -162,27 +162,62 @@ class GpsLocationTool(
         val gcj = wgs84ToGcj02(lat, lon)
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             .format(Date(location.time))
+
+        // 海拔/速度/方位都是「有才报」：定位数据自己没有这些字段时留空，
+        // 绝不拿推算值冒充，也不新增任何权限——有精确位置时系统自然会带这些字段。
+        val hasAltitude = location.hasAltitude()
+        val altitude = if (hasAltitude) location.altitude else 0.0
+        val hasVerticalAccuracy = hasAltitude && location.hasVerticalAccuracy()
+        val verticalAccuracy = if (hasVerticalAccuracy) location.verticalAccuracyMeters else 0f
+        val hasSpeed = location.hasSpeed()
+        val speed = if (hasSpeed) location.speed else 0f
+        val hasBearing = location.hasBearing()
+        val bearing = if (hasBearing) location.bearing else 0f
+
         val output = buildString {
             appendLine("定位结果（${if (precise) "精确" else "粗略"}${if (cached) "，缓存位置" else ""}）：")
             appendLine("WGS84：${"%.6f".format(lat)}, ${"%.6f".format(lon)}")
             appendLine("GCJ-02（国内地图）：${"%.6f".format(gcj.first)}, ${"%.6f".format(gcj.second)}")
-            appendLine("精度：约 ${location.accuracy.roundToIntOrZero()} 米")
+            appendLine("水平精度：约 ${location.accuracy.roundToIntOrZero()} 米")
+            if (hasAltitude) {
+                // Android 的 altitude 是 WGS84 椭球高（海拔近似），不是气压高度。
+                appendLine("海拔（WGS84 椭球高）：${"%.1f".format(altitude)} 米" +
+                    if (hasVerticalAccuracy) "（垂直精度 ±${verticalAccuracy.roundToIntOrZero()} 米）" else "")
+            }
+            if (hasSpeed) {
+                appendLine("速度：${"%.1f".format(speed)} m/s（约 ${"%.0f".format(speed * 3.6)} km/h）")
+            }
+            if (hasBearing) {
+                appendLine("方位：${"%.0f".format(bearing)}°（0=正北，顺时针）")
+            }
             appendLine("来源：${location.provider ?: "unknown"} · 时间：$time")
             appendLine("提示：室内/隧道可能偏差较大；坐标仅供参考，不能替代专业定位设备。")
         }.trim()
+
+        val structured = LinkedHashMap<String, Any>().apply {
+            put("latitude", lat)
+            put("longitude", lon)
+            put("gcj02_lat", gcj.first)
+            put("gcj02_lon", gcj.second)
+            put("accuracy", location.accuracy)          // 水平精度
+            put("provider", (location.provider ?: ""))
+            put("time", location.time)
+            if (hasAltitude) {
+                put("altitude", altitude)               // WGS84 椭球高，米
+                put("altitude_ref", "WGS84_ellipsoid")  // 明确基准，避免与气压高度混淆
+            }
+            if (hasVerticalAccuracy) put("vertical_accuracy", verticalAccuracy)
+            if (hasSpeed) {
+                put("speed_mps", speed)
+                put("speed_kph", speed * 3.6)
+            }
+            if (hasBearing) put("bearing_deg", bearing)
+        }
         return Outcome.Success(
             ToolResult(
                 success = true,
                 output = output,
-                structuredData = mapOf(
-                    "latitude" to lat,
-                    "longitude" to lon,
-                    "gcj02_lat" to gcj.first,
-                    "gcj02_lon" to gcj.second,
-                    "accuracy" to location.accuracy,
-                    "provider" to (location.provider ?: ""),
-                    "time" to location.time
-                )
+                structuredData = structured
             )
         )
     }

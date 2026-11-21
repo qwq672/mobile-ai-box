@@ -45,6 +45,8 @@ class SettingsViewModel : ViewModel() {
         val enterToSend: Boolean = false,
         /** 减弱动态效果：关掉打字机/光标/过渡动画（默认关闭）。 */
         val reduceMotion: Boolean = false,
+        /** 云端模型首次建会话时 AI 自动生成标题（默认开启）。 */
+        val aiAutoTitle: Boolean = true,
         /** Beta：aibox:choices 选项卡片（默认关闭） */
         val choicesBeta: Boolean = false,
         // 设备状态采样周期（ms），设置页可切 1s/2s/5s
@@ -149,6 +151,11 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.reduceMotion.collectLatest {
                 _ui.value = _ui.value.copy(reduceMotion = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.aiAutoTitle.collectLatest {
+                _ui.value = _ui.value.copy(aiAutoTitle = it)
             }
         }
         viewModelScope.launch {
@@ -368,6 +375,11 @@ class SettingsViewModel : ViewModel() {
     /** 减弱动态效果开关。 */
     fun onReduceMotionChange(on: Boolean) {
         viewModelScope.launch { container.settingsRepository.setReduceMotion(on) }
+    }
+
+    /** AI 自动写会话标题开关（仅云端首次建会话生效）。 */
+    fun onAiAutoTitleChange(on: Boolean) {
+        viewModelScope.launch { container.settingsRepository.setAiAutoTitle(on) }
     }
 
     /** Beta：aibox:choices 选项卡片开关。 */

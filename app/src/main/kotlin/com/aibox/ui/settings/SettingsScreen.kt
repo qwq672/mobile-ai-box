@@ -445,6 +445,16 @@ fun SettingsScreen(
                             trailingContent = { Switch(checked = ui.enterToSend, onCheckedChange = vm::onEnterToSendChange) },
                             leadingContent = { Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(24.dp)) }
                         )
+                        HorizontalDivider()
+                        ListItem(
+                            headlineContent = { Text("AI 自动写会话标题") },
+                            supportingContent = { Text(
+                                "仅云端模型：新建会话的第一条消息发出后，用模型按内容生成一句短标题。" +
+                                "只在新建时生成一次，失败自动用默认标题，绝不会覆盖你手动改过的标题。"
+                            ) },
+                            trailingContent = { Switch(checked = ui.aiAutoTitle, onCheckedChange = vm::onAiAutoTitleChange) },
+                            leadingContent = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(24.dp)) }
+                        )
                     }
                 }
             }

@@ -402,6 +402,7 @@ private fun MainNav() {
                     ChatScreen(
                         sessionId = sid,
                         onOpenSearch = { nav.navigate(Dest.Search.route) },
+                        onOpenToolSettings = { nav.navigate(Dest.ToolSettings.route) },
                         onOpenShortcutEditor = {
                             // E 主页 Hybrid：ChatScreen "保存为快捷方式" 菜单
                             // 草稿已通过 ShortcutEditorLauncher.setPendingDraft 传递，编辑器 init{} 自动消费

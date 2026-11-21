@@ -68,6 +68,34 @@ class CloudChatService(
     suspend fun isUsable(): Boolean = enabled && settings.cloudConfig.first().usable
 
     /**
+     * 根据首条用户消息生成一句短标题（AI 自动命名会话）。
+     *
+     * 只发一次非流式请求，不进工具循环、不写任何会话/标题字段——是否采用、
+     * 是否覆盖由调用方（ChatViewModel）决定，这样天然不会动到用户已命名的标题。
+     * 失败返回 null，调用方降级为默认标题即可。
+     */
+    suspend fun generateTitle(firstUserText: String): String? {
+        if (!isUsable()) return null
+        val clean = firstUserText.trim().take(200)
+        if (clean.isBlank()) return null
+        val messages = listOf(
+            CloudMsg(
+                role = "system",
+                content = "你是一个标题生成器。根据用户的问题，输出一个不超过 12 个汉字的简短标题。" +
+                    "只输出标题本身，不要引号、不要标点、不要解释、不要加『标题：』之类前缀。"
+            ),
+            CloudMsg(role = "user", content = clean)
+        )
+        return client.chatOnce(settings.cloudConfig.first(), messages, maxTokens = 32)
+            .getOrNull()
+            ?.lineSequence()
+            ?.map { it.trim().trim('"', '「', '」', '《', '》', '“', '”') }
+            ?.firstOrNull { it.isNotBlank() }
+            ?.take(24)
+            ?.takeIf { it.length >= 2 }
+    }
+
+    /**
      * 执行一轮对话（含工具循环）。
      *
      * @param onToken 增量文本回调
