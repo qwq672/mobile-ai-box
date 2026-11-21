@@ -453,7 +453,7 @@ fun SettingsScreen(
                                 "只在新建时生成一次，失败自动用默认标题，绝不会覆盖你手动改过的标题。"
                             ) },
                             trailingContent = { Switch(checked = ui.aiAutoTitle, onCheckedChange = vm::onAiAutoTitleChange) },
-                            leadingContent = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(24.dp)) }
+                            leadingContent = { Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(24.dp)) }
                         )
                     }
                 }

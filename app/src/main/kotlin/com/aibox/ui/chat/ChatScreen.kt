@@ -208,6 +208,11 @@ fun ChatScreen(
             m.role != "assistant" || m.content.isNotBlank() || m.parts.isNotEmpty()
         }
     }
+    // 页内查找状态：在当前会话消息里定位关键字，命中项高亮并可逐条跳转
+    var findOpen by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
+    var findCursor by remember { mutableStateOf(0) }
+
     // 页内查找：命中项在 visibleMessages 中的下标（忽略大小写，正文 + 思考 + 工具输出都算）
     val findMatches = remember(visibleMessages, findQuery) {
         val q = findQuery.trim()
@@ -287,11 +292,6 @@ fun ChatScreen(
     // 用户消息编辑：编辑前的内容会作为历史版本保留
     var editTarget by remember { mutableStateOf<ChatMessage?>(null) }
     var editText by remember { mutableStateOf("") }
-
-    // 页内查找：在当前会话消息里定位关键字，命中项高亮并可逐条跳转
-    var findOpen by remember { mutableStateOf(false) }
-    var findQuery by remember { mutableStateOf("") }
-    var findCursor by remember { mutableStateOf(0) }
 
     // 进入页面时内容渐显（导航 → 聊天）：透明度 + 轻微上移，避免只剩一瞬间的淡入
     var contentVisible by remember { mutableStateOf(false) }
@@ -387,7 +387,7 @@ fun ChatScreen(
                                 },
                                 enabled = findMatches.isNotEmpty(),
                                 modifier = Modifier.size(32.dp)
-                            ) { Icon(Icons.Outlined.KeyboardArrowUp, contentDescription = "上一条") }
+                            ) { Icon(Icons.Outlined.ExpandLess, contentDescription = "上一条") }
                             IconButton(
                                 onClick = {
                                     if (findMatches.isNotEmpty()) {
@@ -396,7 +396,7 @@ fun ChatScreen(
                                 },
                                 enabled = findMatches.isNotEmpty(),
                                 modifier = Modifier.size(32.dp)
-                            ) { Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "下一条") }
+                            ) { Icon(Icons.Outlined.ExpandMore, contentDescription = "下一条") }
                         }
                     } else Column {
                         val isRoleplay = ui.mode == "ROLEPLAY" && ui.characterName.isNotBlank()
@@ -1705,7 +1705,7 @@ private fun MessageItem(
             if (onRegenerateAt != null) {
                 DropdownMenuItem(
                     text = { Text("从此处分支") },
-                    leadingIcon = { Icon(Icons.Outlined.AccountTree, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    leadingIcon = { Icon(Icons.Outlined.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     onClick = { menuOpen = false; onRegenerateAt() }
                 )
             }

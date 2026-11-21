@@ -298,7 +298,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun setReduceMotion(on: Boolean) =
         context.dataStore.edit { it[Keys.REDUCE_MOTION] = on }
 
-    suspend fun setAiAutoTittle(on: Boolean) =
+    suspend fun setAiAutoTitle(on: Boolean) =
         context.dataStore.edit { it[Keys.AI_AUTO_TITLE] = on }
 
     // ===================================================
