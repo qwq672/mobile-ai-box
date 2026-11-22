@@ -1,7 +1,10 @@
 package com.aibox.ui.chat
 
 import android.graphics.BitmapFactory
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
@@ -59,7 +62,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -108,14 +113,16 @@ fun MarkdownText(
     /** 是否仍在流式输出。流式中的未闭合 mermaid 围栏先按代码块显示，结束后再兜底渲染成图。 */
     streaming: Boolean = false,
     /** 流式时在文本末尾渲染呼吸光标；减弱动态效果时传 false。 */
-    showCaret: Boolean = false
+    showCaret: Boolean = false,
+    /** 设置开启时对 ```html 围栏做即时 WebView 预览（默认关闭）。 */
+    htmlPreview: Boolean = false
 ) {
     // 流式立即渲染 Markdown：打字机每 20ms 推进，若每次都全量 parseBlocks 会掉帧。
     // 这里对流式文本做节流（最快 90ms 一次），并把 streaming 传给解析器：
     // 未闭合的围栏按代码块降级，闭合后才升级为图/表，避免半成品反复重建。
     val renderText = rememberStreamRenderText(text, streaming)
-    val blocks = remember(renderText, choicesEnabled, streaming) {
-        parseBlocks(renderText, choicesEnabled, streaming)
+    val blocks = remember(renderText, choicesEnabled, streaming, htmlPreview) {
+        parseBlocks(renderText, choicesEnabled, streaming, htmlPreview)
     }
     val primary = MaterialTheme.colorScheme.primary
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
@@ -312,6 +319,8 @@ fun MarkdownText(
                     }
                 }
 
+                is MdBlock.Html -> HtmlPreview(block.code)
+
                 MdBlock.Divider -> HorizontalDivider(
                     Modifier.padding(vertical = 2.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
@@ -417,6 +426,8 @@ private sealed interface MdBlock {
     data class Quote(val text: String) : MdBlock
     data class ListItem(val marker: String, val ordered: Boolean, val text: String) : MdBlock
     data class Code(val lang: String, val code: String) : MdBlock
+    /** HTML 围栏（```html），设置开启后在下方挂 WebView 预览。 */
+    data class Html(val code: String) : MdBlock
     /** Mermaid 图（```mermaid），内置渲染，非 aibox 扩展组件。 */
     data class Mermaid(val code: String) : MdBlock
     data class Table(val header: List<String>, val rows: List<List<String>>) : MdBlock
@@ -435,7 +446,7 @@ private val olRegex = Regex("^(\\d+)[.)]\\s+(.*)$")
 private val hrRegex = Regex("^\\s*([-*_])\\1{2,}\\s*$")
 private val imageRegex = Regex("^!\\[([^]]*)]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)$")
 
-private fun parseBlocks(src: String, choicesEnabled: Boolean = true, streaming: Boolean = false): List<MdBlock> {
+private fun parseBlocks(src: String, choicesEnabled: Boolean = true, streaming: Boolean = false, htmlPreview: Boolean = false): List<MdBlock> {
     if (src.isBlank()) return emptyList()
     val lines = src.replace("\r\n", "\n").split('\n')
     val blocks = mutableListOf<MdBlock>()
@@ -523,6 +534,9 @@ private fun parseBlocks(src: String, choicesEnabled: Boolean = true, streaming: 
                 // 流式未写完时按代码块显示，避免 WebView 抖动；流式结束后即便围栏因截断未闭合
                 // 也兜底渲染成图，否则被截断的图会永远显示成源码。
                 blocks.add(MdBlock.Mermaid(code.toString().trimEnd()))
+            } else if (lang.equals("html", ignoreCase = true) && closed && htmlPreview) {
+                // HTML 围栏：开关开启且围栏闭合才做预览；流式未闭合时仍按代码块显示。
+                blocks.add(MdBlock.Html(code.toString().trimEnd()))
             } else {
                 blocks.add(MdBlock.Code(lang, code.toString().trimEnd()))
             }
@@ -673,6 +687,69 @@ private fun MdTable(block: MdBlock.Table) {
                     }
                 }
             }
+        }
+    }
+}
+
+/* ---------------- HTML 即时预览 ---------------- */
+
+/**
+ * ```html 围栏的即时预览。
+ *
+ * 安全：禁用 JavaScript、禁止文件访问、拦截所有外链（只在 WebView 内渲染内联 HTML），
+ * 避免 XSS 与本地文件读取。限高 320dp，避免长页面把消息列表撑爆。
+ * 只在 html 字符串真正变化时 loadData，避免重组导致每个 token 都 reload 闪烁。
+ */
+@Composable
+private fun HtmlPreview(html: String) {
+    val context = LocalContext.current
+    val isDark = isSystemInDarkTheme()
+    val bg = if (isDark) "#1E1E1E" else "#FFFFFF"
+    val fg = if (isDark) "#E6E6E6" else "#1A1A1A"
+    // 包一层带主题底色的文档，保证预览在深/浅色下都可读。
+    val document = remember(html, isDark) {
+        "<!doctype html><meta charset='utf-8'>" +
+            "<style>html,body{margin:0;padding:8px;background:$bg;color:$fg;" +
+            "font-family:sans-serif;font-size:14px;overflow-x:hidden}" +
+            "img{max-width:100%}</style>$html"
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column {
+            Text(
+                "HTML 预览",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 2.dp)
+            )
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(320.dp),
+                factory = {
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = false
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.setSupportZoom(false)
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean = true
+                        }
+                    }
+                },
+                update = { web ->
+                    // 只在内容变化时重载，避免重组抖动。
+                    if (web.tag != document) {
+                        web.tag = document
+                        web.loadDataWithBaseURL(
+                            null, document, "text/html", "utf-8", null
+                        )
+                    }
+                }
+            )
         }
     }
 }

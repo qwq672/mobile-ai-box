@@ -49,6 +49,8 @@ class SettingsViewModel : ViewModel() {
         val aiAutoTitle: Boolean = true,
         /** Beta：aibox:choices 选项卡片（默认关闭） */
         val choicesBeta: Boolean = false,
+        /** ```html 围栏即时 WebView 预览（默认关闭） */
+        val htmlPreview: Boolean = false,
         // 设备状态采样周期（ms），设置页可切 1s/2s/5s
         val thermalIntervalMs: Int = 2000,
         // 原生层最近一次加载/解码失败的原因（空串 = 无错误）
@@ -161,6 +163,11 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             container.settingsRepository.choicesBeta.collectLatest {
                 _ui.value = _ui.value.copy(choicesBeta = it)
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.htmlPreview.collectLatest {
+                _ui.value = _ui.value.copy(htmlPreview = it)
             }
         }
         viewModelScope.launch {
@@ -385,6 +392,10 @@ class SettingsViewModel : ViewModel() {
     /** Beta：aibox:choices 选项卡片开关。 */
     fun onChoicesBetaChange(on: Boolean) {
         viewModelScope.launch { container.settingsRepository.setChoicesBeta(on) }
+    }
+
+    fun onHtmlPreviewChange(on: Boolean) {
+        viewModelScope.launch { container.settingsRepository.setHtmlPreview(on) }
     }
 
     fun clearLog() {

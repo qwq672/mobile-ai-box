@@ -576,6 +576,7 @@ fun ChatScreen(
                                     highlight = findOpen && findQuery.isNotBlank() && index == currentFindIndex,
                                     animate = false,
                                     choicesEnabled = ui.choicesBeta && !ui.streaming && index == lastAssistantIndex,
+                                    htmlPreview = ui.htmlPreview,
                                     onCopy = {
                                         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                                 as android.content.ClipboardManager
@@ -1616,6 +1617,7 @@ private fun MessageItem(
     animate: Boolean = false,
     reduceMotion: Boolean = false,
     choicesEnabled: Boolean = true,
+    htmlPreview: Boolean = false,
     highlight: Boolean = false,
     onCopy: () -> Unit = {},
     onRegenerate: (() -> Unit)? = null,
@@ -1698,6 +1700,7 @@ private fun MessageItem(
                         reduceMotion = reduceMotion,
                         onChoice = onChoice,
                         choicesEnabled = choicesEnabled,
+                        htmlPreview = htmlPreview,
                         modifier = if (animate && !reduceMotion) {
                             Modifier.animateContentSize(animationSpec = tween(120))
                         } else Modifier
@@ -1724,7 +1727,8 @@ private fun MessageItem(
                                 streaming = animate,
                                 reduceMotion = reduceMotion,
                                 onChoice = onChoice,
-                                choicesEnabled = choicesEnabled
+                                choicesEnabled = choicesEnabled,
+                                htmlPreview = htmlPreview
                             )
                         }
                     }
@@ -1815,6 +1819,7 @@ private fun AssistantParts(
     reduceMotion: Boolean = false,
     onChoice: (String) -> Unit,
     choicesEnabled: Boolean = true,
+    htmlPreview: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -1836,7 +1841,8 @@ private fun AssistantParts(
                         choicesEnabled = choicesEnabled,
                         streaming = streaming,
                         // 光标只挂在最后一段正文末尾；减弱动态时彻底关闭
-                        showCaret = streaming && !reduceMotion && index == parts.lastIndex
+                        showCaret = streaming && !reduceMotion && index == parts.lastIndex,
+                        htmlPreview = htmlPreview
                     )
                 }
             }

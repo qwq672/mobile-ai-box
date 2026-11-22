@@ -97,6 +97,8 @@ class SettingsRepository(private val context: Context) {
         val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
         // 云端模型首次建会话时自动生成标题（默认开启，失败降级，不覆盖用户已命名标题）
         val AI_AUTO_TITLE = booleanPreferencesKey("ai_auto_title")
+        // 聊天里 ```html 围栏的即时 WebView 预览（默认关闭，避免误触/性能顾虑）
+        val HTML_PREVIEW = booleanPreferencesKey("html_preview")
     }
 
     val config: Flow<InferenceConfig> = context.dataStore.data.map { p ->
@@ -363,6 +365,12 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setChoicesBeta(on: Boolean) =
         context.dataStore.edit { it[Keys.CHOICES_BETA] = on }
+
+    /** ```html 围栏即时预览开关，默认关闭。 */
+    val htmlPreview: Flow<Boolean> = context.dataStore.data.map { it[Keys.HTML_PREVIEW] ?: false }
+
+    suspend fun setHtmlPreview(on: Boolean) =
+        context.dataStore.edit { it[Keys.HTML_PREVIEW] = on }
 
     // ===================================================
     // 数据导出 / 导入（通用按值类型编解码，自动覆盖新增 key）

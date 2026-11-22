@@ -479,6 +479,25 @@ fun SettingsScreen(
                 }
             }
 
+            /* ============== HTML 即时预览 ============== */
+            item {
+                SectionHeader(icon = Icons.Outlined.FormatAlignLeft, title = "HTML 预览")
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                ) {
+                    SwitchRow(
+                        title = "html 代码块即时预览",
+                        subtitle = "在 ```html 围栏下方直接渲染预览。WebView 已禁用脚本与外链，默认关闭",
+                        checked = ui.htmlPreview,
+                        onCheckedChange = vm::onHtmlPreviewChange
+                    )
+                }
+            }
+
             /* ============== 权限 ============== */
             item {
                 SectionHeader(icon = Icons.Outlined.Lock, title = "权限")
