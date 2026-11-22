@@ -201,6 +201,8 @@ class ChatViewModel : ViewModel() {
         /** 机身表面体感温度；-1 = 读不到，UI 回退到 thermalCelsius */
         val skinCelsius: Double = -1.0,
         val errorMessage: String? = null,
+        /** html 围栏即时预览开关（来自设置，默认关闭） */
+        val htmlPreview: Boolean = false,
         val hasModel: Boolean = false,
         val modelName: String = "",
         /** 输入框回车行为：true = 回车发送，false = 回车换行。 */
@@ -267,6 +269,11 @@ class ChatViewModel : ViewModel() {
         viewModelScope.launch {
             settings.choicesBeta.collectLatest { on ->
                 _ui.value = _ui.value.copy(choicesBeta = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.htmlPreview.collectLatest { on ->
+                _ui.value = _ui.value.copy(htmlPreview = on)
             }
         }
         viewModelScope.launch {
