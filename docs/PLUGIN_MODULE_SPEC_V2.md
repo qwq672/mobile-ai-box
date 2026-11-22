@@ -1,7 +1,8 @@
 # 插件 / 模块规范 v2（含自定义模型导入与 SD 生图模块）
 
 > 记录时间：2026-11-19
-> 状态：设计稿，不是已实现接口
+> 状态：设计稿 + 已落地的 `.aibox` 读取/校验与插件安全体检
+> 上手文档：[MODULE_DEVELOPER_GUIDE.md](MODULE_DEVELOPER_GUIDE.md)
 > 现有实现参考：mobile-ai-box `docs/PLUGIN_DEVELOPMENT.md`
 > 目的：为推理后端、聊天模块、功能模块（含 SD 生图）、工具插件、模型导入器建立统一契约。
 
@@ -709,7 +710,7 @@ manifest 示例：
 
 ```json
 {
-  "schemaVersion": 1,
+  "schema_version": 1,
   "id": "com.example.sd.bundle",
   "type": "model-bundle",
   "version": "1.0.0",
@@ -721,7 +722,7 @@ manifest 示例：
   "dependencies": {
     "modules": [{"id": "com.aibox.backend.mnn", "required": true}]
   },
-  "signature": {"alg": "ed25519", "keyId": "..."}
+  "signature": {"alg": "ed25519", "key_id": "..."}
 }
 ```
 

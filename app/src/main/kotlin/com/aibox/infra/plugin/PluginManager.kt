@@ -68,6 +68,9 @@ class PluginManager(
     /** 兼容性校验器。 */
     private val compatibilityChecker = PluginCompatibilityChecker(context, currentAiboxVersion)
 
+    /** 插件安全体检。 */
+    private val securityInspector = PluginSecurityInspector(context)
+
     /** 包安装 / 卸载事件接收器（静态注册，单实例监听）。 */
     private val packageReceiver = PluginInstallReceiver()
 
@@ -243,6 +246,14 @@ class PluginManager(
 
         // 2.5 必选前置校验：有 module_manifest 的模块按依赖图判断，缺必选前置则不 bind。
         checkRequiredDependencies(packageName)?.let { reason ->
+            LogSystem.warn(logTag, reason)
+            return Outcome.Failure(reason)
+        }
+
+        // 2.6 安全体检：未签名 / release 下 debuggable / targetSdk 过低 / 无 exported Service 直接拒绝。
+        val security = securityInspector.inspect(packageName)
+        if (!security.ok) {
+            val reason = "安全校验未通过：${security.blockers.joinToString("；")}"
             LogSystem.warn(logTag, reason)
             return Outcome.Failure(reason)
         }
@@ -571,7 +582,8 @@ class PluginManager(
             discovered = discovered,
             compatible = compat.success,
             active = active,
-            reason = reason
+            reason = reason,
+            security = runCatching { securityInspector.inspect(packageName) }.getOrNull()
         )
     }
 
@@ -842,5 +854,7 @@ data class PluginDiagnostic(
     val compatible: Boolean = false,
     /** 是否已绑定并注册到 BackendManagerV2。 */
     val active: Boolean = false,
-    val reason: String = ""
+    val reason: String = "",
+    /** 安全体检结果；查询失败时为 null。 */
+    val security: PluginSecurityInspector.Report? = null
 )

@@ -1,6 +1,8 @@
 # AIBox 插件开发指南
 
-> **v2 规范预告**：功能模块（SD 生图 / ASR / TTS）、自定义模型导入器、权限与宿主能力 API 的完整契约见 [PLUGIN_MODULE_SPEC_V2.md](PLUGIN_MODULE_SPEC_V2.md)。本文仍适用于现有推理后端与聊天模块。
+> 先读 [MODULE_DEVELOPER_GUIDE.md](MODULE_DEVELOPER_GUIDE.md)：如何选 APK / `.aibox` / Dynamic Feature，最小示例、格式、安全底线。
+> 功能模块（SD 生图 / ASR / TTS）、依赖、权限与宿主能力 API 的完整契约见 [PLUGIN_MODULE_SPEC_V2.md](PLUGIN_MODULE_SPEC_V2.md)。本文仍适用于现有推理后端与聊天模块。
+
 
 本指南面向想要为 AIBox 开发**第三方插件**的工程师。读完本指南你将能：
 
