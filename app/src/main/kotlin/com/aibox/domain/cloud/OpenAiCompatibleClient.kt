@@ -111,6 +111,8 @@ class OpenAiCompatibleClient {
 
             LogSystem.info(TAG, "cloud request: url=$url model=${config.model} msgs=${messages.size} tools=${tools.size}")
             val response = call.execute()
+            // 提到 try 外，finally 也要用它来兜底闭合未闭合的思考块。
+            var reasoningOpen = false
             try {
                 if (!response.isSuccessful) {
                     val err = response.body?.string().orEmpty().take(500)
@@ -121,7 +123,6 @@ class OpenAiCompatibleClient {
 
                 val content = StringBuilder()
                 val reasoning = StringBuilder()
-                var reasoningOpen = false
                 val toolCalls = linkedMapOf<Int, ToolCallAccumulator>()
                 var finishReason = "stop"
 
