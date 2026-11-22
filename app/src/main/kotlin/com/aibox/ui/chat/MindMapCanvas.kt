@@ -3,6 +3,7 @@ package com.aibox.ui.chat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -100,8 +101,15 @@ fun MindMapCanvas(code: String, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
         )
+        // 修复崩溃：竖向滚动容器被放进 LazyColumn item 时外层给的是无限高约束，
+        // 直接套 verticalScroll 会触发 "infinity maximum height" 测量崩溃。
+        // 这里先给出一个确定的视口高度（内容高度与上限取小），把约束固定下来，
+        // 再在其内部做横/竖滚动；高度不足时不需要滚动，超过上限时内部可上下拖。
+        val maxViewH = with(density) { 320.dp.toPx() }
+        val viewH = with(density) { minOf(layout.heightPx, maxViewH).toDp() }
         Column(
             Modifier
+                .height(viewH)
                 .horizontalScroll(rememberScrollState())
                 .verticalScroll(rememberScrollState())
         ) {

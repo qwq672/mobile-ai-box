@@ -28,8 +28,10 @@ android {
         applicationId = "com.aibox"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26111901
-        versionName = "v261119-1"
+        // 版本规范：测试版 vYYMMDD-N（当日第 N 个测试版），正式版 vYYMMDD。
+        // versionCode 用 YYMMDDNN，保证随每次交付递增，避免覆盖安装仍显示旧版本。
+        versionCode = 26112202
+        versionName = "v261122-2"
 
         ndk {
             // 手机几乎都是 arm64；缩小体积只打这一个

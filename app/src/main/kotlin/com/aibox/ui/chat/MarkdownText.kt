@@ -1,11 +1,6 @@
 package com.aibox.ui.chat
 
 import android.graphics.BitmapFactory
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.outlined.CheckBox
@@ -25,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -50,14 +46,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -108,46 +110,42 @@ fun MarkdownText(
     /** 流式时在文本末尾渲染呼吸光标；减弱动态效果时传 false。 */
     showCaret: Boolean = false
 ) {
-    // B：流式期间轻量渲染——打字机每 20ms 推进一次，若每次都跑整段 parseBlocks + parseInline
-    // （逐块正则、建 AnnotatedString），长文本后段会明显掉帧、发热。流式时直接纯文本直出，
-    // 等生成结束（streaming=false）再切回完整 Markdown 解析。
-    if (streaming) {
-        // 呼吸光标直接拼在文字尾部：整段是一个 Text，光标随文字一起折行，
-        // 永远落在“最后一个字”之后。之前用 Row + Text(weight(1f,fill=true)) + 独立光标，
-        // weight 把文本撑满整行，光标被顶到“行尾”，看起来像在输入框末尾而不是文字末尾。
-        val shown: AnnotatedString = if (showCaret) {
-            val caretAlpha = rememberCaretAlpha()
-            buildAnnotatedString {
-                append(text)
-                withStyle(SpanStyle(color = color.copy(alpha = caretAlpha))) { append("▌") }
-            }
-        } else {
-            AnnotatedString(text)
-        }
-        Text(
-            text = shown,
-            color = color,
-            style = MaterialTheme.typography.bodyLarge.copy(
-                fontSize = baseFontSize.sp,
-                lineHeight = lineHeight.sp
-            ),
-            modifier = modifier.fillMaxWidth()
-        )
-        return
+    // 流式立即渲染 Markdown：打字机每 20ms 推进，若每次都全量 parseBlocks 会掉帧。
+    // 这里对流式文本做节流（最快 90ms 一次），并把 streaming 传给解析器：
+    // 未闭合的围栏按代码块降级，闭合后才升级为图/表，避免半成品反复重建。
+    val renderText = rememberStreamRenderText(text, streaming)
+    val blocks = remember(renderText, choicesEnabled, streaming) {
+        parseBlocks(renderText, choicesEnabled, streaming)
     }
-    val blocks = remember(text, choicesEnabled) { parseBlocks(text, choicesEnabled, false) }
     val primary = MaterialTheme.colorScheme.primary
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val clipboard = LocalClipboardManager.current
+
+    // 光标拼在最后一个文本型块末尾（静态 ▌，不再逐帧动画，避免为每条消息常驻动画）。
+    val caretIndex = if (streaming && showCaret) {
+        blocks.indexOfLast {
+            it is MdBlock.Heading || it is MdBlock.Paragraph ||
+                it is MdBlock.ListItem || it is MdBlock.Task || it is MdBlock.Quote
+        }
+    } else -1
+    fun styled(text: String, index: Int): AnnotatedString {
+        val base = parseInline(text, primary)
+        return if (index == caretIndex) {
+            buildAnnotatedString {
+                append(base)
+                withStyle(SpanStyle(color = color.copy(alpha = 0.7f))) { append("▌") }
+            }
+        } else base
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        blocks.forEach { block ->
+        blocks.forEachIndexed { index, block ->
             when (block) {
                 is MdBlock.Heading -> Text(
-                    parseInline(block.text, primary),
+                    styled(block.text, index),
                     color = color,
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontSize = when (block.level) {
@@ -162,7 +160,7 @@ fun MarkdownText(
                 )
 
                 is MdBlock.Paragraph -> Text(
-                    parseInline(block.text, primary),
+                    styled(block.text, index),
                     color = color,
                     style = MaterialTheme.typography.bodyLarge.copy(
                         fontSize = baseFontSize.sp,
@@ -184,7 +182,7 @@ fun MarkdownText(
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        parseInline(block.text, primary),
+                        styled(block.text, index),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = (baseFontSize - 1).sp,
@@ -205,7 +203,7 @@ fun MarkdownText(
                         modifier = Modifier.width(if (block.ordered) 30.dp else 20.dp)
                     )
                     Text(
-                        parseInline(block.text, primary),
+                        styled(block.text, index),
                         color = color,
                         style = MaterialTheme.typography.bodyLarge.copy(
                             fontSize = baseFontSize.sp,
@@ -215,25 +213,54 @@ fun MarkdownText(
                 }
 
                 is MdBlock.Mermaid -> {
-                    val isMindmap = block.code.trimStart()
-                        .startsWith("mindmap", ignoreCase = true)
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = codeBg,
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(Modifier.padding(8.dp)) {
-                            if (isMindmap) {
-                                // 思维导图：自研 Canvas 渲染，离线、无 WebView 竞态、无外链脚本。
-                                MindMapCanvas(block.code)
-                            } else {
+                    // 流式期间一律按源码显示：即便围栏已闭合、后面仍在吐正文，也不实例化
+                    // 导图 Canvas / WebView（反复重建既卡顿又放大崩溃风险）。生成结束
+                    // （streaming=false）后才真正渲染成图。
+                    if (streaming) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = codeBg,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Column(Modifier.padding(8.dp)) {
                                 Text(
                                     "mermaid",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
                                 )
-                                MermaidBlock(block.code)
+                                Text(
+                                    block.code,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
+                                    color = color,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState())
+                                )
+                            }
+                        }
+                    } else {
+                        val isMindmap = block.code.trimStart()
+                            .startsWith("mindmap", ignoreCase = true)
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = codeBg,
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Column(Modifier.padding(8.dp)) {
+                                if (isMindmap) {
+                                    // 思维导图：自研 Canvas 渲染，离线、无 WebView 竞态、无外链脚本。
+                                    MindMapCanvas(block.code)
+                                } else {
+                                    Text(
+                                        "mermaid",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+                                    )
+                                    MermaidBlock(block.code)
+                                }
                             }
                         }
                     }
@@ -323,7 +350,7 @@ fun MarkdownText(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        parseInline(block.text, primary),
+                        styled(block.text, index),
                         color = if (block.checked) MaterialTheme.colorScheme.onSurfaceVariant else color,
                         style = MaterialTheme.typography.bodyLarge.copy(
                             fontSize = baseFontSize.sp,
@@ -362,19 +389,24 @@ fun MarkdownText(
     }
 }
 
-/** 呼吸光标的透明度：█ 在 1f↔0.15f 之间缓慢明灭，表明“还在写”。 */
+/**
+ * 流式渲染节流：打字机每 20ms 推进一次，若每次都全量解析 Markdown 会掉帧发热。
+ * 这里用 conflate + 短延时，把解析频率压到 ~90ms 一次；
+ * 生成结束（streaming=false）时停止收集，直接返回最终完整文本，保证末尾内容不丢。
+ */
 @Composable
-private fun rememberCaretAlpha(): Float {
-    val alpha by rememberInfiniteTransition(label = "caret").animateFloat(
-        initialValue = 1f,
-        targetValue = 0.15f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(520),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "caretAlpha"
-    )
-    return alpha
+private fun rememberStreamRenderText(text: String, streaming: Boolean): String {
+    var shown by remember { mutableStateOf(text) }
+    LaunchedEffect(streaming) {
+        if (!streaming) return@LaunchedEffect
+        snapshotFlow { text }
+            .conflate()
+            .collect { latest ->
+                delay(90)
+                shown = latest
+            }
+    }
+    return if (streaming) shown else text
 }
 
 /* ---------------- 块级解析 ---------------- */
@@ -575,55 +607,69 @@ private fun MdTable(block: MdBlock.Table) {
     val headerBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val rowBg = MaterialTheme.colorScheme.surfaceContainerLow
     val cols = maxOf(block.header.size, block.rows.maxOfOrNull { it.size } ?: 0)
+    val density = LocalDensity.current
 
-    // 列数较多时保留横向滚动兜底，常见 2~4 列按可用宽度均分、自动换行，避免撑破屏幕。
-    val scrollable = cols > 4
-    val containerFill = if (scrollable) Modifier else Modifier.fillMaxWidth()
-    // weight 是 RowScope 扩展，必须在 Row 的 content lambda 内调用，不能在外部构造 Modifier。
+    // 表格横滑策略：按每列最长单元格估算理想宽度，总宽超过可用宽度才横滑；
+    // 窄表按可用宽度均分、自动换行，不牺牲阅读体验；宽表/长内容则可横向滑动看更多列。
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val availW = maxWidth
+        val colWidths = (0 until cols).map { c ->
+            val longest = maxOf(
+                block.header.getOrElse(c) { "" }.length,
+                block.rows.maxOfOrNull { it.getOrElse(c) { "" }.length } ?: 0
+            )
+            // CJK 大致按每字 13sp、ASCII 折半保守估算，再留左右 padding。
+            with(density) { (longest * 8 + 24).sp.toDp() }.coerceIn(72.dp, 240.dp)
+        }
+        val totalIdeal = colWidths.fold(0.dp) { acc, w -> acc + w }
+        val scrollable = totalIdeal > availW
+        val containerFill = if (scrollable) Modifier else Modifier.fillMaxWidth()
+        // weight 是 RowScope 扩展，必须在 Row 的 content lambda 内调用，不能在外部构造 Modifier。
 
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (scrollable) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
-        color = rowBg,
-        shape = RoundedCornerShape(10.dp)
-    ) {
-        Column(containerFill) {
-            Row(
-                containerFill.background(headerBg)
-            ) {
-                for (c in 0 until cols) {
-                    val cellMod = if (scrollable) {
-                        Modifier.widthIn(min = 72.dp, max = 200.dp)
-                    } else {
-                        Modifier.weight(1f)
-                    }
-                    Text(
-                        parseInline(block.header.getOrElse(c) { "" }, primary),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = cellMod.padding(horizontal = 8.dp, vertical = 8.dp)
-                    )
-                }
-            }
-            block.rows.forEachIndexed { idx, row ->
-                if (idx > 0) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                }
-                Row(containerFill) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (scrollable) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
+            color = rowBg,
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Column(containerFill) {
+                Row(
+                    containerFill.background(headerBg)
+                ) {
                     for (c in 0 until cols) {
                         val cellMod = if (scrollable) {
-                            Modifier.widthIn(min = 72.dp, max = 200.dp)
+                            Modifier.width(colWidths[c])
                         } else {
                             Modifier.weight(1f)
                         }
                         Text(
-                            parseInline(row.getOrElse(c) { "" }, primary),
+                            parseInline(block.header.getOrElse(c) { "" }, primary),
                             style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
-                            modifier = cellMod.padding(horizontal = 8.dp, vertical = 7.dp)
+                            modifier = cellMod.padding(horizontal = 8.dp, vertical = 8.dp)
                         )
+                    }
+                }
+                block.rows.forEachIndexed { idx, row ->
+                    if (idx > 0) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    }
+                    Row(containerFill) {
+                        for (c in 0 until cols) {
+                            val cellMod = if (scrollable) {
+                                Modifier.width(colWidths[c])
+                            } else {
+                                Modifier.weight(1f)
+                            }
+                            Text(
+                                parseInline(row.getOrElse(c) { "" }, primary),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = cellMod.padding(horizontal = 8.dp, vertical = 7.dp)
+                            )
+                        }
                     }
                 }
             }

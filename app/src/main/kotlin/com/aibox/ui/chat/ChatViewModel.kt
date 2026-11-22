@@ -601,7 +601,8 @@ class ChatViewModel : ViewModel() {
     private suspend fun generate(sid: Long, history: List<ChatMessage>): Generated {
         // 角色扮演时不注入工具协议：工具 JSON / 能力说明会直接破坏人设。
         val roleplay = _ui.value.mode == MODE_ROLEPLAY
-        val tools = if (engine.isCloudActive() || roleplay) emptyList() else runCatching {
+        val isCloud = runCatching { engine.isCloudActive() }.getOrDefault(false)
+        val tools = if (isCloud || roleplay) emptyList() else runCatching {
             container.toolRegistry.getActiveToolsForLLM()
         }.onFailure { LogSystem.warn("aibox.ui.chat", "读取工具列表失败: ${it.message}") }
             .getOrDefault(emptyList())
@@ -622,7 +623,9 @@ class ChatViewModel : ViewModel() {
         val reduceMotion = _ui.value.reduceMotion
         // 打字机缓冲：非减弱动态时启用。token 从推理线程写入 target（@Volatile），
         // emit 在 Main 作用域按固定节奏把「已揭示前缀」推给 UI，把 NPU 上顿挫的出字铺平。
-        val typewriter: StreamTypewriter? = if (!reduceMotion) {
+        // 云端直出：网络往返本身已有延迟，再叠 20ms/3 字的打字机会让界面状态明显落后于实际输出；
+        // 且云端常常整段返回，打字机逐字吐反而更慢。本地 NPU 才需要缓冲抹平顿挫。
+        val typewriter: StreamTypewriter? = if (!reduceMotion && !isCloud) {
             StreamTypewriter(
                 scope = inferenceScope,
                 emit = { revealed ->
@@ -632,8 +635,11 @@ class ChatViewModel : ViewModel() {
                         // 工具卡只由 parts 里手动维护的 toolPart 表达（带准确状态/结果）。
                         // 打字机逐字 revealed 时对 aibox:tool 块的二次解析会产出重复的、
                         // 无结果的 tool part，与之竞争覆盖导致状态来回跳，这里直接滤掉。
+                        // 本地路径的工具卡由下方手动 toolPart 维护，这里过滤掉二次解析的重复；
+                        // 云端路径的工具卡是 CloudChatService 通过 marker 主动推的，必须保留，
+                        // 否则「回答过程中看不到工具调用」。
                         streamParts = parts + parseTimeline(current)
-                            .filterNot { it.kind == MsgPart.KIND_TOOL }
+                            .let { if (isCloud) it else it.filterNot { p -> p.kind == MsgPart.KIND_TOOL } }
                     )
                 }
             )
@@ -670,7 +676,7 @@ class ChatViewModel : ViewModel() {
                                 _ui.value = _ui.value.copy(
                                     currentStream = roundBase + turn,
                                     streamParts = parts + parseTimeline(turn.toString())
-                                        .filterNot { it.kind == MsgPart.KIND_TOOL }
+                                        .let { if (isCloud) it else it.filterNot { p -> p.kind == MsgPart.KIND_TOOL } }
                                 )
                             }
                         }

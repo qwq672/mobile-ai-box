@@ -273,13 +273,10 @@ fun ChatScreen(
             info.totalItemsCount > 3 && lastVisible < info.totalItemsCount - 3
         }
     }
-    // 错误用 snackbar
-    LaunchedEffect(ui.errorMessage) {
-        ui.errorMessage?.let { msg ->
-            snackbarHost.showSnackbar(msg)
-            vm.dismissError()
-        }
-    }
+    // 错误改为聊天流内的持久红条（见下方 error item）：Snackbar 一闪而过且会被立刻
+    // dismiss，用户往往只看到「模型没有输出可见文本」却不知道哪出错了。红条会一直
+    // 留到用户下一次发送或手动点关闭才消失，真正能看见。
+    // snackbarHost 保留给其它临时提示使用，这里不再自动弹错误、也不再立即清除。
 
     var menuOpen by remember { mutableStateOf(false) }
     var clearOpen by remember { mutableStateOf(false) }
@@ -623,6 +620,13 @@ fun ChatScreen(
                             if (ui.streaming && ui.currentStream.isEmpty() && ui.streamParts.isEmpty()) {
                                 item(key = "thinking") {
                                     ThinkingIndicator(docStyle = ui.docStyle, reduceMotion = ui.reduceMotion)
+                                }
+                            }
+                            // 错误红条：推理失败 / 无可见输出时给出可读、可关闭的提示。
+                            // 用 M3 语义色 errorContainer/onErrorContainer 自动适配深色/浅色模式。
+                            ui.errorMessage?.let { err ->
+                                item(key = "error") {
+                                    ErrorBar(text = err, onDismiss = { vm.dismissError() })
                                 }
                             }
                             // 让最后一条消息不被输入栏挡住
@@ -1486,6 +1490,55 @@ private fun EmptyChatState(
     }
 }
 
+/**
+ * 聊天流内的错误红条。
+ *
+ * 用 M3 语义色 errorContainer / onErrorContainer，深色与浅色主题自动适配。
+ * 持久展示直到用户下一次发送（errorMessage 被清空）或手动点 × 关闭，
+ * 避免 Snackbar 一闪而过让用户只看到「模型没有输出可见文本」却不知原因。
+ */
+@Composable
+private fun ErrorBar(text: String, onDismiss: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(
+            Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "!",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.15f)),
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Outlined.Close,
+                    contentDescription = "关闭错误提示",
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ThinkingIndicator(docStyle: Boolean, reduceMotion: Boolean = false) {
     Row(
@@ -1718,8 +1771,14 @@ private fun MessageItem(
     }
 
     // 版本切换器：重新生成 / 编辑前的历史版本（1/3、2/3 …）
+    // 跟随气泡方向：用户消息靠右，助手消息靠左，避免切换器孤零零掉到另一侧。
     if (m.versions.size > 1) {
-        VersionSwitcher(m, onSwitchVersion)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        ) {
+            VersionSwitcher(m, onSwitchVersion)
+        }
     }
 
     // 最后一条助手消息的常驻小操作行（参考 ChatGPT / Claude）
@@ -1793,12 +1852,6 @@ private fun VersionSwitcher(m: ChatMessage, onSwitch: (Int) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Text(
-            "分支",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(end = 2.dp)
-        )
         VersionArrow("‹", enabled = m.versionIndex > 0) { onSwitch(m.versionIndex - 1) }
         Text(
             "${m.versionIndex + 1}/${m.versions.size}",
@@ -1906,7 +1959,7 @@ private fun Composer(
             trim = LineHeightStyle.Trim.None
         )
     )
-    val placeholder = if (enabled) "发消息，或添加图片 / 文件" else "请先加载模型"
+    val placeholder = if (enabled) "输入消息…" else "请先加载模型"
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
 
@@ -1983,7 +2036,9 @@ private fun Composer(
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(min = 56.dp)
+                            // B 方案：胶囊 56→52dp，配合单行 padding 15→13dp，
+                            // 让圆按钮四周留白统一为 8dp（上下 (52−36)/2=8，左右 8）。
+                            .heightIn(min = 52.dp)
                     ) {
                         // 唯一的输入框实例：形态切换只改 padding，不重建节点，IME 连接不断
                         ComposerInput(
@@ -1999,8 +2054,8 @@ private fun Composer(
                                 .padding(
                                     start = textInset,
                                     end = textInset,
-                                    top = if (expanded) 20.dp else 15.dp,
-                                    bottom = if (expanded) 60.dp else 15.dp
+                                    top = if (expanded) 20.dp else 13.dp,
+                                    bottom = if (expanded) 60.dp else 13.dp
                                 )
                         )
                         if (expanded) {
