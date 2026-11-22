@@ -647,6 +647,233 @@ ABC 场景下：
 
 ---
 
+
+### 4.8 模块载体选择：APK / Dynamic Feature / AAR / .aibox / 数据包
+
+#### 4.8.1 载体类型
+
+| 载体 | 是否独立安装 | 进程/UID | 适用 |
+|---|---|---|---|
+| 独立 APK | 是 | 独立 | 第三方插件、独立签名/更新/隔离 |
+| Dynamic Feature / Split APK | 随宿主 | 同 App | 第一方重 native、共享 .so |
+| AAR / 源码内置 | 否 | 宿主 | 核心能力、随宿主发版 |
+| `.aibox` 数据/声明包 | 否（导入） | 无代码 | 模型、LoRA、工作流、主题、语音 |
+| `.aibox` WASM 包 | 否（导入） | 宿主沙箱 | 轻量工具、可移植逻辑 |
+| `.aibox` native payload | 否（可信） | 宿主进程 | 第一方运行时二进制、模型 |
+| 裸 `.so` / 外部 dex | 否 | 不可控 | 不作为常规模块形态 |
+
+#### 4.8.2 推理框架模块怎么选
+
+```
+第三方推理框架插件        → 独立 APK
+第一方推理框架、重 native → Dynamic Feature / AAR
+运行时二进制 / 模型       → .aibox payload
+```
+
+原因：
+
+- 推理框架包含 native、JNI、线程池、GPU/NPU context、长生命周期 Service
+- 需要独立进程、签名、权限、升级、崩溃隔离
+- 纯 `.aibox` 可执行模块没有 UID/进程/权限隔离，native 崩溃会拖垮宿主
+- `dlopen` 从可写目录受限，ABI/页对齐/依赖/JNI_OnLoad 都要自己处理
+
+示例：
+
+| 场景 | 形态 |
+|---|---|
+| 第三方 MNN 后端 | `mnn-backend.apk` + AIDL Service |
+| 第一方 MNN | `:mnn` dynamic feature，共享 `.so` |
+| MNN 运行时包 | `.aibox` 里放 `libMNN.so` + manifest |
+| LiteRT / ONNX 第三方 | 独立 APK |
+| NPU runtime | 宿主 native service 或 dynamic feature |
+
+#### 4.8.3 `.aibox` 容器
+
+```
+module.aibox
+  ├─ manifest.json
+  ├─ payload/
+  │    ├─ model.gguf
+  │    ├─ lora.safetensors
+  │    ├─ workflow.json
+  │    ├─ module.wasm
+  │    └─ lib/arm64-v8a/libfoo.so
+  ├─ assets/
+  ├─ signatures/
+  │    ├─ manifest.sig
+  │    └─ payload.sig
+  └─ checksums.json
+```
+
+manifest 示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.example.sd.bundle",
+  "type": "model-bundle",
+  "version": "1.0.0",
+  "capabilities": ["image.generate"],
+  "payload": [
+    {"role": "diffusion", "path": "payload/model.safetensors", "sha256": "..."},
+    {"role": "vae", "path": "payload/vae.safetensors", "sha256": "..."}
+  ],
+  "dependencies": {
+    "modules": [{"id": "com.aibox.backend.mnn", "required": true}]
+  },
+  "signature": {"alg": "ed25519", "keyId": "..."}
+}
+```
+
+类型：
+
+```
+model-bundle
+lora-pack
+workflow-pack
+theme-pack
+voice-pack
+tool-pack
+wasm-plugin
+native-payload（仅可信）
+apk-payload（交给系统安装）
+```
+
+要求：
+
+- ZIP64，大模型支持
+- `.so` / 大文件 store，不压缩
+- 每文件 SHA-256
+- 整体 Ed25519 签名
+- 拒绝 `..`、绝对路径、符号链接
+- 限制 zip bomb / 解压总量
+- ABI 选择
+- 版本、依赖、冲突、能力声明
+- 可选加密（AES-GCM / age）
+- 可选内容寻址与增量
+
+#### 4.8.4 混合形态
+
+想让推理框架独立更新，又不想自建安装体系：
+
+```
+framework-plugin.apk
+  ├─ AndroidManifest / Service / 权限
+  ├─ assets/runtime.aibox
+  │    ├─ manifest.json
+  │    ├─ lib/arm64-v8a/libMNN.so
+  │    └─ signatures/
+  └─ AIDL
+```
+
+- APK：安装、签名、权限、进程、Service
+- `.aibox`：运行时二进制、模型、版本
+- 更新：换 payload 或整体升级 APK
+
+#### 4.8.5 决策规则
+
+```
+第三方、完整可执行、需要隔离 → APK
+第一方、重 native、要共享 .so → Dynamic Feature / AAR
+模型 / LoRA / 工作流 / 主题 → .aibox 数据包
+轻量可移植逻辑 → .aibox + WASM
+可信运行时二进制 → .aibox native payload
+裸 .so / 外部 dex / 脚本替代应用 → 不推荐
+```
+
+#### 4.8.6 反面例子
+
+| 做法 | 问题 |
+|---|---|
+| SD diffusion `.so` 拆独立 APK | 每步 Binder，性能灾难 |
+| MNN backend 做 AAR | 无法独立更新/第三方分发 |
+| LoRA 做 APK | 无代码，浪费 |
+| 每个插件自带 NPU runtime | 内存翻倍、版本冲突 |
+| B 直接 dlopen C 的 `.so` | 跨 APK 不可行 |
+| 外部 dex 当插件 | Android 限制、安全风险 |
+
+---
+
+### 4.9 模块崩溃日志
+
+#### 4.9.1 边界
+
+- 宿主崩溃捕获器抓不到独立插件进程
+- 独立插件必须自己安装 Java/Native 崩溃捕获
+- 宿主通过预先打开的 fd 接收日志
+- ANR 由系统判定，宿主只能通过超时/Binder death 间接发现
+- `ApplicationExitInfo` 主要可靠用于宿主自身；不要假设能读别的包
+
+#### 4.9.2 推荐：宿主传 crash fd
+
+```
+宿主：
+  files/plugin-crashes/<pkg>-<session>.log
+  open -> ParcelFileDescriptor
+  bind 时 attachCrashSink(fd)
+
+插件：
+  保存 fd
+  Java 崩溃 -> 写 stack trace
+  Native 崩溃 -> signal handler write(fd)
+  fsync
+```
+
+AIDL：
+
+```
+void attachCrashSink(in ParcelFileDescriptor fd)
+void detachCrashSink()
+```
+
+#### 4.9.3 Java/Kotlin
+
+- 在 Application/Service onCreate 尽早安装 `UncaughtExceptionHandler`
+- 写 moduleId / version / hostVersion / backend / modelId / 当前任务
+- flush/fsync
+- 交回系统默认 handler，不吞异常
+
+#### 4.9.4 Native
+
+- signal handler 捕获 SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE
+- 只做 async-signal-safe：`write` / `fsync` / `_exit`
+- 不 malloc、不 printf、不加锁、不调 Binder/JNI
+- 记录 signal、fault address、ABI、build id、最近操作
+- 完整 backtrace 交给 tombstone/debuggerd
+
+#### 4.9.5 ANR / Binder death
+
+- 每次 Binder 调用带超时
+- 超时标记 `UNRESPONSIVE`
+- `linkToDeath` + `onServiceDisconnected`
+- 记录最后请求、等待时长、心跳、宿主调用栈
+- 不无限重绑，避免崩溃循环
+- 真 ANR trace 需要 `adb` / `bugreport`
+
+#### 4.9.6 诊断包
+
+```
+host log
+plugin crash log
+device info
+module list + versions
+backend/model state
+memory/thermal snapshot
+```
+
+#### 4.9.7 测试矩阵
+
+- Java 崩溃
+- Native SIGSEGV
+- ANR / Binder 超时
+- 服务进程被杀
+- 崩溃 fd 写满/关闭
+- 崩溃后回退
+- 导出诊断包
+
+
+---
+
 ## 5. 生命周期契约
 
 ```
