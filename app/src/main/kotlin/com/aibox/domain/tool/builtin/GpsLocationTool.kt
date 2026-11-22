@@ -169,10 +169,25 @@ class GpsLocationTool(
         val altitude = if (hasAltitude) location.altitude else 0.0
         val hasVerticalAccuracy = hasAltitude && location.hasVerticalAccuracy()
         val verticalAccuracy = if (hasVerticalAccuracy) location.verticalAccuracyMeters else 0f
-        val hasSpeed = location.hasSpeed()
+        // 速度过滤：66.7 m/s ≈ 240 km/h 这类假速度，来自缓存位置残留或粗略/被动 provider。
+        // 规则：① 缓存位置（非本次 fresh fix）一律不报速度；
+        //      ② 只有精确 GPS 的本次定位才信 speed；粗略/被动定位的 speed 不可靠，不报；
+        //      ③ 速度值超出合理上限（高铁~100 m/s，>MAX_PLAUSIBLE_SPEED 视为异常）不报。
+        // 这样既不新增权限，也避免把缓存里的旧/错速度当成"当前速度"。
+        val speedPlausible = location.speed in 0f..MAX_PLAUSIBLE_SPEED
+        val hasSpeed = !cached && precise &&
+            location.provider == LocationManager.GPS_PROVIDER &&
+            location.hasSpeed() && speedPlausible
         val speed = if (hasSpeed) location.speed else 0f
-        val hasBearing = location.hasBearing()
+        val hasBearing = !cached && location.hasBearing()
         val bearing = if (hasBearing) location.bearing else 0f
+        if (location.hasSpeed() && !hasSpeed) {
+            LogSystem.info(
+                TAG,
+                "speed suppressed: raw=${location.speed} cached=$cached precise=$precise " +
+                    "provider=${location.provider} plausible=$speedPlausible"
+            )
+        }
 
         val output = buildString {
             appendLine("定位结果（${if (precise) "精确" else "粗略"}${if (cached) "，缓存位置" else ""}）：")
@@ -261,5 +276,7 @@ class GpsLocationTool(
 
     companion object {
         private const val TAG = "aibox.tool.gps"
+        /** 速度合理上限（m/s）：约 360 km/h，超过视为缓存残留/定位异常，不报。 */
+        private const val MAX_PLAUSIBLE_SPEED = 100f
     }
 }

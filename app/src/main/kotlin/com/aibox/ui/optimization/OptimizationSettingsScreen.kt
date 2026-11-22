@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -64,6 +64,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OptimizationSettingsScreen(
+    onBack: () -> Unit,
     vm: OptimizationViewModel = viewModel()
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
@@ -74,7 +75,6 @@ fun OptimizationSettingsScreen(
     val effectiveHtp by vm.effectiveHtp.collectAsStateWithLifecycle()
     val warnLow by vm.warnLowBattery.collectAsStateWithLifecycle()
     val warnCritical by vm.warnCriticalBattery.collectAsStateWithLifecycle()
-    val drawerState = com.aibox.ui.nav.LocalDrawerState.current
     val scope = rememberCoroutineScope()
     val snackbarHost = remember { SnackbarHostState() }
 
@@ -82,8 +82,8 @@ fun OptimizationSettingsScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                        Icon(Icons.Outlined.Menu, contentDescription = "菜单")
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
                     }
                 },
                 title = { Text("推理优化", style = Type.titleLarge) }

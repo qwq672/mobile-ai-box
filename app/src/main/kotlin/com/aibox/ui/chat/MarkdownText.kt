@@ -135,15 +135,34 @@ fun MarkdownText(
                 it is MdBlock.ListItem || it is MdBlock.Task || it is MdBlock.Quote
         }
     } else -1
-    fun styled(text: String, index: Int): AnnotatedString {
-        val base = parseInline(text, primary)
-        return if (index == caretIndex) {
-            buildAnnotatedString {
-                append(base)
-                withStyle(SpanStyle(color = color.copy(alpha = 0.7f))) { append("▌") }
+    // parseInline 是逐字符构建 AnnotatedString，是流式期最重的一段。
+    // 此前每次重组（滚动、其它 state 变化）都会对所有文本块重跑一遍；这里按
+    // renderText 缓存，只在节流后的文本真正变化时重算一次，把重组开销压下来。
+    val styledCache = remember(renderText, primary, color, caretIndex) {
+        blocks.mapIndexed { index, block ->
+            val t = when (block) {
+                is MdBlock.Heading -> block.text
+                is MdBlock.Paragraph -> block.text
+                is MdBlock.Quote -> block.text
+                is MdBlock.ListItem -> block.text
+                is MdBlock.Task -> block.text
+                else -> null
             }
-        } else base
+            if (t == null) {
+                null
+            } else {
+                val base = parseInline(t, primary)
+                if (index == caretIndex) {
+                    buildAnnotatedString {
+                        append(base)
+                        withStyle(SpanStyle(color = color.copy(alpha = 0.7f))) { append("▌") }
+                    }
+                } else base
+            }
+        }
     }
+    fun styled(text: String, index: Int): AnnotatedString =
+        styledCache.getOrNull(index) ?: parseInline(text, primary)
 
     Column(
         modifier = modifier.fillMaxWidth(),

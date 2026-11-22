@@ -516,7 +516,9 @@ private fun MainNav() {
                 }
                 // G-settings-fix：推理优化设置页（开关式优化统一归口）
                 composable(Dest.Optimization.route) {
-                    OptimizationSettingsScreen()
+                    OptimizationSettingsScreen(
+                        onBack = { nav.popBackStack() }
+                    )
                 }
                 composable(Dest.Asr.route) {
                     AsrScreen(

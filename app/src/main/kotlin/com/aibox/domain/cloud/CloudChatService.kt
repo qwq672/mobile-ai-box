@@ -9,12 +9,14 @@ import android.os.Build
 import com.aibox.data.model.MsgPart
 import com.aibox.data.model.ToolHit
 import com.aibox.data.repo.SettingsRepository
+import com.aibox.domain.tool.ChoiceMode
 import com.aibox.domain.tool.DeviceInfo
 import com.aibox.domain.tool.FunctionCall
 import com.aibox.domain.tool.ToolContext
 import com.aibox.domain.tool.ToolExecutor
 import com.aibox.domain.tool.ToolRegistry
 import com.aibox.domain.tool.UiInteractionBridge
+import com.aibox.domain.tool.UserChoiceRequest
 import com.aibox.domain.tool.builtin.SearchResultItem
 import com.aibox.infra.jni.NativeBridge
 import com.aibox.ui.chat.encodeToolPartMarker
@@ -162,8 +164,11 @@ class CloudChatService(
         }.toMutableList()
         applyThinkingHint(history, thinkingLevel)
         var rounds = 0
+        // 动态轮次上限：撞到 MAX_TOOL_ROUNDS 时询问用户是否继续；
+        // 用户选继续则在本轮基础上再放宽 ROUNDS_PER_EXTEND 轮，最多累计 MAX_ROUNDS_HARD 轮防止无限循环。
+        var roundLimit = MAX_TOOL_ROUNDS
 
-        while (rounds < MAX_TOOL_ROUNDS) {
+        while (rounds < roundLimit) {
             val turn = client.chat(config, history, tools, onToken, reasoningEffort = thinkingLevel)
                 .getOrElse { e ->
                     onStop("cloud_error: ${e.message ?: e.javaClass.simpleName}")
@@ -227,10 +232,57 @@ class CloudChatService(
                 history.add(CloudMsg("tool", output, toolCallId = call.id))
             }
             rounds++
+
+            // 撞到当前上限：询问用户是否继续检索，而不是直接强制结束。
+            if (rounds >= roundLimit && rounds < MAX_ROUNDS_HARD) {
+                val answer = runCatching {
+                    uiChoice?.invoke(
+                        UserChoiceRequest(
+                            question = "已经连续调用 $rounds 轮工具仍未得出答案。要继续检索，还是用现有信息直接总结？",
+                            mode = ChoiceMode.SINGLE,
+                            options = listOf("继续检索", "就此总结"),
+                            allowExtra = false
+                        )
+                    )
+                }.onFailure { LogSystem.warn(TAG, "询问是否继续工具循环失败: ${it.message}") }
+                    .getOrNull()
+
+                val keepGoing = answer?.selected?.firstOrNull() == "继续检索"
+                if (keepGoing) {
+                    roundLimit = (roundLimit + ROUNDS_PER_EXTEND).coerceAtMost(MAX_ROUNDS_HARD)
+                    LogSystem.info(TAG, "用户选择继续检索，轮次上限放宽到 $roundLimit")
+                    // 追加一条提示，让模型明确知道可以继续、但尽快收敛
+                    history.add(CloudMsg("user", "请基于已获取的信息继续检索，并在信息足够时尽快给出最终答案。"))
+                } else {
+                    // 用户选「就此总结」/ 取消 / 无 UI 回调（后台）——统一走强制总结，
+                    // 注入提示让模型用现有结果收尾，绝不挂起等待。
+                    LogSystem.info(TAG, "工具循环就此总结 (rounds=$rounds, answer=${answer?.selected})")
+                    history.add(CloudMsg("user", "不要再调用工具，请基于已获取的信息直接给出最终答案。"))
+                    val finalTurn = client.chat(config, history, emptyList(), onToken, reasoningEffort = thinkingLevel)
+                        .getOrElse { e ->
+                            onStop("cloud_error: ${e.message ?: e.javaClass.simpleName}")
+                            return
+                        }
+                    if (finalTurn.finishReason.equals("length", ignoreCase = true)) {
+                        onToken("\n\n> ⚠️ 输出达到上限被截断。请调低思考档位后重试。")
+                        onStop("length_truncated")
+                    } else {
+                        onStop("eos")
+                    }
+                    return
+                }
+            }
         }
 
-        LogSystem.warn(TAG, "达到工具调用轮次上限 $MAX_TOOL_ROUNDS，强制结束")
-        onStop("max_tool_rounds")
+        LogSystem.warn(TAG, "达到工具调用轮次硬上限 $MAX_ROUNDS_HARD，强制总结")
+        // 到硬上限时同样尝试用现有信息收尾，避免把中途自言自语当最终答案（吞回答）。
+        history.add(CloudMsg("user", "不要再调用工具，请基于已获取的信息直接给出最终答案。"))
+        val finalTurn = client.chat(config, history, emptyList(), onToken, reasoningEffort = thinkingLevel)
+            .getOrElse { e ->
+                onStop("cloud_error: ${e.message ?: e.javaClass.simpleName}")
+                return
+            }
+        onStop(if (finalTurn.finishReason.equals("length", ignoreCase = true)) "length_truncated" else "eos")
     }
 
     // ---------- 思考档位 & 多模态 ----------
@@ -335,6 +387,10 @@ class CloudChatService(
     private companion object {
         const val TAG = "aibox.cloud"
         const val MAX_TOOL_ROUNDS = 4
+        /** 用户每次选「继续检索」追加的轮数。 */
+        const val ROUNDS_PER_EXTEND = 2
+        /** 累计轮次硬上限，防止用户一直点继续导致无限循环。 */
+        const val MAX_ROUNDS_HARD = 12
         const val MAX_IMAGE_BYTES = 16 * 1024 * 1024
 
         /**

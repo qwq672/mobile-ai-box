@@ -154,7 +154,19 @@ fun RoleplayScreen(
             contentPadding = PaddingValues(vertical = DesignTokens.spacing12),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
         ) {
-            item(key = "persona_header") { SectionTitle("我的身份") }
+            item(key = "persona_header") {
+                SectionTitle("我的身份")
+                Text(
+                    "“我”指你自己：角色扮演时 AI 会把你当成这里的身份；角色则是 AI 扮演的对象。",
+                    style = Type.bodySmall,
+                    color = Colors.onSurfaceVariant,
+                    modifier = Modifier.padding(
+                        start = DesignTokens.spacing16,
+                        end = DesignTokens.spacing16,
+                        top = DesignTokens.spacing4
+                    )
+                )
+            }
 
             if (personas.isEmpty()) {
                 item(key = "persona_empty") {
@@ -533,6 +545,8 @@ private fun CharacterEditorPage(
     var personality by remember(initial) { mutableStateOf(initial?.personality.orEmpty()) }
     var worldview by remember(initial) { mutableStateOf(initial?.worldview.orEmpty()) }
     var confirmDelete by remember(initial) { mutableStateOf(false) }
+    var importStatus by remember { mutableStateOf("") }
+    val importScope = rememberCoroutineScope()
 
     // SAF 选图后必须 takePersistableUriPermission，否则重启后 URI 权限失效、图片丢失
     val cardPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -556,6 +570,29 @@ private fun CharacterEditorPage(
         }
     }
 
+    // Chub / TavernAI 角色卡（PNG tEXt 或纯 JSON）：解析后填入表单，用户确认再保存。
+    val cardDataPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        importScope.launch {
+            val card = com.aibox.domain.tool.builtin.ChubCardParser.parse(context, uri)
+            if (card == null) {
+                importStatus = "导入失败：不是有效的 Chub/TavernAI 角色卡（JSON 或 PNG）"
+                return@launch
+            }
+            if (card.name.isNotBlank()) name = card.name
+            if (card.description.isNotBlank()) description = card.description
+            if (card.personality.isNotBlank()) personality = card.personality
+            val sys = card.toSystemPrompt()
+            if (sys.isNotBlank()) systemPrompt = sys
+            if (card.firstMes.isNotBlank()) greeting = card.firstMes
+            if (card.exampleDialogue.isNotBlank() && description.isNotBlank()) {
+                importStatus = "已导入角色卡（含示例对话，未自动填入示例）"
+            } else {
+                importStatus = "已导入角色卡：${card.name}"
+            }
+        }
+    }
+
     val cardBitmap = rememberUriBitmap(cardImageUri)
 
     Scaffold(
@@ -568,6 +605,9 @@ private fun CharacterEditorPage(
                 },
                 title = { Text(if (isNew) "添加角色" else "编辑角色", fontWeight = FontWeight.SemiBold) },
                 actions = {
+                    TextButton(onClick = {
+                        cardDataPick.launch(arrayOf("application/json", "image/png", "text/plain", "*/*"))
+                    }) { Text("导入卡") }
                     TextButton(
                         enabled = name.isNotBlank(),
                         onClick = {
@@ -602,6 +642,13 @@ private fun CharacterEditorPage(
                 .padding(horizontal = DesignTokens.spacing16, vertical = DesignTokens.spacing12),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing12)
         ) {
+            if (importStatus.isNotBlank()) {
+                Text(
+                    importStatus,
+                    style = Type.bodySmall,
+                    color = Colors.primary
+                )
+            }
             // ===== 卡片预览（2:3 竖卡缩略）=====
             Box(
                 modifier = Modifier

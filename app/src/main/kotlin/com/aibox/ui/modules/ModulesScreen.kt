@@ -13,6 +13,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +50,9 @@ fun ModulesScreen(
     val diagnostics by viewModel.diagnostics.collectAsState()
     val dependencyReport by viewModel.dependencyReport.collectAsState()
     val ctx = LocalContext.current
+    // 模块管理增强（最小可用）：可只显示第三方插件、隐藏系统宿主模块。
+    var pluginsOnly by remember { mutableStateOf(false) }
+    val shownModules = if (pluginsOnly) modules.filter { !it.isHost } else modules
 
     Scaffold(
         topBar = {
@@ -70,13 +76,24 @@ fun ModulesScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            // 顶部统计
-            Text(
-                "已安装 ${modules.size} 个模块" + if (scanning) "（扫描中…）" else "",
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // 顶部统计 + 筛选
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "已安装 ${modules.size} 个模块" + if (scanning) "（扫描中…）" else "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = pluginsOnly,
+                    onClick = { pluginsOnly = !pluginsOnly },
+                    label = { Text("仅看插件") }
+                )
+            }
 
             // 后端插件诊断：只显示确实装了的包，回答「装了为什么还提示未安装」
             val installedDiagnostics = diagnostics.filter { it.installed }
@@ -94,7 +111,7 @@ fun ModulesScreen(
                 )
             }
 
-            if (modules.isEmpty() && !scanning) {
+            if (shownModules.isEmpty() && !scanning) {
                 // 空状态
                 Box(
                     modifier = Modifier.fillMaxSize(),
@@ -126,7 +143,7 @@ fun ModulesScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(modules) { module ->
+                    items(shownModules) { module ->
                         ModuleCard(
                             module = module,
                             onClick = {

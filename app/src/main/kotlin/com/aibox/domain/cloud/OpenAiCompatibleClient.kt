@@ -190,6 +190,14 @@ class OpenAiCompatibleClient {
                 )
                 CloudTurn(content.toString(), calls, finishReason)
             } finally {
+                // 异常/取消路径也会走到这里：若思考块还开着，先补一个闭合标记。
+                // 否则 ChatViewModel 的 parseTimeline 会把 <!--think--> 之后的所有正文
+                // 整段吞进「思维过程」，表现为「中途回答被吞 / 回答结束就没了」。
+                // 正常结束上面已置 reasoningOpen=false，这里不会重复推。
+                if (reasoningOpen) {
+                    reasoningOpen = false
+                    runCatching { onToken("<!--/think-->") }
+                }
                 runCatching { response.close() }
                 activeCall = null
             }
