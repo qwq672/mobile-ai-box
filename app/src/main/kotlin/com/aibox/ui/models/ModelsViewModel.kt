@@ -35,6 +35,9 @@ class ModelsViewModel : ViewModel() {
     @Volatile private var activeV2Handle: LoadedModel? = null
     /** 当前激活的 V2 后端名(若走 V2 路径)。 */
     @Volatile private var activeV2BackendName: String? = null
+    /** 任务条「取消加载」置位：加载返回后据此丢弃结果 + 卸载，避免把已取消的模型激活。 */
+    @Volatile private var loadCancelRequested = false
+    private var loadTaskId = -1L
 
     data class UiState(
         val models: List<ModelInfo> = emptyList(),
@@ -108,8 +111,21 @@ class ModelsViewModel : ViewModel() {
                 return@launch
             }
             _ui.value = _ui.value.copy(loading = true, error = null)
-            com.aibox.util.notify.InAppNotifier.show("正在加载模型 ${m.name}")
             LogSystem.info("aibox.ui.models", "ModelsViewModel: activating ${m.name} (${m.filePath})")
+
+            // 任务条：可取消。取消请求只置位；真正丢弃结果在 loadV1/loadV2 返回后检查。
+            // native llama_model_load_from_file 是同步调用，无法在内部中断，任务条会在点
+            // 取消时立即消失、状态复位，加载线程返回后发现取消标志就 unload 不激活。
+            loadCancelRequested = false
+            loadTaskId = com.aibox.util.task.TaskCenter.begin(
+                title = "正在加载 ${m.name}",
+                cancellable = true,
+                onCancel = {
+                    loadCancelRequested = true
+                    runCatching { engine.interrupt() }
+                }
+            )
+            com.aibox.util.task.TaskCenter.progress(loadTaskId, 8)
 
             // 告诉启动预加载"让路"，别再插一次 load 把用户选择的模型覆盖掉
             com.aibox.domain.optimization.TtftOptimizer.markUserActivated()
@@ -173,6 +189,7 @@ class ModelsViewModel : ViewModel() {
                     .onFailure { LogSystem.warn("aibox.ui.models", "sync plugins failed: ${it.message}", it) }
             }
             try {
+                com.aibox.util.task.TaskCenter.progress(loadTaskId, 20)
                 val route = ModelFormatRouter.route(
                     m.filePath,
                     container.backendManager.listActive()
@@ -198,6 +215,8 @@ class ModelsViewModel : ViewModel() {
                 // 无论成功/失败/取消都要把 loading 复位，否则第二次点「加载」会被
                 // 开头的 `if (loading) return` 直接吞掉，表现就是永远停在「正在加载模型」。
                 _ui.value = _ui.value.copy(loading = false)
+                com.aibox.util.task.TaskCenter.finish(loadTaskId)
+                loadTaskId = -1L
             }
         }
     }
@@ -205,8 +224,16 @@ class ModelsViewModel : ViewModel() {
     /** 走 V1 路径(llama.cpp 内置)加载模型。 */
     private suspend fun loadV1(m: ModelInfo, config: InferenceConfig, id: Long) {
         try {
+            com.aibox.util.task.TaskCenter.progress(loadTaskId, 55)
             withTimeoutOrNull(90_000L) { engine.loadModel(m.filePath, config) }
                 ?.onSuccess {
+                    if (loadCancelRequested) {
+                        // 用户在加载期间点了取消：卸载刚加载的模型，不激活、不提示。
+                        runCatching { engine.unload() }
+                        LogSystem.info("aibox.ui.models", "ModelsVM: ${m.name} load cancelled, unloaded")
+                        return@onSuccess
+                    }
+                    com.aibox.util.task.TaskCenter.progress(loadTaskId, 100)
                     settings.setLastModel(id)
                     repo.touchUsed(id)
                     com.aibox.util.notify.InAppNotifier.show("已加载 ${m.name}")
@@ -229,6 +256,7 @@ class ModelsViewModel : ViewModel() {
     /** 走 V2 路径(插件后端)加载模型。 */
     private suspend fun loadV2(m: ModelInfo, backendName: String, id: Long) {
         try {
+            com.aibox.util.task.TaskCenter.progress(loadTaskId, 55)
             val bm = container.backendManager
             val backend = bm.getBackend(backendName)
             if (backend == null) {
@@ -253,6 +281,12 @@ class ModelsViewModel : ViewModel() {
                 _ui.value = _ui.value.copy(error = "插件加载失败: $reason")
                 return
             }
+            if (loadCancelRequested) {
+                // 加载期间点了取消：不注册、不激活，记录日志由调用方 finally 复位状态。
+                LogSystem.info("aibox.ui.models", "ModelsVM: ${m.name} V2 load cancelled")
+                return
+            }
+            com.aibox.util.task.TaskCenter.progress(loadTaskId, 100)
             // 注册到 BackendManager 让 EnergyOptimizer 能管
             bm.trackLoaded(backendName, loaded)
             activeV2Handle = loaded

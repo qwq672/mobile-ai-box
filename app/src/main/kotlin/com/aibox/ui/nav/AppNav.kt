@@ -590,6 +590,8 @@ private fun MainNav() {
 
     // 应用内通知（Popup 实现，不参与页面布局测量）
     InAppNoticeHost()
+    // 任务条（Popup 悬浮，展示模型加载等任务的进度与取消）
+    com.aibox.ui.components.TaskBarHost()
 }
 
 /**

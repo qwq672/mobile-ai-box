@@ -30,8 +30,8 @@ android {
         targetSdk = 34
         // 版本规范：测试版 vYYMMDD-N（当日第 N 个测试版），正式版 vYYMMDD。
         // versionCode 用 YYMMDDNN，保证随每次交付递增，避免覆盖安装仍显示旧版本。
-        versionCode = 26112203
-        versionName = "v261122-3"
+        versionCode = 26112204
+        versionName = "v261122-4"
 
         ndk {
             // 手机几乎都是 arm64；缩小体积只打这一个
