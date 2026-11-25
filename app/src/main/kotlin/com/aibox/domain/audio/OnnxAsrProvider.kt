@@ -116,8 +116,8 @@ class OnnxAsrProvider(
                 // 统一用「无参构造 + setter」组装，避免依赖构造参数个数/顺序。
                 val featClass = Class.forName("com.k2fsa.sherpa.onnx.FeatureConfig")
                 val feat = featClass.getConstructor().newInstance()
-                setField(feat, "setSampleRate", Int::class.javaPrimitiveType, 16000)
-                setField(feat, "setFeatureDim", Int::class.javaPrimitiveType, 80)
+                setField(feat, "setSampleRate", java.lang.Integer.TYPE, 16000)
+                setField(feat, "setFeatureDim", java.lang.Integer.TYPE, 80)
 
                 val transducerClass = Class.forName("com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig")
                 val transducer = transducerClass.getConstructor().newInstance()
@@ -129,7 +129,7 @@ class OnnxAsrProvider(
                 val modelCfg = modelClass.getConstructor().newInstance()
                 setField(modelCfg, "setTransducer", transducerClass, transducer)
                 setField(modelCfg, "setTokens", String::class.java, File(modelDir, "tokens.txt").absolutePath)
-                setField(modelCfg, "setNumThreads", Int::class.javaPrimitiveType, 2)
+                setField(modelCfg, "setNumThreads", java.lang.Integer.TYPE, 2)
                 setField(modelCfg, "setProvider", String::class.java, "cpu")
 
                 val recCfg = cfgCls.getConstructor().newInstance()
@@ -139,19 +139,20 @@ class OnnxAsrProvider(
                 setField(recCfg, "setDecodingMethod", String::class.java, "greedy_search")
 
                 // 构造 OnlineRecognizer(assetManager=null, config)
+                val sClass: Class<*> = streamClass ?: return@withContext Outcome.failure("stream 类不可用")
                 val recognizer = ctor.newInstance(null, recCfg)
                 val createStream = recognizer.javaClass.getMethod("createStream")
-                val isReady = recognizer.javaClass.getMethod("isReady", streamClass)
-                val decode = recognizer.javaClass.getMethod("decode", streamClass)
-                val getResult = recognizer.javaClass.getMethod("getResult", streamClass)
-                val isEndpoint = recognizer.javaClass.getMethod("isEndpoint", streamClass)
-                val reset = recognizer.javaClass.getMethod("reset", streamClass)
+                val isReady = recognizer.javaClass.getMethod("isReady", sClass)
+                val decode = recognizer.javaClass.getMethod("decode", sClass)
+                val getResult = recognizer.javaClass.getMethod("getResult", sClass)
+                val isEndpoint = recognizer.javaClass.getMethod("isEndpoint", sClass)
+                val reset = recognizer.javaClass.getMethod("reset", sClass)
                 val releaseRecognizer = recognizer.javaClass.getMethod("release")
 
-                val acceptWaveform = streamClass!!.getMethod(
-                    "acceptWaveform", FloatArray::class.java, Int::class.javaPrimitiveType
+                val acceptWaveform = sClass.getMethod(
+                    "acceptWaveform", FloatArray::class.java, java.lang.Integer.TYPE
                 )
-                val releaseStream = streamClass.getMethod("release")
+                val releaseStream = sClass.getMethod("release")
 
                 val sessionId = UUID.randomUUID().toString()
                 val releaseRequested = AtomicBoolean(false)
@@ -167,7 +168,7 @@ class OnnxAsrProvider(
                         recorder = AudioRecord(
                             MediaRecorder.AudioSource.MIC, 16000,
                             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                            maxOf(minBuf, 640), 0
+                            maxOf(minBuf, 640)
                         )
                         recorder.startRecording()
                         while (!releaseRequested.get()) {
