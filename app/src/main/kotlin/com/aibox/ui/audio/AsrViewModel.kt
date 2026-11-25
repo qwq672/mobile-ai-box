@@ -34,13 +34,19 @@ class AsrViewModel(
 
     data class UiState(
         val providerId: String = "",
+        /** 当前选中的 provider 是否可用（模型/native 就绪）。 */
+        val available: Boolean = true,
         val isListening: Boolean = false,
         val partialText: String = "",
         val finalText: String = "",
         val language: String = "zh-CN",
-        val available: Boolean = true,
         val error: String? = null
     )
+
+    /** 可选 provider 列表（id → 显示名），供设置页下拉选择。 */
+    data class ProviderOption(val id: String, val displayName: String, val available: Boolean)
+    private val _providers = MutableStateFlow<List<ProviderOption>>(emptyList())
+    val providers: StateFlow<List<ProviderOption>> = _providers
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -49,12 +55,39 @@ class AsrViewModel(
     private var collectJob: Job? = null
 
     init {
-        val p = registry.getDefaultAsrProvider()
-        if (p != null) {
-            _ui.value = _ui.value.copy(providerId = p.id, available = p.isAvailable())
-        } else {
-            _ui.value = _ui.value.copy(available = false, error = "无系统 ASR 提供者")
+        refreshProviders()
+    }
+
+    /** 重新枚举 provider 列表，并保持当前选择有效。 */
+    private fun refreshProviders() {
+        val list = registry.listAsrProviders().map {
+            ProviderOption(it.id, it.displayName, it.isAvailable())
         }
+        _providers.value = list
+        val current = _ui.value.providerId
+        if (current.isEmpty() || list.none { it.id == current }) {
+            val def = registry.getDefaultAsrProvider()
+            _ui.value = _ui.value.copy(
+                providerId = def?.id ?: "",
+                available = def?.isAvailable() ?: false
+            )
+        }
+    }
+
+    /** 用户切换 provider；不可用时给出友好提示但允许选中（便于查看原因）。 */
+    fun selectProvider(id: String) {
+        stop()
+        val p = registry.getAsrProvider(id)
+        _ui.value = _ui.value.copy(
+            providerId = id,
+            available = p?.isAvailable() ?: false,
+            error = if (p?.isAvailable() == false) providerUnavailableHint(id) else null
+        )
+    }
+
+    private fun providerUnavailableHint(id: String): String = when (id) {
+        "onnx" -> "离线 ONNX ASR 未就绪：需 -Paibox.asr.sherpa=true 构建并把模型放到 App 内部 files/sherpa-asr"
+        else -> "该语音识别后端在当前设备不可用"
     }
 
     fun setLanguage(lang: String) {
@@ -63,12 +96,14 @@ class AsrViewModel(
 
     fun start() {
         if (_ui.value.isListening) return
-        val p = registry.getDefaultAsrProvider() ?: run {
-            _ui.value = _ui.value.copy(error = "无系统 ASR 提供者")
-            return
-        }
+        val p = registry.getAsrProvider(_ui.value.providerId)
+            ?: registry.getDefaultAsrProvider()
+            ?: run {
+                _ui.value = _ui.value.copy(error = "无系统 ASR 提供者")
+                return
+            }
         if (!p.isAvailable()) {
-            _ui.value = _ui.value.copy(error = "当前设备不支持语音识别")
+            _ui.value = _ui.value.copy(error = providerUnavailableHint(p.id))
             return
         }
         _ui.value = _ui.value.copy(

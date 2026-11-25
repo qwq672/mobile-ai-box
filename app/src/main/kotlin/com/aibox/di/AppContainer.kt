@@ -9,6 +9,7 @@ import com.aibox.data.repo.SettingsRepository
 import com.aibox.domain.cloud.CloudChatService
 import com.aibox.domain.cloud.OpenAiCompatibleClient
 import com.aibox.domain.audio.AudioProviderRegistry
+import com.aibox.domain.audio.OnnxAsrProvider
 import com.aibox.domain.audio.SystemAsrProvider
 import com.aibox.domain.audio.SystemTtsProvider
 import com.aibox.domain.download.DownloadManager
@@ -392,6 +393,9 @@ class AppContainer(context: Context) {
      */
     val audioProviderRegistry: AudioProviderRegistry = AudioProviderRegistry().apply {
         registerAsr(SystemAsrProvider(appContext))
+        // 离线 ONNX ASR（2026-11-25）：用反射访问 sherpa-onnx，无编译期依赖。
+        // 默认（AAR 未打进包 / 模型缺失）时 isAvailable()=false，UI 自动回退 system，绝不崩溃。
+        registerAsr(OnnxAsrProvider(java.io.File(appContext.filesDir, "sherpa-asr")))
         registerTts(SystemTtsProvider(appContext))
     }
 }

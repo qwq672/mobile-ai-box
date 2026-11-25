@@ -45,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.aibox.AIBoxApp
 import com.aibox.infra.plugin.FieldType
 import com.aibox.infra.plugin.SettingField
+import com.aibox.infra.plugin.SettingOption
 import com.aibox.ui.components.unified.UnifiedCard
 import com.aibox.ui.components.unified.UnifiedCardTone
 import com.aibox.ui.components.unified.UnifiedDropdown
@@ -67,8 +68,15 @@ fun AsrScreen(
     )
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val providers by vm.providers.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val providerOptions = providers.map {
+        SettingOption(
+            it.id,
+            it.displayName + if (it.available) "" else "（不可用）"
+        )
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -101,8 +109,26 @@ fun AsrScreen(
             contentPadding = PaddingValues(vertical = DesignTokens.spacing16),
             verticalArrangement = Arrangement.spacedBy(DesignTokens.spacing8)
         ) {
+            if (providerOptions.size > 1) {
+                item {
+                    UnifiedSection(title = "识别引擎", showTopDivider = false) {
+                        UnifiedDropdown(
+                            field = SettingField(
+                                key = "asr_provider",
+                                type = FieldType.DROPDOWN,
+                                title = "语音识别引擎",
+                                description = if (ui.available) "当前引擎可用" else "当前引擎不可用，将提示原因",
+                                defaultValue = ui.providerId,
+                                options = providerOptions
+                            ),
+                            value = ui.providerId,
+                            onValueChange = vm::selectProvider
+                        )
+                    }
+                }
+            }
             item {
-                UnifiedSection(title = "语言", showTopDivider = false) {
+                UnifiedSection(title = "语言", showTopDivider = providerOptions.size <= 1) {
                     UnifiedDropdown(
                         field = SettingField(
                             key = "asr_language",

@@ -9,8 +9,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,12 +52,25 @@ fun ModulesScreen(
     val scanning by viewModel.scanning.collectAsState()
     val diagnostics by viewModel.diagnostics.collectAsState()
     val dependencyReport by viewModel.dependencyReport.collectAsState()
+    val actionMessage by viewModel.actionMessage.collectAsState()
+    val manageMode by viewModel.manageMode.collectAsState()
+    val selected by viewModel.selected.collectAsState()
     val ctx = LocalContext.current
-    // 模块管理增强（最小可用）：可只显示第三方插件、隐藏系统宿主模块。
+    // 模块管理增强：可只显示第三方插件、隐藏系统宿主模块。
     var pluginsOnly by remember { mutableStateOf(false) }
     val shownModules = if (pluginsOnly) modules.filter { !it.isHost } else modules
 
+    // 操作反馈 snackbar（稳定 state，放 Scaffold 内）
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(actionMessage) {
+        actionMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeActionMessage()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -62,8 +78,15 @@ fun ModulesScreen(
                         Icon(Icons.Outlined.ArrowBack, contentDescription = "返回")
                     }
                 },
-                title = { Text("模块管理") },
+                title = { Text(if (manageMode) "选择模块（${selected.size}）" else "模块管理") },
                 actions = {
+                    // 管理态开关
+                    IconButton(onClick = { viewModel.setManageMode(!manageMode) }) {
+                        Icon(
+                            if (manageMode) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                            contentDescription = if (manageMode) "退出管理" else "批量管理"
+                        )
+                    }
                     IconButton(onClick = { viewModel.refresh() }, enabled = !scanning) {
                         Icon(Icons.Outlined.Refresh, contentDescription = "刷新")
                     }
@@ -76,6 +99,36 @@ fun ModulesScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
+            // 批量操作条（仅管理态显示）
+            if (manageMode) {
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    tonalElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "已选 ${selected.size} 个",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedButton(
+                            onClick = { viewModel.setSelectedEnabled(true) },
+                            enabled = selected.isNotEmpty()
+                        ) { Text("批量启用") }
+                        OutlinedButton(
+                            onClick = { viewModel.setSelectedEnabled(false) },
+                            enabled = selected.isNotEmpty()
+                        ) { Text("批量禁用") }
+                    }
+                }
+            }
+
             // 顶部统计 + 筛选
             Row(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -146,18 +199,26 @@ fun ModulesScreen(
                     items(shownModules) { module ->
                         ModuleCard(
                             module = module,
+                            enabled = viewModel.isEnabled(module.packageName),
+                            manageMode = manageMode,
+                            selected = selected.contains(module.packageName),
                             onClick = {
-                                // 非宿主模块：长按跳转应用详情页（卸载/查看权限）
-                                if (!module.isHost) {
-                                    runCatching {
-                                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                            data = Uri.parse("package:${module.packageName}")
-                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                when {
+                                    manageMode && !module.isHost -> viewModel.toggleSelected(module.packageName)
+                                    !module.isHost -> {
+                                        // 普通态点击：跳转应用详情页（卸载/查看权限）
+                                        runCatching {
+                                            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                                data = Uri.parse("package:${module.packageName}")
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            ctx.startActivity(intent)
                                         }
-                                        ctx.startActivity(intent)
                                     }
                                 }
-                            }
+                            },
+                            onToggle = { enable -> viewModel.togglePlugin(module.packageName, enable) },
+                            onAddToHome = { viewModel.addToHome(module) }
                         )
                     }
                 }
@@ -291,8 +352,14 @@ private fun DependencyPlanCard(
 @Composable
 private fun ModuleCard(
     module: DiscoveredModule,
-    onClick: () -> Unit = {}
+    enabled: Boolean = false,
+    manageMode: Boolean = false,
+    selected: Boolean = false,
+    onClick: () -> Unit = {},
+    onToggle: (Boolean) -> Unit = {},
+    onAddToHome: () -> Unit = {}
 ) {
+    var showMenu by remember { mutableStateOf(false) }
     UnifiedCard(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick
@@ -302,11 +369,15 @@ private fun ModuleCard(
             modifier = Modifier.padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 图标（emoji）
-            Text(
-                module.type.icon,
-                style = MaterialTheme.typography.headlineMedium
-            )
+            // 管理态：勾选框；普通态：emoji 图标
+            if (manageMode && !module.isHost) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onClick() }
+                )
+            } else {
+                Text(module.type.icon, style = MaterialTheme.typography.headlineMedium)
+            }
 
             // 主信息
             Column(modifier = Modifier.weight(1f)) {
@@ -336,13 +407,48 @@ private fun ModuleCard(
                 )
             }
 
-            // 右侧类型标签
-            Column(horizontalAlignment = Alignment.End) {
+            // 右侧：管理态显示类型标签；普通态显示开关 + 更多菜单（非宿主）
+            if (!manageMode) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        module.type.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                    if (!module.isHost) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Switch(
+                                checked = enabled,
+                                onCheckedChange = onToggle,
+                                modifier = Modifier.height(32.dp)
+                            )
+                            Box {
+                                IconButton(onClick = { showMenu = true }) {
+                                    Icon(
+                                        Icons.Outlined.Extension,
+                                        contentDescription = "更多操作",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showMenu,
+                                    onDismissRequest = { showMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("添加到主页") },
+                                        onClick = { showMenu = false; onAddToHome() }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (!module.isHost) {
                 Text(
                     module.type.label,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
         }

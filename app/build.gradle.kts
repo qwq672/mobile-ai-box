@@ -20,6 +20,18 @@ val aiboxNpu = providers.gradleProperty("aibox.npu")
     .map { it.equals("true", ignoreCase = true) }
     .getOrElse(false)
 
+/**
+ * 离线 ONNX ASR（sherpa-onnx）构建开关。
+ *
+ * 默认关闭：不打 sherpa-onnx AAR（~47MB），默认 CI / 出包零风险、体积不变。
+ * 开启方式：`./gradlew assembleRelease -Paibox.asr.sherpa=true`。
+ * OnnxAsrProvider 用反射访问，无编译期依赖，故默认关闭也能编译通过；
+ * 仅 isAvailable() 在类不存在时返回 false，自动回退 system provider。
+ */
+val aiboxAsrSherpa = providers.gradleProperty("aibox.asr.sherpa")
+    .map { it.equals("true", ignoreCase = true) }
+    .getOrElse(false)
+
 android {
     namespace = "com.aibox"
     compileSdk = 34
@@ -30,8 +42,11 @@ android {
         targetSdk = 34
         // 版本规范：测试版 vYYMMDD-N（当日第 N 个测试版），正式版 vYYMMDD。
         // versionCode 用 YYMMDDNN，保证随每次交付递增，避免覆盖安装仍显示旧版本。
-        versionCode = 26112205
-        versionName = "v261122-5"
+        versionCode = 26112501
+        versionName = "v261125-1"
+
+        // 离线 ONNX ASR 开关传给代码（用于设置页展示能力状态）
+        buildConfigField("boolean", "AIBOX_ASR_SHERPA", aiboxAsrSherpa.toString())
 
         ndk {
             // 手机几乎都是 arm64；缩小体积只打这一个
@@ -199,6 +214,11 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-reflect:2.0.20")
 
     implementation("org.jsoup:jsoup:1.18.1")
+
+    // 离线 ONNX ASR（可选，默认关闭；-Paibox.asr.sherpa=true 开启）
+    if (aiboxAsrSherpa) {
+        implementation("com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.5")
+    }
 
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 

@@ -185,7 +185,8 @@ fun HomeScreen(
                                 onOpenASR = onOpenASR,
                                 onOpenTTS = onOpenTTS,
                                 onOpenTranslate = onOpenTranslate,
-                                onOpenBenchmark = onOpenBenchmark
+                                onOpenBenchmark = onOpenBenchmark,
+                                onOpenModuleManager = onOpenModuleManager
                             )
                         },
                         onAddShortcutClick = { onOpenShortcutEditor(null) },
@@ -380,7 +381,8 @@ private fun dispatchShortcutClick(
     onOpenASR: () -> Unit,
     onOpenTTS: () -> Unit,
     onOpenTranslate: () -> Unit,
-    onOpenBenchmark: () -> Unit
+    onOpenBenchmark: () -> Unit,
+    onOpenModuleManager: () -> Unit
 ) {
     when (shortcut.targetType) {
         ShortcutTargetType.CHAT -> onOpenChat(shortcut)
@@ -390,7 +392,8 @@ private fun dispatchShortcutClick(
         ShortcutTargetType.TRANSLATE -> onOpenTranslate()
         ShortcutTargetType.BENCHMARK -> onOpenBenchmark()
         ShortcutTargetType.PLUGIN_PAGE -> {
-            // 占位：未来按 shortcut.presetConfig.customPayload 中的 pluginId 分发
+            // 模块管理页入口（2026-11-25：从"添加到主页"创建的快捷方式点此进入）
+            onOpenModuleManager()
         }
     }
 }
