@@ -73,7 +73,9 @@ class SettingsViewModel : ViewModel() {
         val cloudEnabled: Boolean = false,
         val cloudBaseUrl: String = com.aibox.domain.cloud.CloudConfig.DEFAULT_BASE_URL,
         val cloudModel: String = com.aibox.domain.cloud.CloudConfig.DEFAULT_MODEL,
-        val cloudApiKey: String = ""
+        val cloudApiKey: String = "",
+        /** 云端输出上限 max_tokens：0=自动（按思考档位给默认值），>0=用户自定义。 */
+        val cloudMaxTokens: Int = 0
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -178,6 +180,11 @@ class SettingsViewModel : ViewModel() {
                     cloudModel = c.model,
                     cloudApiKey = c.apiKey
                 )
+            }
+        }
+        viewModelScope.launch {
+            container.settingsRepository.cloudMaxTokens.collectLatest {
+                _ui.value = _ui.value.copy(cloudMaxTokens = it)
             }
         }
         viewModelScope.launch {
@@ -334,6 +341,11 @@ class SettingsViewModel : ViewModel() {
     fun onCloudBaseUrlChange(v: String) = editCloud { it.copy(baseUrl = v.trim()) }
     fun onCloudModelChange(v: String) = editCloud { it.copy(model = v.trim()) }
     fun onCloudApiKeyChange(v: String) = editCloud { it.copy(apiKey = v.trim()) }
+
+    /** 云端输出上限：0=自动，>0=自定义（仓库层夹到 1024~393216）。 */
+    fun onCloudMaxTokensChange(v: Int) {
+        viewModelScope.launch { container.settingsRepository.setCloudMaxTokens(v) }
+    }
 
     fun onDarkThemeChange(mode: String) {
         viewModelScope.launch { container.settingsRepository.setDarkTheme(mode) }

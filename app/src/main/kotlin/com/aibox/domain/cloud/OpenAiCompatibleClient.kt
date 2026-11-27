@@ -72,11 +72,21 @@ class OpenAiCompatibleClient {
                 // 常在“只思考、还没回答”阶段就撞上 max_tokens（finish_reason=length），正文没机会产出。
                 // 判定条件不能再只看模型名——deepseek-chat 等模型开启 thinking 后同样会先长思考，
                 // 因此“思考开着”本身就要求抬高上限。非思考场景沿用用户配置。
-                val thinkingOn = reasoningEffort?.let { it.lowercase() != "off" } == true
-                val effectiveMaxTokens = if (isReasoningModel(config.model) || thinkingOn) {
-                    maxOf(config.maxTokens, REASONING_MAX_TOKENS)
-                } else config.maxTokens
-                if (effectiveMaxTokens > 0) put("max_tokens", effectiveMaxTokens)
+                //
+                // 2026-11-27 修正：原先固定下限 8192（8K）太低——思考档 high 映射到 DeepSeek
+                // reasoning_effort=max，思考链轻松几万字，8K 在“只思考还没回答”阶段就撞顶。
+                // 按 DeepSeek 当前官方默认分级：思考 64K、max 档 128K；用户显式设置的值优先，
+                // 仅当其低于档位下限时抬到下限，最终不超过 API 硬上限 384K（393216）。
+                val effort = reasoningEffort?.lowercase()
+                val thinkingOn = effort != null && effort != "off"
+                val isMaxEffort = effort == "max" || effort == "high"
+                val floor = when {
+                    isMaxEffort -> REASONING_MAX_TOKENS_MAX      // 128K
+                    thinkingOn || isReasoningModel(config.model) -> REASONING_MAX_TOKENS // 64K
+                    else -> 0
+                }
+                val effectiveMaxTokens = if (floor > 0) maxOf(config.maxTokens, floor) else config.maxTokens
+                if (effectiveMaxTokens > 0) put("max_tokens", effectiveMaxTokens.coerceAtMost(API_MAX_TOKENS))
                 reasoningEffort?.lowercase()?.let { applyThinkingParams(config.model, it) }
                 putJsonArray("messages") {
                     messages.forEach { m -> add(msgToJson(m)) }
@@ -379,8 +389,12 @@ class OpenAiCompatibleClient {
 
     private companion object {
         const val TAG = "aibox.cloud"
-        /** 推理模型思考 + 正文的最低输出额度。 */
-        const val REASONING_MAX_TOKENS = 8192
+        /** 思考/推理场景的最低输出额度：对齐 DeepSeek 官方思考模式默认 64K。 */
+        const val REASONING_MAX_TOKENS = 65536
+        /** reasoning_effort=max/high（思考档“高”）的最低额度：对齐官方 128K。 */
+        const val REASONING_MAX_TOKENS_MAX = 131072
+        /** API 硬上限：DeepSeek 当前 max_tokens 可设上限 384K = 393216。 */
+        const val API_MAX_TOKENS = 393216
         val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }

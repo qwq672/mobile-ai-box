@@ -650,10 +650,12 @@ fun ChatScreen(
                 )
 
                 // 回到底部：上滑翻看更早消息时出现，点击平滑落到最新一条。
+                // 不再要求 !ui.streaming：流式生成期间上翻看历史时同样需要能一键回到底部，
+                // 自动跟随逻辑只在 nearBottom 时触发，用户上翻时不会抢滚动，两者不冲突。
                 // 用 if 直接控制而非 AnimatedVisibility：此处处于 BoxScope，
                 // 而外层 Column 的 ColumnScope 隐式接收者仍在作用域内，
                 // 会让 AnimatedVisibility 错误解析成 ColumnScope 重载并报接收者歧义。
-                if (showJumpDown && !ui.streaming && ui.hasModel) {
+                if (showJumpDown && ui.hasModel) {
                     androidx.compose.material3.FloatingActionButton(
                         onClick = {
                             scope.launch {

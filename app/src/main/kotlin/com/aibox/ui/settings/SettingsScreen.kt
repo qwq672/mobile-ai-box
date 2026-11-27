@@ -426,6 +426,53 @@ fun SettingsScreen(
                                     ) { Text(label) }
                                 }
                             }
+                            Spacer(Modifier.size(14.dp))
+                            // 输出上限 max_tokens：0=自动（按思考档位给官方默认），>0=自定义
+                            Text(
+                                "输出上限（max_tokens）",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.size(4.dp))
+                            Text(
+                                "思考链 + 正文共用的额度。自动档：普通思考给 64K、“高”档给 128K；" +
+                                    "长思考被截断时可手动调大（上限 384K）。仅对云端模型生效。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            // 用不带 key 的 state：用户逐字输入时不被 ui 值变化重建打断
+                            val maxTokensText = remember {
+                                mutableStateOf(if (ui.cloudMaxTokens > 0) ui.cloudMaxTokens.toString() else "")
+                            }
+                            OutlinedTextField(
+                                value = maxTokensText.value,
+                                onValueChange = { raw ->
+                                    val digits = raw.filter { it.isDigit() }.take(6)
+                                    maxTokensText.value = digits
+                                    val n = digits.toIntOrNull() ?: 0
+                                    // 空串=自动(0)；否则只在 >=1024 时提交，避免中间态被夹成 1024
+                                    if (digits.isEmpty()) vm.onCloudMaxTokensChange(0)
+                                    else if (n >= 1024) vm.onCloudMaxTokensChange(n.coerceAtMost(393216))
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("留空=自动；或填 1024~393216") },
+                                placeholder = { Text("自动（按思考档位）") },
+                                singleLine = true,
+                                shape = MaterialTheme.shapes.small
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            androidx.compose.foundation.layout.Row(
+                                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf("自动" to 0, "64K" to 65536, "128K" to 131072, "384K" to 393216)
+                                    .forEach { (label, value) ->
+                                        OutlinedButton(
+                                            onClick = { vm.onCloudMaxTokensChange(value) },
+                                            modifier = Modifier.weight(1f)
+                                        ) { Text(label) }
+                                    }
+                            }
                         }
                         HorizontalDivider()
                         ListItem(

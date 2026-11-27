@@ -67,6 +67,8 @@ class SettingsRepository(private val context: Context) {
         val THINKING_LEVEL  = stringPreferencesKey("thinking_level")
         // 思考模式开关（旧字段，保留兼容：thinking_level 非 off 时视为 true）
         val THINKING_MODE   = booleanPreferencesKey("thinking_mode")
+        // 云端输出上限 max_tokens：0 = 自动（按思考档位给官方默认），>0 = 用户自定义（1024~393216）
+        val CLOUD_MAX_TOKENS = intPreferencesKey("cloud_max_tokens")
         // B3 WebSearchTool：第三方搜索引擎 API key（用户在 Settings 配；空表示未配）
         val TAVILY_API_KEY  = stringPreferencesKey("tavily_api_key")
         val EXA_API_KEY     = stringPreferencesKey("exa_api_key")
@@ -135,6 +137,14 @@ class SettingsRepository(private val context: Context) {
         p[Keys.THINKING_LEVEL] ?: if (p[Keys.THINKING_MODE] == false) "off" else "low"
     }
     val thinkingMode: Flow<Boolean> = thinkingLevel.map { it != "off" }
+
+    /**
+     * 云端输出上限 max_tokens。0 = 自动（按思考档位给官方默认：思考 64K / max 档 128K）；
+     * >0 = 用户自定义，限制在 1024~393216（DeepSeek 当前 API 硬上限 384K）。
+     */
+    val cloudMaxTokens: Flow<Int> = context.dataStore.data.map { p ->
+        (p[Keys.CLOUD_MAX_TOKENS] ?: 0).coerceIn(0, 393216)
+    }
 
     /** 自定义主色："dynamic" 表示跟随系统壁纸，其余为 #RRGGBB。 */
     val accentColor: Flow<String> = context.dataStore.data.map { it[Keys.ACCENT_COLOR] ?: "dynamic" }
@@ -283,6 +293,12 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit {
             it[Keys.THINKING_LEVEL] = level
             it[Keys.THINKING_MODE] = level != "off"
+        }
+
+    /** 设置云端输出上限 max_tokens：0=自动，其余夹到 1024~393216。 */
+    suspend fun setCloudMaxTokens(value: Int) =
+        context.dataStore.edit {
+            it[Keys.CLOUD_MAX_TOKENS] = if (value <= 0) 0 else value.coerceIn(1024, 393216)
         }
 
     suspend fun setAccentColor(hexOrDynamic: String) =
@@ -451,7 +467,8 @@ class SettingsRepository(private val context: Context) {
     suspend fun resetCloud() = context.dataStore.edit { p ->
         listOf(
             Keys.CLOUD_ENABLED, Keys.CLOUD_BASE_URL, Keys.CLOUD_API_KEY, Keys.CLOUD_MODEL,
-            Keys.CLOUD_VISION, Keys.CLOUD_AUDIO, Keys.CLOUD_WEB, Keys.CLOUD_URL
+            Keys.CLOUD_VISION, Keys.CLOUD_AUDIO, Keys.CLOUD_WEB, Keys.CLOUD_URL,
+            Keys.CLOUD_MAX_TOKENS
         ).forEach { p.remove(it) }
         LogSystem.info("aibox.settings", "resetCloud done")
     }
