@@ -468,7 +468,12 @@ fun SettingsScreen(
                                 listOf("自动" to 0, "64K" to 65536, "128K" to 131072, "384K" to 393216)
                                     .forEach { (label, value) ->
                                         OutlinedButton(
-                                            onClick = { vm.onCloudMaxTokensChange(value) },
+                                            onClick = {
+                                                // 快捷档位同时刷新输入框文本，否则 state 不带 key 不会随 ui 值更新，
+                                                // 用户点完按钮会看到输入框还是旧值，误以为没生效。
+                                                maxTokensText.value = if (value > 0) value.toString() else ""
+                                                vm.onCloudMaxTokensChange(value)
+                                            },
                                             modifier = Modifier.weight(1f)
                                         ) { Text(label) }
                                     }
