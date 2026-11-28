@@ -117,8 +117,8 @@ fun MarkdownText(
     /** 设置开启时对 ```html 围栏做即时 WebView 预览（默认关闭）。 */
     htmlPreview: Boolean = false
 ) {
-    // 流式立即渲染 Markdown：打字机每 20ms 推进，若每次都全量 parseBlocks 会掉帧。
-    // 这里对流式文本做节流（最快 90ms 一次），并把 streaming 传给解析器：
+    // 流式立即渲染 Markdown：token 直出 / 打字机每 20ms 推进，若每次都全量 parseBlocks 会掉帧。
+    // 这里对流式文本做节流（最快 48ms 一次），并把 streaming 传给解析器：
     // 未闭合的围栏按代码块降级，闭合后才升级为图/表，避免半成品反复重建。
     val renderText = rememberStreamRenderText(text, streaming)
     val blocks = remember(renderText, choicesEnabled, streaming, htmlPreview) {
@@ -418,8 +418,9 @@ fun MarkdownText(
 }
 
 /**
- * 流式渲染节流：打字机每 20ms 推进一次，若每次都全量解析 Markdown 会掉帧发热。
- * 这里用 conflate + 短延时，把解析频率压到 ~90ms 一次；
+ * 流式渲染节流：云端 token 直出、打字机每 20ms 推进，若每次都全量解析 Markdown 会掉帧发热。
+ * 这里用 conflate + 短延时，把解析频率压到 ~48ms（约 3 帧）一次——比原来的 90ms 跟手得多，
+ * 减少"一顿一顿"的观感，同时 conflate 合并中间态、避免重组风暴。
  * 生成结束（streaming=false）时停止收集，直接返回最终完整文本，保证末尾内容不丢。
  */
 @Composable
@@ -430,7 +431,7 @@ private fun rememberStreamRenderText(text: String, streaming: Boolean): String {
         snapshotFlow { text }
             .conflate()
             .collect { latest ->
-                delay(90)
+                delay(48)
                 shown = latest
             }
     }

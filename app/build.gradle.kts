@@ -42,8 +42,8 @@ android {
         targetSdk = 34
         // 版本规范：测试版 vYYMMDD-N（当日第 N 个测试版），正式版 vYYMMDD。
         // versionCode 用 YYMMDDNN，保证随每次交付递增，避免覆盖安装仍显示旧版本。
-        versionCode = 26112702
-        versionName = "v261127-2"
+        versionCode = 26112801
+        versionName = "v261128-1"
 
         // 离线 ONNX ASR 开关传给代码（用于设置页展示能力状态）
         buildConfigField("boolean", "AIBOX_ASR_SHERPA", aiboxAsrSherpa.toString())

@@ -620,7 +620,6 @@ class ChatViewModel : ViewModel() {
         val rawAll = StringBuilder()
         var firstTokMs = 0L
         var tokCount = 0
-        var lastUiPushMs = 0L
         var error: String? = null
         var rounds = 0
 
@@ -676,16 +675,16 @@ class ChatViewModel : ViewModel() {
                             // 注意 target 是「已揭示前缀」的全量来源，必须包含已完成轮次前缀。
                             typewriter.target = roundBase + turn.toString()
                         } else {
-                            // 减弱动态效果：token 直出，仅保留 ~30fps 合批以压住重组风暴。
-                            val now = System.currentTimeMillis()
-                            if (now - lastUiPushMs >= 33L) {
-                                lastUiPushMs = now
-                                _ui.value = _ui.value.copy(
-                                    currentStream = roundBase + turn,
-                                    streamParts = parts + parseTimeline(turn.toString())
-                                        .let { if (isCloud) it else it.filterNot { p -> p.kind == MsgPart.KIND_TOOL } }
-                                )
-                            }
+                            // 云端 / 减弱动态效果：token 直出。
+                            // 不再按时间合批（原来 ~33ms 才推一次）：工具执行那几秒没有新 token，
+                            // 合批窗口会把「最后一批正文 + 工具标记」吞掉，界面停在旧快照
+                            // （"我先取一次…"），直到整轮结束才一次性补全 —— 这就是吞字/卡顿的根因。
+                            // 改为每个 token 都刷新到最新，重组风暴由渲染层的 conflate 节流兜底。
+                            _ui.value = _ui.value.copy(
+                                currentStream = roundBase + turn,
+                                streamParts = parts + parseTimeline(turn.toString())
+                                    .let { if (isCloud) it else it.filterNot { p -> p.kind == MsgPart.KIND_TOOL } }
+                            )
                         }
                     },
                     onStop = { reason ->
