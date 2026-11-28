@@ -70,6 +70,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -1377,7 +1378,7 @@ private val CHAT_GREETINGS = listOf(
     "想聊什么都可以。"
 )
 
-/** 空会话建议池（18 条，每次展示 3 条并定时轮换）。 */
+/** 空会话建议池（18 条，每条独立随机抽取展示，无定时轮播）。 */
 private val CHAT_SUGGESTIONS = listOf(
     "用三句话介绍一下你自己",
     "帮我列出今天的待办清单",
@@ -1410,23 +1411,17 @@ private fun EmptyChatState(
     characterEmoji: String = "",
     personaName: String = ""
 ) {
-    // 每次进入空会话 / 每 12 秒换一次问候与建议，避免永远是那三条。
-    var tick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(12_000)
-            tick++
-        }
-    }
-    // 角色扮演时不推通用任务建议，改成不会出戏的开场白
-    val suggestions = remember(tick, characterName) {
+    // 三条建议各自独立随机、互不绑定；进入空会话抽一次，刷新本页即可换一批。
+    // 不做定时轮播——用户不该盯着屏幕等它变，也不该整组翻页。
+    val suggestions = remember(characterName) {
         if (characterName.isNotBlank()) {
             listOf("你好呀", "我们聊聊吧", "今天过得怎么样？")
         } else {
-            List(3) { i -> CHAT_SUGGESTIONS[(tick * 3 + i) % CHAT_SUGGESTIONS.size] }
+            CHAT_SUGGESTIONS.shuffled().take(3)
         }
     }
-    val title = greeting.ifBlank { CHAT_GREETINGS[tick % CHAT_GREETINGS.size] }
+    val randomGreeting = remember { CHAT_GREETINGS.random() }
+    val title = greeting.ifBlank { randomGreeting }
     val subtitle = if (characterName.isNotBlank()) {
         buildString {
             append("正在扮演 $characterName")
@@ -1438,21 +1433,16 @@ private fun EmptyChatState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Box(
-            Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
+        // 中央符号：干净线性符号，不套"灰圆 + 默认头像"外观
+        Box(contentAlignment = Alignment.Center) {
             if (characterEmoji.isNotBlank()) {
-                Text(characterEmoji, style = MaterialTheme.typography.headlineSmall)
+                Text(characterEmoji, style = MaterialTheme.typography.headlineMedium)
             } else {
                 Icon(
                     Icons.Outlined.SmartToy,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(30.dp)
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(40.dp)
                 )
             }
         }
@@ -1472,22 +1462,32 @@ private fun EmptyChatState(
             )
         }
         Spacer(Modifier.height(24.dp))
+        // 建议：带图标的轻 chip，内容宽度、不占通栏，轻、可点、不压屏
         suggestions.forEach { s ->
             Surface(
                 onClick = { onSuggestion(s) },
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(50),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
+                modifier = Modifier.padding(vertical = 4.dp)
             ) {
-                Text(
-                    s,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Outlined.Bolt,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        s,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }
@@ -1626,11 +1626,17 @@ private fun MessageItem(
     onRegenerateAt: (() -> Unit)? = null,
     onDelete: () -> Unit = {},
     onChoice: (String) -> Unit = {},
+    onAskTerm: ((String, String) -> Unit)? = null,
     onSwitchVersion: (Int) -> Unit = {},
     onEdit: (() -> Unit)? = null
 ) {
     val isUser = m.role == "user"
     var menuOpen by remember { mutableStateOf(false) }
+    // 就地释义卡：点击虚线词后在本条消息下方展开（不打断阅读、不发新消息）
+    var expandedTerm by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val handleAskTerm: (String, String) -> Unit = { term, gloss ->
+        if (onAskTerm != null) onAskTerm(term, gloss) else expandedTerm = term to gloss
+    }
     // 结构化时间线；旧消息没有 parts 时按正文解析（思考 / 工具标记）
     val parts = remember(m.content, m.parts) {
         if (m.parts.isNotEmpty()) m.parts else parseTimeline(m.content)
@@ -1701,6 +1707,7 @@ private fun MessageItem(
                         streaming = animate,
                         reduceMotion = reduceMotion,
                         onChoice = onChoice,
+                        onAskTerm = handleAskTerm,
                         choicesEnabled = choicesEnabled,
                         htmlPreview = htmlPreview,
                         modifier = if (animate && !reduceMotion) {
@@ -1729,10 +1736,59 @@ private fun MessageItem(
                                 streaming = animate,
                                 reduceMotion = reduceMotion,
                                 onChoice = onChoice,
+                                onAskTerm = handleAskTerm,
                                 choicesEnabled = choicesEnabled,
                                 htmlPreview = htmlPreview
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        // 就地释义卡：点击正文里的虚线词后原地展开，不打断阅读、不发新消息
+        if (!isUser && expandedTerm != null) {
+            val (term, gloss) = expandedTerm!!
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    Text(
+                        term,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (gloss.isNotBlank()) {
+                        Text(
+                            gloss,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    Row(
+                        Modifier.padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(
+                            "继续追问",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable {
+                                expandedTerm = null
+                                onChoice("请解释「$term」在这段话里的含义和用法。")
+                            }
+                        )
+                        Text(
+                            "关闭",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable { expandedTerm = null }
+                        )
                     }
                 }
             }
@@ -1820,6 +1876,7 @@ private fun AssistantParts(
     streaming: Boolean,
     reduceMotion: Boolean = false,
     onChoice: (String) -> Unit,
+    onAskTerm: (String, String) -> Unit = { _, _ -> },
     choicesEnabled: Boolean = true,
     htmlPreview: Boolean = false,
     modifier: Modifier = Modifier
@@ -1840,6 +1897,7 @@ private fun AssistantParts(
                         text = part.text,
                         color = MaterialTheme.colorScheme.onSurface,
                         onChoice = onChoice,
+                        onAskTerm = onAskTerm,
                         choicesEnabled = choicesEnabled,
                         streaming = streaming,
                         // 光标只挂在最后一段正文末尾；减弱动态时彻底关闭
@@ -1967,7 +2025,7 @@ private fun Composer(
             trim = LineHeightStyle.Trim.None
         )
     )
-    val placeholder = if (enabled) "输入消息…" else "请先加载模型"
+    val placeholder = if (enabled) "发消息，或按住说话…" else "请先加载模型"
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
 
@@ -2163,23 +2221,19 @@ private fun ComposerInput(
 
 @Composable
 private fun ComposerPlusButton(enabled: Boolean, onClick: () -> Unit) {
+    // 无底线性图标按钮：与麦克风同为线性、同粗细，不抢输入区视觉
     Box(
         Modifier
             .size(36.dp)
-            .clip(CircleShape)
-            .background(
-                MaterialTheme.colorScheme.surfaceContainerHighest.copy(
-                    alpha = if (enabled) 1f else 0.5f
-                )
-            )
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             Icons.Outlined.Add,
             contentDescription = "添加",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(21.dp)
         )
     }
 }

@@ -9,9 +9,17 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -19,11 +27,52 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.json.JSONObject
+
+/**
+ * 通用 mermaid 引擎在真机 WebView 上实测不可用（内联脚本未执行，15 种图里 14 种报
+ * "Mermaid 引擎未加载"）。 Mindmap 已由 [MindMapCanvas] 自研渲染，能走到这里的都是
+ * 引擎不支持的类型。为避免红字报错污染回答，降级为**原生源码展示**：保留 mermaid
+ * 源码（用户仍可读懂/复制），顶部给一行轻提示，而不是 WebView 报错。
+ *
+ * 无 WebView、无 JS、无外链，彻底消除竞态与崩溃面。
+ */
+@Composable
+fun MermaidFallback(code: String, modifier: Modifier = Modifier) {
+    val kind = code.trimStart().lineSequence().firstOrNull().orEmpty()
+        .removePrefix("%%").trim().ifBlank { "mermaid" }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant,
+                RoundedCornerShape(10.dp)
+            )
+            .padding(10.dp)
+    ) {
+        Text(
+            text = "$kind · 源码（当前设备暂不支持图形渲染）",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+        Text(
+            text = code,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+        )
+    }
+}
 
 /**
  * 在 Markdown 代码块中渲染 Mermaid 图（内置能力，非插件扩展）。

@@ -528,6 +528,12 @@ fun SettingsScreen(
                         checked = ui.choicesBeta,
                         onCheckedChange = vm::onChoicesBetaChange
                     )
+                    SwitchRow(
+                        title = "Beta：直观表达",
+                        subtitle = "引导模型用思维导图、步骤/对比卡、可点释义词和进度条，让回答更直观。离线小模型可能滥用，默认关闭",
+                        checked = ui.richAnswer,
+                        onCheckedChange = vm::onRichAnswerChange
+                    )
                 }
             }
 

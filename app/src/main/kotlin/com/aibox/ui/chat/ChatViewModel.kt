@@ -60,6 +60,18 @@ private const val CHOICES_BETA_HINT =
         "每行一条、用用户口吻、最多 4 条；不要每轮都给选项，不要用选项代替回答。"
 
 /**
+ * 直观表达 Beta 提示词。仅在设置开启时注入 system prompt 尾部。
+ * 强约束：只在确实有助理解时才用可视化，不用图代替文字；结构卡是轻量原生标记，
+ * 思维导图优先用 ```mermaid 的 mindmap 语法（自研渲染可用），其余 mermaid 图本机不支持。
+ */
+private const val RICH_ANSWER_HINT =
+    "（直观表达）可用轻量可视化让回答更清楚，但只在有助理解时用，别每轮都塞，也不要用图代替文字：\n" +
+        "- 概念释义：把值得解释的词写成 {{?术语|一句话释义}}，App 会渲染成可点击的虚线词，点击就地看释义；释义要短。\n" +
+        "- 步骤/对比/利弊：分别用 ```aibox:steps（每行一步）、```aibox:compare（形如 A | B 的两列）、```aibox:proscons（+ 优点 / - 缺点）代码块。\n" +
+        "- 数值比例：写成 {{bar:70}} 会渲染成小进度条（0-100）。\n" +
+        "- 层级关系优先用 ```mermaid 的 mindmap 语法；其它类型 mermaid 图本机不支持，请改用上面的结构卡或表格。"
+
+/**
  * 流式打字机缓冲。
  *
  * token 到达节奏由后端决定：云端 / CPU 很快，NPU 上 7~15 tok/s 意味着每 70~150ms 才来一个 token，
@@ -221,6 +233,8 @@ class ChatViewModel : ViewModel() {
         val thinkingLevel: String = "medium",
         /** Beta：是否启用 aibox:choices 选项卡片（默认关闭） */
         val choicesBeta: Boolean = false,
+        /** Beta：是否启用直观表达（结构卡/释义卡，默认关闭） */
+        val richAnswer: Boolean = false,
         // B6 工具调用 UI: 活跃工具调用列表 + 当前待确认（若有）
         val toolInvocations: List<ToolInvocation> = emptyList(),
         val pendingToolConfirmation: PendingToolConfirmation? = null,
@@ -269,6 +283,11 @@ class ChatViewModel : ViewModel() {
         viewModelScope.launch {
             settings.choicesBeta.collectLatest { on ->
                 _ui.value = _ui.value.copy(choicesBeta = on)
+            }
+        }
+        viewModelScope.launch {
+            settings.richAnswer.collectLatest { on ->
+                _ui.value = _ui.value.copy(richAnswer = on)
             }
         }
         viewModelScope.launch {
@@ -1286,6 +1305,7 @@ class ChatViewModel : ViewModel() {
             levelHint,
             UI_CAPABILITY_HINT,
             if (_ui.value.choicesBeta) CHOICES_BETA_HINT else "",
+            if (_ui.value.richAnswer) RICH_ANSWER_HINT else "",
             toolPrompt
         )
             .filter { it.isNotBlank() }

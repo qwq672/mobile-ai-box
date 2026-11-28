@@ -166,7 +166,8 @@ class CloudChatService(
         val history = withContext(Dispatchers.IO) {
             messages.map { CloudMsg(it.role, it.content, images = it.images.mapNotNull(::toDataUrl)) }
         }.toMutableList()
-        applyThinkingHint(history, thinkingLevel)
+        val richAnswer = runCatching { settings.richAnswer.first() }.getOrDefault(false)
+        applyThinkingHint(history, thinkingLevel, richAnswer)
         var rounds = 0
         // 动态轮次上限：撞到 MAX_TOOL_ROUNDS 时询问用户是否继续；
         // 用户选继续则在本轮基础上再放宽 ROUNDS_PER_EXTEND 轮，最多累计 MAX_ROUNDS_HARD 轮防止无限循环。
@@ -296,7 +297,7 @@ class CloudChatService(
      * 把思考强度写进 system message，作为跨 provider 通用的兜底
      * （reasoning_effort 只对部分模型下发）。
      */
-    private fun applyThinkingHint(history: MutableList<CloudMsg>, level: String) {
+    private fun applyThinkingHint(history: MutableList<CloudMsg>, level: String, richAnswer: Boolean = false) {
         val hint = when (level) {
             "off" -> "请直接给出答案，不要展示推理过程。"
             "low" -> "请先做简短思考（1~3 句）再给出结论，保持简洁。"
@@ -306,16 +307,25 @@ class CloudChatService(
             "high" -> "请先进行深入、完整的推理，再给出清晰结论。"
             else -> null
         }
-        if (hint == null) return
+        // 直观表达 Beta：开启时追加可视化引导（与本地链路的 RICH_ANSWER_HINT 保持一致）。
+        val richHint = if (richAnswer) RICH_ANSWER_HINT_CLOUD else ""
+        val finalHint = listOfNotNull(hint, richHint.takeIf { it.isNotBlank() })
+            .joinToString("\n\n").takeIf { it.isNotBlank() } ?: return
         val idx = history.indexOfFirst { it.role == "system" }
         if (idx >= 0) {
             history[idx] = history[idx].copy(
-                content = history[idx].content.trimEnd() + "\n\n" + hint
+                content = history[idx].content.trimEnd() + "\n\n" + finalHint
             )
         } else {
-            history.add(0, CloudMsg(role = "system", content = hint))
+            history.add(0, CloudMsg(role = "system", content = finalHint))
         }
     }
+
+    private val RICH_ANSWER_HINT_CLOUD =
+        "（直观表达）可用轻量可视化让回答更清楚，但只在有助理解时用，别每轮都塞，也不要用图代替文字：" +
+            "值得解释的词写成 {{?术语|一句话释义}}（App 渲染成可点虚线词）；" +
+            "步骤/对比/利弊分别用 ```aibox:steps / aibox:compare / aibox:proscons 代码块；" +
+            "数值比例写成 {{bar:70}}；层级关系优先用 ```mermaid 的 mindmap 语法，其它 mermaid 图本机不支持请改用结构卡或表格。"
 
     /** 本地文件 / content URI → data URL；已是 data:/http(s) 直接返回。 */
     private fun toDataUrl(pathOrUri: String): String? {

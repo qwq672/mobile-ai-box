@@ -17,11 +17,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,38 +28,29 @@ import androidx.compose.ui.unit.dp
 import com.aibox.ui.theme.Colors
 import com.aibox.ui.theme.DesignTokens
 import com.aibox.ui.theme.Type
-import kotlinx.coroutines.delay
 import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
  * 主页问候卡片。
  *
- * 三段内容轮换展示，避免每次回到主页都看到同一句话：
+ * 三段内容各自独立随机（避免每次回到主页都看到同一句）：
  * 1. 时段问候（早上好 / 中午好 / 傍晚好 …），只从当前时段对应的语料池里取；
  * 2. 子问候（今天吃了没 / 该睡了 …）；
  * 3. 一条轻量建议（可以让我帮你做的事）。
  *
- * 轮换策略：每 14 秒把 [tick] 加 1，三个下标都由 tick 推导（取模），
- * 因此同一个时段内是按顺序循环、不会连续重复，也不需要在 ViewModel 里存状态。
+ * 轮换策略：进入页面时随机抽一次，三段互不绑定；**没有定时器、不做定时轮播**。
+ * 刷新本页（重新进入组合）即可换一批。这样既不会盯着屏幕等它变，也不会整组翻页。
  */
 @Composable
 internal fun GreetingCard(modifier: Modifier = Modifier) {
-    var tick by remember { mutableIntStateOf(0) }
-    // 用一个轻量的循环 tick 驱动轮换；页面不可见时协程随组合一起取消。
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(14_000)
-            tick++
-        }
-    }
-
     val now = LocalDateTime.now()
     val period = periodOf(now.hour)
     val greetings = GREETINGS.getValue(period)
-    val greeting = greetings[tick % greetings.size]
-    val sub = SUB_GREETINGS[(tick * 7 + period.ordinal * 3) % SUB_GREETINGS.size]
-    val tip = TIPS[(tick * 5 + period.ordinal) % TIPS.size]
+    // 三条各自独立随机一次；key 含 period，跨时段会重抽。无定时器。
+    val greeting = remember(period) { greetings.random() }
+    val sub = remember(period) { SUB_GREETINGS.random() }
+    val tip = remember(period) { TIPS.random() }
 
     val shape = RoundedCornerShape(20.dp)
     Box(

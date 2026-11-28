@@ -95,6 +95,8 @@ class SettingsRepository(private val context: Context) {
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         // Beta：aibox:choices 选项卡片（离线小模型下容易滥用，默认关闭）
         val CHOICES_BETA = booleanPreferencesKey("choices_beta")
+        // Beta：直观表达（引导模型用结构卡/释义卡/思维导图，默认关闭）
+        val RICH_ANSWER = booleanPreferencesKey("rich_answer")
         // 减弱动态效果：关掉打字机缓冲/呼吸光标/高度过渡/平滑滚动/跳跳点，默认关闭
         val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
         // 云端模型首次建会话时自动生成标题（默认开启，失败降级，不覆盖用户已命名标题）
@@ -381,6 +383,15 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setChoicesBeta(on: Boolean) =
         context.dataStore.edit { it[Keys.CHOICES_BETA] = on }
+
+    /**
+     * 直观表达 Beta：开启后在 system prompt 引导模型多用思维导图 / 结构卡 / 就地释义卡，
+     * 默认关闭（离线小模型滥用风险高，与 choicesBeta 同样的克制策略）。
+     */
+    val richAnswer: Flow<Boolean> = context.dataStore.data.map { it[Keys.RICH_ANSWER] ?: false }
+
+    suspend fun setRichAnswer(on: Boolean) =
+        context.dataStore.edit { it[Keys.RICH_ANSWER] = on }
 
     /** ```html 围栏即时预览开关，默认关闭。 */
     val htmlPreview: Flow<Boolean> = context.dataStore.data.map { it[Keys.HTML_PREVIEW] ?: false }

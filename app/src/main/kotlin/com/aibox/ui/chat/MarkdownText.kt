@@ -103,6 +103,8 @@ fun MarkdownText(
     lineHeight: Int = 24,
     /** 点击 `aibox:choices` 组件按钮时回调，一般用于直接把选项发给模型 */
     onChoice: (String) -> Unit = {},
+    /** 点击就地释义词 `{{?术语|释义}}` 时回调：(术语, 释义)，用于就地展开释义卡 */
+    onAskTerm: (String, String) -> Unit = { _, _ -> },
     /**
      * 历史消息里的选项是否还可点。
      *
@@ -127,6 +129,10 @@ fun MarkdownText(
     val primary = MaterialTheme.colorScheme.primary
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val clipboard = LocalClipboardManager.current
+    // onAskTerm 每重组都是新 lambda，不能直接进 styledCache 的 key（会让缓存永远失效）。
+    // 用 rememberUpdatedState 持有最新回调，再包一个稳定的函数引用传给 parseInline。
+    val askTermState = rememberUpdatedState(onAskTerm)
+    val stableAskTerm: (String, String) -> Unit = remember { { t, g -> askTermState.value(t, g) } }
 
     // 光标拼在最后一个文本型块末尾（静态 ▌，不再逐帧动画，避免为每条消息常驻动画）。
     val caretIndex = if (streaming && showCaret) {
@@ -151,7 +157,7 @@ fun MarkdownText(
             if (t == null) {
                 null
             } else {
-                val base = parseInline(t, primary)
+                val base = parseInline(t, primary, stableAskTerm)
                 if (index == caretIndex) {
                     buildAnnotatedString {
                         append(base)
@@ -162,7 +168,7 @@ fun MarkdownText(
         }
     }
     fun styled(text: String, index: Int): AnnotatedString =
-        styledCache.getOrNull(index) ?: parseInline(text, primary)
+        styledCache.getOrNull(index) ?: parseInline(text, primary, stableAskTerm)
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -269,31 +275,28 @@ fun MarkdownText(
                     } else {
                         val isMindmap = block.code.trimStart()
                             .startsWith("mindmap", ignoreCase = true)
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = codeBg,
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Column(Modifier.padding(8.dp)) {
-                                if (isMindmap) {
-                                    // 思维导图：自研 Canvas 渲染，离线、无 WebView 竞态、无外链脚本。
-                                    MindMapCanvas(block.code)
-                                } else {
-                                    Text(
-                                        "mermaid",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
-                                    )
-                                    MermaidBlock(block.code)
-                                }
+                        if (isMindmap) {
+                            // 思维导图：自研 Canvas 渲染，离线、无 WebView 竞态、无外链脚本。
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = codeBg,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                MindMapCanvas(block.code)
                             }
+                        } else {
+                            // 通用 mermaid 引擎在真机实测不可用（引擎未加载），降级为
+                            // 原生源码展示，不再实例化 WebView、不给红字报错。
+                            MermaidFallback(block.code)
                         }
                     }
                 }
 
-                is MdBlock.Code -> {
-                    Surface(
+                is MdBlock.Code -> when (block.lang.trim().lowercase()) {
+                    "aibox:steps" -> StructSteps(block.code)
+                    "aibox:compare" -> StructCompare(block.code)
+                    "aibox:proscons" -> StructProsCons(block.code)
+                    else -> Surface(
                         modifier = Modifier.fillMaxWidth(),
                         color = codeBg,
                         shape = RoundedCornerShape(10.dp)
@@ -345,7 +348,7 @@ fun MarkdownText(
                     color = MaterialTheme.colorScheme.outlineVariant
                 )
 
-                is MdBlock.Table -> MdTable(block)
+                is MdBlock.Table -> MdTable(block, stableAskTerm)
 
                 is MdBlock.Math -> Text(
                     latexToAnnotated(block.tex),
@@ -643,7 +646,7 @@ private fun splitTableRow(line: String): List<String> =
     line.trim().trim('|').split('|').map { it.trim() }
 
 @Composable
-private fun MdTable(block: MdBlock.Table) {
+private fun MdTable(block: MdBlock.Table, onAskTerm: (String, String) -> Unit = { _, _ -> }) {
     val primary = MaterialTheme.colorScheme.primary
     val headerBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val rowBg = MaterialTheme.colorScheme.surfaceContainerLow
@@ -685,7 +688,7 @@ private fun MdTable(block: MdBlock.Table) {
                             Modifier.weight(1f)
                         }
                         Text(
-                            parseInline(block.header.getOrElse(c) { "" }, primary),
+                            parseInline(block.header.getOrElse(c) { "" }, primary, onAskTerm),
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -705,7 +708,7 @@ private fun MdTable(block: MdBlock.Table) {
                                 Modifier.weight(1f)
                             }
                             Text(
-                                parseInline(row.getOrElse(c) { "" }, primary),
+                                parseInline(row.getOrElse(c) { "" }, primary, onAskTerm),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = cellMod.padding(horizontal = 8.dp, vertical = 7.dp)
@@ -857,7 +860,141 @@ fun ThinkingSection(thinking: String, streaming: Boolean) {
 
 /* ---------------- 行内解析 ---------------- */
 
-private fun parseInline(src: String, primary: Color): AnnotatedString = buildAnnotatedString {
+/**
+ * 数值微条：`{{bar:70}}` → "▕███████░░░▏ 70%"。纯文本，零 WebView / 零自绘，
+ * 在等宽视觉下即可读出比例。
+ */
+private fun renderBar(pct: Int): String {
+    val p = pct.coerceIn(0, 100)
+    val filled = p / 10
+    return "▕" + "█".repeat(filled) + "░".repeat(10 - filled) + "▏ $p%"
+}
+
+/* ---------------- 直观表达：原生结构卡 ---------------- */
+
+/**
+ * 步骤卡 ```aibox:steps：每行一步，左侧序号圆点 + 竖向连线，Compose 原生绘制、离线可靠。
+ */
+@Composable
+private fun StructSteps(code: String) {
+    val steps = code.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+            steps.forEachIndexed { idx, line ->
+                Row(verticalAlignment = Alignment.Top) {
+                    Box(
+                        modifier = Modifier
+                            .size(22.dp)
+                            .background(
+                                MaterialTheme.colorScheme.secondaryContainer,
+                                RoundedCornerShape(50)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "${idx + 1}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                if (idx < steps.lastIndex) Spacer(Modifier.height(6.dp))
+            }
+        }
+    }
+}
+
+/**
+ * 对比卡 ```aibox:compare：每行形如 `A | B`，渲染成两列；首行若为 `标题A|标题B` 则作表头。
+ */
+@Composable
+private fun StructCompare(code: String) {
+    val rows = code.lineSequence().map { it.trim() }.filter { it.isNotBlank() }
+        .map { it.split("|").map { c -> c.trim() } }.toList()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            rows.forEachIndexed { idx, cells ->
+                Row(Modifier.fillMaxWidth()) {
+                    Text(
+                        cells.getOrElse(0) { "" },
+                        style = if (idx == 0) MaterialTheme.typography.labelLarge
+                        else MaterialTheme.typography.bodyMedium,
+                        color = if (idx == 0) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        cells.getOrElse(1) { "" },
+                        style = if (idx == 0) MaterialTheme.typography.labelLarge
+                        else MaterialTheme.typography.bodyMedium,
+                        color = if (idx == 0) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 利弊卡 ```aibox:proscons：`+ 优点` / `- 缺点` 分两栏，语义色用中性灰阶区分（+ 用主色、- 用次要色）。
+ */
+@Composable
+private fun StructProsCons(code: String) {
+    val lines = code.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
+    val pros = lines.filter { it.startsWith("+") }.map { it.removePrefix("+").trim() }
+    val cons = lines.filter { it.startsWith("-") }.map { it.removePrefix("-").trim() }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(Modifier.fillMaxWidth().padding(12.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text("优点", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary)
+                pros.forEach {
+                    Text("· $it", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("缺点", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                cons.forEach {
+                    Text("· $it", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+        }
+    }
+}
+
+private fun parseInline(
+    src: String,
+    primary: Color,
+    onAskTerm: (String, String) -> Unit = { _, _ -> }
+): AnnotatedString = buildAnnotatedString {
     val linkStyle = TextLinkStyles(
         style = SpanStyle(color = primary, textDecoration = TextDecoration.Underline)
     )
@@ -900,6 +1037,44 @@ private fun parseInline(src: String, primary: Color): AnnotatedString = buildAnn
     var i = 0
     while (i < src.length) {
         when {
+            // 就地释义词 {{?术语|一句话释义}}：可点击，点开就地看释义（非超链接）
+            src.startsWith("{{?", i) -> {
+                val end = src.indexOf("}}", i + 3)
+                if (end > i + 3) {
+                    val inner = src.substring(i + 3, end)
+                    val sep = inner.indexOf('|')
+                    val term = if (sep >= 0) inner.substring(0, sep) else inner
+                    val gloss = if (sep >= 0) inner.substring(sep + 1) else ""
+                    if (term.isNotBlank()) {
+                        flush()
+                        val clickable = LinkAnnotation.Clickable(
+                            tag = "term",
+                            styles = TextLinkStyles(
+                                style = SpanStyle(
+                                    color = primary,
+                                    textDecoration = TextDecoration.Underline
+                                )
+                            )
+                        ) { onAskTerm(term.trim(), gloss.trim()) }
+                        pushLink(clickable)
+                        append(term.trim())
+                        pop()
+                        i = end + 2
+                    } else { buffer.append("{{?"); i += 3 }
+                } else { buffer.append("{{?"); i += 3 }
+            }
+            // 数值微条 {{bar:70}}
+            src.startsWith("{{bar:", i) -> {
+                val end = src.indexOf("}}", i + 6)
+                if (end > i + 6) {
+                    val pct = src.substring(i + 6, end).trim().toIntOrNull()
+                    if (pct != null) {
+                        flush()
+                        withStyle(SpanStyle(color = primary)) { append(renderBar(pct)) }
+                        i = end + 2
+                    } else { buffer.append("{{bar:"); i += 6 }
+                } else { buffer.append("{{bar:"); i += 6 }
+            }
             // 加粗斜体
             src.startsWith("***", i) -> {
                 val end = src.indexOf("***", i + 3)

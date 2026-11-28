@@ -83,6 +83,16 @@ object DesignTokens {
     const val durationMedium: Int = 250
     /** 400ms。长动画，用于页面过渡。 */
     const val durationLong: Int = 400
+    /** 340ms。概念稿统一动效时长（只入一次、终点即终态），用于 chip / 卡片 / 容器入场。 */
+    const val durationEmphasis: Int = 340
+
+    // ---------- 圆角（概念稿：交互控件胶囊、内容块 18dp） ----------
+    /** 胶囊圆角，用于 chip / 模型切换入口 / 输入框等交互控件。 */
+    val radiusControl: Dp = 999.dp
+    val shapeControl = RoundedCornerShape(radiusControl)
+    /** 18dp。内容块 / 卡片圆角（概念稿 --r-card）。 */
+    val radiusCard: Dp = 18.dp
+    val shapeCard = RoundedCornerShape(radiusCard)
 
     // ---------- 缓动函数 ----------
     /** Material 标准缓动。多数场景默认使用。 */
@@ -93,6 +103,8 @@ object DesignTokens {
     val easingDecelerate: Easing = CubicBezierEasing(0.0f, 0.0f, 0.0f, 1.0f)
     /** 加速缓动，用于退场。 */
     val easingAccelerate: Easing = CubicBezierEasing(0.3f, 0.0f, 1.0f, 1.0f)
+    /** 概念稿统一 ease-out 曲线（easeOutQuad），配合 [durationEmphasis]。 */
+    val easingOut: Easing = CubicBezierEasing(0.25f, 0.46f, 0.45f, 0.94f)
 }
 
 /**
