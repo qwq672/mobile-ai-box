@@ -53,10 +53,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -419,21 +419,28 @@ fun MarkdownText(
 
 /**
  * 流式渲染节流：云端 token 直出、打字机每 20ms 推进，若每次都全量解析 Markdown 会掉帧发热。
- * 这里用 conflate + 短延时，把解析频率压到 ~48ms（约 3 帧）一次——比原来的 90ms 跟手得多，
- * 减少"一顿一顿"的观感，同时 conflate 合并中间态、避免重组风暴。
- * 生成结束（streaming=false）时停止收集，直接返回最终完整文本，保证末尾内容不丢。
+ * 这里把解析频率压到 ~48ms（约 3 帧）一次，减少"一顿一顿"的观感。
+ *
+ * 关键：LaunchedEffect 只以 streaming 为 key，流式期间 streaming 恒为 true、协程不会重启。
+ * 旧实现用 snapshotFlow { text }，但 effect lambda 捕获的是"文本段首次出现那一刻"的 text 常量——
+ * snapshotFlow 读不到任何 State 变化，只发射一次初始值就停了，shown 因此永远卡在首次快照
+ * （如"我先获取"），直到 streaming=false 走 return text 才补全，表现为"中途吞半句"。
+ * 改用 rememberUpdatedState 持有"始终指向最新 text"的 State，effect 每 48ms 采样一次，
+ * 工具执行空窗期间没有新 token 也能保持最新值，彻底消除卡快照。
+ *
+ * 生成结束（streaming=false）停止采样，直接返回最终完整文本，保证末尾内容不丢。
  */
 @Composable
 private fun rememberStreamRenderText(text: String, streaming: Boolean): String {
     var shown by remember { mutableStateOf(text) }
+    // 长生命周期协程里读的一定要是"活"的 State，不能是捕获的 text 常量。
+    val latestText by rememberUpdatedState(text)
     LaunchedEffect(streaming) {
         if (!streaming) return@LaunchedEffect
-        snapshotFlow { text }
-            .conflate()
-            .collect { latest ->
-                delay(48)
-                shown = latest
-            }
+        while (isActive) {
+            delay(48)
+            shown = latestText
+        }
     }
     return if (streaming) shown else text
 }
